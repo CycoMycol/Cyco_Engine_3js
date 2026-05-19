@@ -66,27 +66,6 @@ export function createMenuBar(options = {}) {
     right.appendChild(btn);
   });
 
-  const sep = document.createElement('div');
-  sep.className = 'toggle-separator';
-  right.appendChild(sep);
-
-  // Customize layout button
-  const layoutBtn = document.createElement('button');
-  layoutBtn.className = 'panel-toggle-btn';
-  layoutBtn.title = 'Save / Load Layout';
-  layoutBtn.style.color = 'var(--ce-accent-orange)';
-  layoutBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
-    <rect x="1" y="1" width="5.5" height="5.5" rx="1"/>
-    <rect x="7.5" y="1" width="5.5" height="5.5" rx="1"/>
-    <rect x="1" y="7.5" width="5.5" height="5.5" rx="1"/>
-    <rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1"/>
-  </svg>`;
-  layoutBtn.addEventListener('click', (e) => {
-    e.stopPropagation();
-    _showLayoutDropdown(layoutBtn);
-  });
-  right.appendChild(layoutBtn);
-
   // Float toggle
   if (!options.noFloatBtn) {
     const floatSep = document.createElement('div');
@@ -338,6 +317,25 @@ function _showLayoutDropdown(anchor) {
 
   document.body.appendChild(dd);
   setTimeout(() => document.addEventListener('click', () => dd.remove(), { once: true }), 0);
+}
+
+// ─── Layout button factory (used by MenuBarPanel to place it in the actions wrapper) ──
+export function createLayoutButton() {
+  const btn = document.createElement('button');
+  btn.className = 'panel-toggle-btn';
+  btn.title = 'Save / Load Layout';
+  btn.style.color = 'var(--ce-accent-orange)';
+  btn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+    <rect x="1" y="1" width="5.5" height="5.5" rx="1"/>
+    <rect x="7.5" y="1" width="5.5" height="5.5" rx="1"/>
+    <rect x="1" y="7.5" width="5.5" height="5.5" rx="1"/>
+    <rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1"/>
+  </svg>`;
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    _showLayoutDropdown(btn);
+  });
+  return btn;
 }
 
 // ─── Panel icon SVGs ─────────────────────────────────────────────────────────

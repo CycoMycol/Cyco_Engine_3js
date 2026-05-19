@@ -5,7 +5,7 @@
  */
 
 import { BasePanel }    from './BasePanel.js';
-import { createMenuBar } from '../ui/MenuBar.js';
+import { createMenuBar, createLayoutButton } from '../ui/MenuBar.js';
 
 export class MenuBarPanel extends BasePanel {
   constructor() {
@@ -43,6 +43,9 @@ export class MenuBarPanel extends BasePanel {
 
       const wrap = document.createElement('div');
       wrap.className = 'ce-bar-panel-actions';
+
+      const layoutBtn = createLayoutButton();
+      wrap.appendChild(layoutBtn);
 
       const handle = this._createDragHandle();
       wrap.appendChild(handle);
