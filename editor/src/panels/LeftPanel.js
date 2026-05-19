@@ -1,15 +1,70 @@
 import { BasePanel } from './BasePanel.js';
 import { showHierarchyMenu, OBJECT_DEFAULTS } from '../ui/HierarchyContextMenu.js';
 
-const TYPE_ICON = {
-  scene:  '⊞',
-  camera: '⊡',
-  light:  '✦',
-  object: '⊕',
-  mesh:   '▣',
-  sprite: '▧',
-  ui:     '☐',
+const TYPE_ICON_SVG = {
+  scene: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <rect x="1" y="4" width="12" height="9" rx="1" fill="#5b9bd5"/>
+    <rect x="1" y="4" width="12" height="3" fill="#3a78b5"/>
+    <line x1="3.5" y1="4" x2="2.5" y2="1.5" stroke="#5b9bd5" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="6.5" y1="4" x2="5.5" y2="1.5" stroke="#5b9bd5" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="9.5" y1="4" x2="8.5" y2="1.5" stroke="#5b9bd5" stroke-width="1.5" stroke-linecap="round"/>
+    <line x1="12.5" y1="4" x2="11.5" y2="1.5" stroke="#5b9bd5" stroke-width="1.5" stroke-linecap="round"/>
+  </svg>`,
+
+  camera: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <rect x="1" y="4" width="9" height="7" rx="1" fill="#4ec9b0"/>
+    <polygon points="10,5.5 13,4 13,10 10,8.5" fill="#4ec9b0"/>
+    <circle cx="5.5" cy="7.5" r="2" fill="#1c3c38" opacity="0.55"/>
+    <circle cx="5.5" cy="7.5" r="0.9" fill="#4ec9b0" opacity="0.5"/>
+  </svg>`,
+
+  light: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="7" cy="5.5" r="2.8" fill="#f0c040"/>
+    <rect x="5.5" y="8.8" width="3" height="1" rx="0.5" fill="#f0c040"/>
+    <rect x="6" y="10.2" width="2" height="1.2" rx="0.5" fill="#d4a820"/>
+    <line x1="7" y1="1" x2="7" y2="2" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="10.5" y1="5.5" x2="11.5" y2="5.5" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="2.5" y1="5.5" x2="3.5" y2="5.5" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="9.5" y1="2.5" x2="10.2" y2="1.8" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/>
+    <line x1="4.5" y1="2.5" x2="3.8" y2="1.8" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/>
+  </svg>`,
+
+  object: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <rect x="2.5" y="2.5" width="9" height="9" rx="1" stroke="#9e9e9e" stroke-width="1.5" fill="none"/>
+    <line x1="2.5" y1="2.5" x2="5.5" y2="5" stroke="#9e9e9e" stroke-width="1"/>
+    <line x1="11.5" y1="2.5" x2="8.5" y2="5" stroke="#9e9e9e" stroke-width="1"/>
+    <line x1="5.5" y1="5" x2="8.5" y2="5" stroke="#9e9e9e" stroke-width="1"/>
+    <line x1="8.5" y1="5" x2="8.5" y2="11.5" stroke="#9e9e9e" stroke-width="0.8" opacity="0.5"/>
+    <line x1="5.5" y1="5" x2="5.5" y2="11.5" stroke="#9e9e9e" stroke-width="0.8" opacity="0.5"/>
+  </svg>`,
+
+  mesh: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <polygon points="7,1 12,3.5 12,10 7,12.5 2,10 2,3.5" fill="#e07840"/>
+    <polygon points="7,1 12,3.5 7,6 2,3.5" fill="#f09050"/>
+    <polygon points="7,6 12,3.5 12,10 7,12.5" fill="#b05820"/>
+    <line x1="7" y1="1" x2="7" y2="6" stroke="#fff" stroke-width="0.6" opacity="0.25"/>
+    <line x1="2" y1="3.5" x2="7" y2="6" stroke="#fff" stroke-width="0.6" opacity="0.25"/>
+    <line x1="12" y1="3.5" x2="7" y2="6" stroke="#fff" stroke-width="0.6" opacity="0.25"/>
+  </svg>`,
+
+  sprite: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <rect x="1.5" y="1.5" width="11" height="11" rx="1.5" fill="#5ba83c"/>
+    <path d="M1.5,9.5 L4.5,6.5 L7,9 L9.5,6 L12.5,9.5 L12.5,12.5 L1.5,12.5 Z" fill="#3d7a28"/>
+    <circle cx="9.5" cy="4" r="1.8" fill="#f0e060" opacity="0.85"/>
+  </svg>`,
+
+  ui: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <rect x="1" y="1" width="12" height="12" rx="1.5" fill="#9060d0"/>
+    <rect x="1" y="1" width="12" height="3.5" rx="1.5" fill="#6a40b0"/>
+    <rect x="3" y="6.5" width="5" height="1" rx="0.5" fill="#fff" opacity="0.75"/>
+    <rect x="3" y="8.5" width="7" height="1" rx="0.5" fill="#fff" opacity="0.55"/>
+    <rect x="3" y="10.5" width="4" height="1" rx="0.5" fill="#fff" opacity="0.55"/>
+  </svg>`,
 };
+
+const FALLBACK_ICON_SVG = `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="2" width="10" height="10" rx="1" fill="#808080"/>
+</svg>`;
 
 // IDs that can never be deleted or dragged away
 const PROTECTED = new Set(['root', 'main-camera', 'env-light']);
@@ -449,7 +504,7 @@ export class LeftPanel extends BasePanel {
       // ── Type icon ────────────────────────────────────────────────────────
       const icon = document.createElement('span');
       icon.className = 'ce-hier-icon';
-      icon.textContent = TYPE_ICON[node.type] ?? '▣';
+      icon.innerHTML = TYPE_ICON_SVG[node.type] ?? FALLBACK_ICON_SVG;
       row.appendChild(icon);
 
       // ── Name ─────────────────────────────────────────────────────────────
