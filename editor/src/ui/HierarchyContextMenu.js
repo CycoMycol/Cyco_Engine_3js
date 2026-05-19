@@ -120,19 +120,33 @@ export function closeAll() {
   document.removeEventListener('mousedown', _onOutside);
 }
 
-export function showHierarchyMenu(e, onAction, hasTarget = false) {
+export function showHierarchyMenu(e, onAction, hasTarget = false, isScene = false, isMulti = false) {
   e.preventDefault();
   e.stopPropagation();
   closeAll();
 
-  const schema = hasTarget
-    ? [...CREATE_SCHEMA,
-        { separator: true },
-        { label: 'Rename',    action: 'rename'    },
-        { label: 'Duplicate', action: 'duplicate' },
-        { label: 'Delete',    action: 'delete', danger: true },
-      ]
-    : CREATE_SCHEMA;
+  let schema;
+
+  if (isMulti) {
+    // Multi-select context menu
+    schema = [
+      { label: 'Group Selected', action: 'group' },
+      { separator: true },
+      { label: 'Duplicate',      action: 'duplicate' },
+      { label: 'Delete',         action: 'delete', danger: true },
+    ];
+  } else if (hasTarget) {
+    schema = [
+      ...CREATE_SCHEMA,
+      { separator: true },
+      { label: 'Rename',    action: 'rename'    },
+      { label: 'Duplicate', action: 'duplicate' },
+      // Delete is hidden for the Scene root
+      ...(isScene ? [] : [{ label: 'Delete', action: 'delete', danger: true }]),
+    ];
+  } else {
+    schema = CREATE_SCHEMA;
+  }
 
   _menu = _buildMenu(schema, onAction);
   document.body.appendChild(_menu);

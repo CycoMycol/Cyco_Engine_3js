@@ -724,6 +724,27 @@ html, body {
 }
 
 .ce-hier-indent { display: inline-block; flex-shrink: 0; }
+
+/* checkbox (left side of each row) */
+.ce-hier-checkbox {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 12px; height: 12px; flex-shrink: 0;
+  margin: 0 3px 0 4px;
+  border: 1px solid var(--ce-border);
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.1s, background 0.1s;
+  font-size: 9px; color: #fff;
+}
+.ce-hier-row:hover .ce-hier-checkbox,
+.ce-hier-checkbox.is-checked { opacity: 1; }
+.ce-hier-checkbox.is-checked {
+  background: var(--ce-accent-orange);
+  border-color: var(--ce-accent-orange);
+}
+.ce-hier-checkbox.is-checked::after { content: '✓'; }
 .ce-hier-arrow {
   display: inline-block; width: 14px; flex-shrink: 0;
   font-size: 9px; color: var(--ce-text-muted);

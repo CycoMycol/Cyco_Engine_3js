@@ -11,22 +11,29 @@ const TYPE_ICON = {
   ui:     '☐',
 };
 
+// IDs that can never be deleted or dragged away
+const PROTECTED = new Set(['root', 'main-camera', 'env-light']);
+
 export class LeftPanel extends BasePanel {
   _buildContent() {
-    // ── instance state
+    // ── instance state ────────────────────────────────────────────────────────
     this._nodes = [
-      { id: 'root', pid: null, name: 'Scene', type: 'scene', open: true, locked: false, visible: true },
+      { id: 'root',        pid: null,   name: 'Scene',        type: 'scene',  open: true,  locked: false, visible: true },
+      { id: 'main-camera', pid: 'root', name: 'Main Camera',  type: 'camera', open: false, locked: false, visible: true },
+      { id: 'env-light',   pid: 'root', name: 'Global Light', type: 'light',  open: false, locked: false, visible: true },
     ];
-    this._selectedId   = null;
-    this._confirmDelId = null; // node id whose X is pending confirmation
-    this._dragId       = null;
-    this._dropInfo     = null; // { targetId, mode: 'before'|'after'|'inside' }
+    this._selectedIds  = new Set();   // multi-select set
+    this._lastClickId  = null;        // most-recently clicked (for rename/add-child)
+    this._confirmDelId = null;        // single node id pending X→✓ confirm
+    this._dragIds      = [];          // ids currently being dragged
+    this._dropInfo     = null;        // { targetId, mode }
+    this._groupCounter = 0;
 
-    // ── root wrapper
+    // ── root wrapper ──────────────────────────────────────────────────────────
     const wrap = document.createElement('div');
     wrap.className = 'ce-hierarchy';
 
-    // ── toolbar: search input + add (+) button
+    // ── toolbar ───────────────────────────────────────────────────────────────
     const toolbar = document.createElement('div');
     toolbar.className = 'ce-hier-toolbar';
 
@@ -44,17 +51,17 @@ export class LeftPanel extends BasePanel {
     toolbar.appendChild(addBtn);
     wrap.appendChild(toolbar);
 
-    // ── tree container
+    // ── tree ──────────────────────────────────────────────────────────────────
     const tree = document.createElement('div');
     tree.className = 'ce-hier-tree';
     wrap.appendChild(tree);
     this._tree = tree;
 
-    // + button opens context menu at button position (no target → creates at root)
+    // + button: open create menu with no target
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this._selectedId = null;
-      showHierarchyMenu(e, (action) => this._handleAction(action), false);
+      this._lastClickId = null;
+      showHierarchyMenu(e, (action) => this._handleAction(action), false, false, false);
     });
 
     // live search
@@ -65,25 +72,33 @@ export class LeftPanel extends BasePanel {
       });
     });
 
-    // right-click opens context menu
+    // right-click context menu
     tree.addEventListener('contextmenu', (e) => {
       const row = e.target.closest('.ce-hier-row');
       if (row) {
-        this._selectedId = row.dataset.id;
-        this._renderTree();
+        const id = row.dataset.id;
+        // If right-clicking something outside the current selection, select it alone
+        if (!this._selectedIds.has(id)) {
+          this._selectedIds.clear();
+          this._selectedIds.add(id);
+          this._lastClickId = id;
+          this._renderTree();
+        }
       }
-      showHierarchyMenu(e, (action) => this._handleAction(action), !!row);
+      const isScene = row?.dataset.id === 'root';
+      const isMulti = this._selectedIds.size > 1;
+      showHierarchyMenu(e, (action) => this._handleAction(action), !!row, isScene, isMulti);
     });
 
-    // click on empty tree area cancels pending delete confirmation
+    // click on empty area: clear confirm state
     tree.addEventListener('click', (e) => {
-      if (!e.target.closest('.ce-hier-row') && this._confirmDelId) {
+      if (!e.target.closest('.ce-hier-row')) {
         this._confirmDelId = null;
         this._renderTree();
       }
     });
 
-    // drag events (delegated to container)
+    // drag events delegated to container
     tree.addEventListener('dragover',  (e) => this._onDragOver(e));
     tree.addEventListener('dragleave', (e) => this._onDragLeave(e));
     tree.addEventListener('drop',      (e) => this._onDrop(e));
@@ -95,14 +110,15 @@ export class LeftPanel extends BasePanel {
 
   // ── Action handler ────────────────────────────────────────────────────────
   _handleAction(action) {
-    if (action === 'rename')    { this._startRename(); return; }
-    if (action === 'duplicate') { this._duplicate();   return; }
-    if (action === 'delete')    { this._delete();      return; }
+    if (action === 'rename')    { this._startRename();    return; }
+    if (action === 'duplicate') { this._duplicate();      return; }
+    if (action === 'delete')    { this._deleteSelected(); return; }
+    if (action === 'group')     { this._group();          return; }
 
     const def = OBJECT_DEFAULTS[action];
     if (!def) return;
 
-    const pid    = this._selectedId ?? 'root';
+    const pid    = this._lastClickId ?? 'root';
     const parent = this._nodes.find(n => n.id === pid);
     if (parent) parent.open = true;
 
@@ -119,35 +135,90 @@ export class LeftPanel extends BasePanel {
   }
 
   _duplicate() {
-    if (!this._selectedId || this._selectedId === 'root') return;
-    const src = this._nodes.find(n => n.id === this._selectedId);
-    if (!src) return;
-    this._nodes.push({
-      ...src,
-      id:   Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-      name: src.name + ' (Copy)',
+    const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
+    if (ids.length === 0) return;
+    ids.forEach(id => {
+      const src = this._nodes.find(n => n.id === id);
+      if (!src) return;
+      this._nodes.push({
+        ...src,
+        id:   Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+        name: src.name + ' (Copy)',
+      });
     });
     this._renderTree();
   }
 
-  _delete(id = this._selectedId) {
-    if (!id || id === 'root') return;
+  _deleteSelected() {
+    const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
+    if (ids.length === 0) return;
+    ids.forEach(id => this._deleteNode(id));
+    this._selectedIds.clear();
+    this._confirmDelId = null;
+    this._renderTree();
+  }
+
+  _deleteNode(id) {
+    if (!id || PROTECTED.has(id)) return;
     const toDelete = new Set();
     const collect  = (nodeId) => {
       toDelete.add(nodeId);
       this._nodes.filter(n => n.pid === nodeId).forEach(n => collect(n.id));
     };
     collect(id);
-    this._nodes        = this._nodes.filter(n => !toDelete.has(n.id));
-    this._selectedId   = null;
-    this._confirmDelId = null;
+    this._nodes = this._nodes.filter(n => !toDelete.has(n.id));
+    toDelete.forEach(d => this._selectedIds.delete(d));
+  }
+
+  _group() {
+    const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
+    if (ids.length === 0) return;
+
+    this._groupCounter++;
+    const groupId = 'grp-' + Date.now().toString(36);
+
+    // Use the parent of the first selected node as the group's parent
+    const firstNode  = this._nodes.find(n => n.id === ids[0]);
+    const groupPid   = firstNode?.pid ?? 'root';
+    const groupParent = this._nodes.find(n => n.id === groupPid);
+    if (groupParent) groupParent.open = true;
+
+    // Only move top-level selected nodes (whose parent is not also selected)
+    const selSet   = new Set(ids);
+    const topLevel = ids.filter(id => {
+      const node = this._nodes.find(n => n.id === id);
+      return !selSet.has(node?.pid);
+    });
+
+    // Insert group at the position of the first top-level node
+    const insertIdx = this._nodes.findIndex(n => n.id === topLevel[0]);
+    this._nodes.splice(insertIdx, 0, {
+      id:      groupId,
+      pid:     groupPid,
+      name:    `Group ${this._groupCounter}`,
+      type:    'object',
+      open:    true,
+      locked:  false,
+      visible: true,
+    });
+
+    // Reparent top-level selected nodes into the group
+    topLevel.forEach(id => {
+      const node = this._nodes.find(n => n.id === id);
+      if (node) node.pid = groupId;
+    });
+
+    this._selectedIds.clear();
+    this._selectedIds.add(groupId);
+    this._lastClickId = groupId;
     this._renderTree();
   }
 
   _startRename() {
-    if (!this._selectedId) return;
-    const row   = this._tree.querySelector(`.ce-hier-row[data-id="${this._selectedId}"]`);
-    const node  = this._nodes.find(n => n.id === this._selectedId);
+    const id = this._lastClickId;
+    if (!id || id === 'root') return;
+    const row   = this._tree.querySelector(`.ce-hier-row[data-id="${id}"]`);
+    const node  = this._nodes.find(n => n.id === id);
     const label = row?.querySelector('.ce-hier-name');
     if (!row || !node || !label) return;
 
@@ -171,43 +242,53 @@ export class LeftPanel extends BasePanel {
 
   // ── Drag-and-drop ─────────────────────────────────────────────────────────
   _onDragStart(e, node) {
-    if (node.id === 'root') { e.preventDefault(); return; }
-    this._dragId = node.id;
+    if (PROTECTED.has(node.id)) { e.preventDefault(); return; }
+
+    // If dragging a selected node, drag all selected non-protected nodes;
+    // otherwise single-select and drag only this node.
+    if (this._selectedIds.has(node.id)) {
+      this._dragIds = [...this._selectedIds].filter(id => !PROTECTED.has(id));
+    } else {
+      this._selectedIds.clear();
+      this._selectedIds.add(node.id);
+      this._lastClickId = node.id;
+      this._dragIds = [node.id];
+    }
+
     e.dataTransfer.effectAllowed = 'move';
     e.dataTransfer.setData('text/plain', node.id);
-    // defer so the row's ghost image is captured before we dim it
+
     setTimeout(() => {
-      const r = this._tree.querySelector(`.ce-hier-row[data-id="${node.id}"]`);
-      if (r) r.classList.add('is-dragging');
+      this._dragIds.forEach(id => {
+        const r = this._tree.querySelector(`.ce-hier-row[data-id="${id}"]`);
+        if (r) r.classList.add('is-dragging');
+      });
     }, 0);
   }
 
   _onDragOver(e) {
-    if (!this._dragId) return;
+    if (!this._dragIds.length) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
 
     const row = e.target.closest('.ce-hier-row');
     if (!row) return;
     const targetId = row.dataset.id;
-    if (targetId === this._dragId) return;
-    if (this._isDescendant(targetId, this._dragId)) return;
+    if (this._dragIds.includes(targetId)) return;
+    if (this._dragIds.some(id => this._isDescendant(targetId, id))) return;
 
     const rect = row.getBoundingClientRect();
     const relY  = e.clientY - rect.top;
     const h     = rect.height;
     const mode  = relY < h * 0.28 ? 'before' : relY > h * 0.72 ? 'after' : 'inside';
 
-    // avoid redundant DOM updates
     const prev = this._dropInfo;
     if (prev && prev.targetId === targetId && prev.mode === mode) return;
-
     this._dropInfo = { targetId, mode };
     this._applyDropIndicators();
   }
 
   _onDragLeave(e) {
-    // Only clear when leaving the tree container entirely
     if (!this._tree.contains(e.relatedTarget)) {
       this._dropInfo = null;
       this._applyDropIndicators();
@@ -225,48 +306,51 @@ export class LeftPanel extends BasePanel {
 
   _onDrop(e) {
     e.preventDefault();
-    if (!this._dragId || !this._dropInfo) { this._clearDragState(); return; }
+    if (!this._dragIds.length || !this._dropInfo) { this._clearDragState(); return; }
 
     const { targetId, mode } = this._dropInfo;
-    const dragNode   = this._nodes.find(n => n.id === this._dragId);
     const targetNode = this._nodes.find(n => n.id === targetId);
-    if (!dragNode || !targetNode) { this._clearDragState(); return; }
+    if (!targetNode) { this._clearDragState(); return; }
 
-    // Collect dragged node + all descendants in depth-first order
+    // Find top-level dragged nodes (parent not also being dragged)
+    const dragSet  = new Set(this._dragIds);
+    const topLevel = this._dragIds.filter(id => {
+      const node = this._nodes.find(n => n.id === id);
+      return !dragSet.has(node?.pid);
+    });
+
     const collectSubtree = (id) => {
       const n = this._nodes.find(x => x.id === id);
       if (!n) return [];
       return [n, ...this._nodes.filter(x => x.pid === id).flatMap(c => collectSubtree(c.id))];
     };
-    const subtree    = collectSubtree(this._dragId);
-    const subtreeIds = new Set(subtree.map(n => n.id));
 
-    // Remove subtree from array, then re-insert at target position
-    this._nodes = this._nodes.filter(n => !subtreeIds.has(n.id));
+    const allSubtrees   = topLevel.flatMap(id => collectSubtree(id));
+    const allSubtreeIds = new Set(allSubtrees.map(n => n.id));
+
+    this._nodes = this._nodes.filter(n => !allSubtreeIds.has(n.id));
     const tIdx  = this._nodes.findIndex(n => n.id === targetId);
 
-    if (mode === 'inside') {
-      dragNode.pid   = targetId;
-      targetNode.open = true;
-      this._nodes.splice(tIdx + 1, 0, ...subtree);
-    } else if (mode === 'before') {
-      dragNode.pid = targetNode.pid;
-      this._nodes.splice(tIdx, 0, ...subtree);
-    } else { // after
-      dragNode.pid = targetNode.pid;
-      this._nodes.splice(tIdx + 1, 0, ...subtree);
-    }
+    const newPid = mode === 'inside' ? targetId : targetNode.pid;
+    topLevel.forEach(id => {
+      const node = allSubtrees.find(n => n.id === id);
+      if (node) node.pid = newPid;
+    });
+    if (mode === 'inside') targetNode.open = true;
+
+    const insertAt = mode === 'before' ? tIdx : tIdx + 1;
+    this._nodes.splice(insertAt, 0, ...allSubtrees);
 
     this._clearDragState();
     this._renderTree();
   }
 
   _onDragEnd() {
-    if (this._dragId) { this._clearDragState(); this._renderTree(); }
+    if (this._dragIds.length) { this._clearDragState(); this._renderTree(); }
   }
 
   _clearDragState() {
-    this._dragId   = null;
+    this._dragIds  = [];
     this._dropInfo = null;
   }
 
@@ -311,26 +395,44 @@ export class LeftPanel extends BasePanel {
     for (const node of nodes) {
       if (!isVisible(node)) continue;
 
+      const isSelected = this._selectedIds.has(node.id);
       const row = document.createElement('div');
       row.className = 'ce-hier-row' +
-        (this._selectedId === node.id ? ' is-selected'   : '') +
-        (!node.visible               ? ' is-hidden-obj'  : '');
+        (isSelected      ? ' is-selected'  : '') +
+        (!node.visible   ? ' is-hidden-obj' : '');
       row.dataset.id   = node.id;
       row.dataset.name = node.name;
 
-      // drag handle (not on root)
-      if (node.id !== 'root') {
+      if (!PROTECTED.has(node.id)) {
         row.draggable = true;
         row.addEventListener('dragstart', (e) => this._onDragStart(e, node));
       }
 
-      // indent
+      // ── Checkbox (left side) ─────────────────────────────────────────────
+      const cb = document.createElement('span');
+      cb.className = 'ce-hier-checkbox' + (isSelected ? ' is-checked' : '');
+      cb.setAttribute('role', 'checkbox');
+      cb.setAttribute('aria-checked', String(isSelected));
+      cb.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (this._selectedIds.has(node.id)) {
+          this._selectedIds.delete(node.id);
+        } else {
+          this._selectedIds.add(node.id);
+        }
+        this._lastClickId  = node.id;
+        this._confirmDelId = null;
+        this._renderTree();
+      });
+      row.appendChild(cb);
+
+      // ── Indent ───────────────────────────────────────────────────────────
       const indent = document.createElement('span');
       indent.className = 'ce-hier-indent';
       indent.style.width = `${depthOf(node) * 16}px`;
       row.appendChild(indent);
 
-      // expand/collapse arrow
+      // ── Expand/collapse arrow ────────────────────────────────────────────
       const arrow = document.createElement('span');
       const hasC  = hasCh.has(node.id);
       arrow.className = 'ce-hier-arrow' + (hasC ? '' : ' ce-hier-arrow-leaf');
@@ -344,20 +446,19 @@ export class LeftPanel extends BasePanel {
       }
       row.appendChild(arrow);
 
-      // type icon
+      // ── Type icon ────────────────────────────────────────────────────────
       const icon = document.createElement('span');
       icon.className = 'ce-hier-icon';
       icon.textContent = TYPE_ICON[node.type] ?? '▣';
       row.appendChild(icon);
 
-      // name
+      // ── Name ─────────────────────────────────────────────────────────────
       const label = document.createElement('span');
       label.className = 'ce-hier-name' + (node.locked ? ' is-locked' : '');
       label.textContent = node.name;
       row.appendChild(label);
 
-      // ── right-side action buttons ─────────────────────────────────────
-      // Eye (visibility toggle)
+      // ── Eye (visibility) ─────────────────────────────────────────────────
       const eye = document.createElement('span');
       eye.className = 'ce-hier-btn ce-hier-eye' + (node.visible ? '' : ' is-hidden');
       eye.textContent = node.visible ? '👁' : '🚫';
@@ -370,7 +471,7 @@ export class LeftPanel extends BasePanel {
       row.appendChild(eye);
 
       if (node.id !== 'root') {
-        // Lock toggle
+        // ── Lock ───────────────────────────────────────────────────────────
         const lock = document.createElement('span');
         lock.className = 'ce-hier-btn ce-hier-lock' + (node.locked ? ' is-locked' : '');
         lock.textContent = node.locked ? '🔒' : '🔓';
@@ -382,32 +483,48 @@ export class LeftPanel extends BasePanel {
         });
         row.appendChild(lock);
 
-        // Delete button: X → turns to ✓ on first click, ✓ → deletes on second click
-        const isConfirm = this._confirmDelId === node.id;
-        const del = document.createElement('span');
-        del.className = 'ce-hier-btn ce-hier-del' + (isConfirm ? ' is-confirm' : '');
-        del.textContent = isConfirm ? '✓' : '✕';
-        del.title = isConfirm ? 'Confirm delete' : 'Delete';
-        del.addEventListener('click', (e) => {
-          e.stopPropagation();
-          if (this._confirmDelId === node.id) {
-            this._delete(node.id);
-          } else {
-            this._confirmDelId = node.id;
-            this._renderTree();
-          }
-        });
-        row.appendChild(del);
+        // ── Delete (hidden for protected nodes) ────────────────────────────
+        if (!PROTECTED.has(node.id)) {
+          const isConfirm = this._confirmDelId === node.id;
+          const del = document.createElement('span');
+          del.className = 'ce-hier-btn ce-hier-del' + (isConfirm ? ' is-confirm' : '');
+          del.textContent = isConfirm ? '✓' : '✕';
+          del.title = isConfirm ? 'Confirm delete' : 'Delete';
+          del.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (this._confirmDelId === node.id) {
+              this._deleteNode(node.id);
+              this._confirmDelId = null;
+              this._renderTree();
+            } else {
+              this._confirmDelId = node.id;
+              this._renderTree();
+            }
+          });
+          row.appendChild(del);
+        }
       }
 
-      // row selection click
-      row.addEventListener('click', () => {
+      // ── Row click: Ctrl/Meta for multi, plain for single ─────────────────
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.ce-hier-checkbox, .ce-hier-arrow, .ce-hier-btn')) return;
+
         if (this._confirmDelId && this._confirmDelId !== node.id) {
-          this._confirmDelId = null; // cancel pending confirm on another row
+          this._confirmDelId = null;
         }
-        this._selectedId = node.id;
-        container.querySelectorAll('.ce-hier-row').forEach(r => r.classList.remove('is-selected'));
-        row.classList.add('is-selected');
+
+        if (e.ctrlKey || e.metaKey) {
+          if (this._selectedIds.has(node.id)) {
+            this._selectedIds.delete(node.id);
+          } else {
+            this._selectedIds.add(node.id);
+          }
+        } else {
+          this._selectedIds.clear();
+          this._selectedIds.add(node.id);
+        }
+        this._lastClickId = node.id;
+        this._renderTree();
       });
 
       container.appendChild(row);
