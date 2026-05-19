@@ -734,7 +734,7 @@ html, body {
   border-radius: 2px;
   background: transparent;
   cursor: pointer;
-  opacity: 0;
+  opacity: 0.35;
   transition: opacity 0.1s, background 0.1s;
   font-size: 9px; color: #fff;
 }
