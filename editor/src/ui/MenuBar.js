@@ -52,6 +52,25 @@ export function createMenuBar(options = {}) {
   const right = document.createElement('div');
   right.className = 'menu-right';
 
+  // Panel toggle buttons
+  const toggleBtns = {};
+  PANEL_IDS.forEach(p => {
+    const btn = document.createElement('button');
+    btn.className = 'panel-toggle-btn';
+    btn.title = `Toggle ${p.label} Panel`;
+    btn.innerHTML = _panelIcon(p.id);
+    btn.dataset.panelId = p.id;
+    btn.addEventListener('click', () => {
+      LayoutManager.togglePanel(p.id);
+    });
+    toggleBtns[p.id] = btn;
+    right.appendChild(btn);
+  });
+
+  const sep = document.createElement('div');
+  sep.className = 'toggle-separator';
+  right.appendChild(sep);
+
   // Customize layout button
   const layoutBtn = document.createElement('button');
   layoutBtn.className = 'panel-toggle-btn';
@@ -74,6 +93,16 @@ export function createMenuBar(options = {}) {
 
   nav.appendChild(left);
   nav.appendChild(right);
+
+  // Sync toggle btn states when layout changes
+  document.addEventListener('cyco-layout-change', () => {
+    PANEL_IDS.forEach(p => {
+      const visible = LayoutManager.isPanelVisible(p.id);
+      const btn = toggleBtns[p.id];
+      btn.classList.toggle('active', visible);
+      btn.classList.toggle('panel-hidden', !visible);
+    });
+  });
 
   // Close all dropdowns on outside click
   document.addEventListener('click', _closeAll);
