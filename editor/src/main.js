@@ -7,6 +7,7 @@ import ThemeManager      from './theme/theme-manager.js';
 import LayoutManager     from './layout-manager.js';
 import { initLayout }    from './layout.js';
 import ProjectManager    from './project/ProjectManager.js';
+import GameManager       from './ui/GameManager.js';
 
 const app = document.getElementById('app');
 
@@ -43,3 +44,8 @@ requestAnimationFrame(() => requestAnimationFrame(applyBarHeights));
 ThemeManager.init();
 // ── 5. Migrate any legacy project data (no project is auto-opened) ───────────—
 ProjectManager.init();
+
+// ── 6. Wire toolbar action events ─────────────────────────────────────────────
+document.addEventListener('cyco-action', (e) => {
+  if (e.detail === 'game-manager') GameManager.open();
+});

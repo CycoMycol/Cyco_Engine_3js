@@ -1,5 +1,7 @@
 /** ProjectManager.js — virtual project filesystem stored in localStorage */
 
+import { EMPTY_GAME_DATA } from '../ui/game-manager/GameDataSchemas.js';
+
 const STORAGE_KEY_RECENTS = 'cyco-recents';
 const STORAGE_KEY_PREFIX  = 'cyco-proj-';
 const STORAGE_KEY_LEGACY  = 'cyco-project'; // migrated automatically on first load
@@ -47,6 +49,7 @@ const ProjectManager = {
       name,
       path: displayPath,
       tree: JSON.parse(JSON.stringify(DEFAULT_TREE)),
+      gameData: JSON.parse(JSON.stringify(EMPTY_GAME_DATA)),
     };
     this._save();
     this._addToRecents({ id, name, path: displayPath, timestamp: Date.now() });
@@ -63,6 +66,11 @@ const ProjectManager = {
       const raw = localStorage.getItem(STORAGE_KEY_PREFIX + id);
       if (!raw) return false;
       this._project = JSON.parse(raw);
+      // Migration: add gameData if project was created before this feature
+      if (!this._project.gameData) {
+        this._project.gameData = JSON.parse(JSON.stringify(EMPTY_GAME_DATA));
+        this._save();
+      }
       this._touchRecent(id);
       document.dispatchEvent(new CustomEvent('cyco-project-change', {
         detail: { name: this._project.name, path: this._project.path },
@@ -119,6 +127,39 @@ const ProjectManager = {
     this._save();
     document.dispatchEvent(new CustomEvent('cyco-project-change'));
     return true;
+  },
+
+  // ── Game data CRUD ──────────────────────────────────────────────────────────
+
+  /**
+   * Returns the records array for a given module + subType.
+   * e.g. getGameRecords('inventory', 'items')
+   */
+  getGameRecords(module, subType) {
+    return this._project?.gameData?.[module]?.[subType] ?? [];
+  },
+
+  /**
+   * Upsert a record by id. Creates if new, replaces if existing.
+   * Triggers a save.
+   */
+  saveGameRecord(module, subType, record) {
+    if (!this._project?.gameData?.[module]?.[subType]) return;
+    const arr = this._project.gameData[module][subType];
+    const idx = arr.findIndex(r => r.id === record.id);
+    if (idx >= 0) arr[idx] = record;
+    else arr.push(record);
+    this._save();
+  },
+
+  /**
+   * Delete a record by id. Triggers a save.
+   */
+  deleteGameRecord(module, subType, id) {
+    if (!this._project?.gameData?.[module]?.[subType]) return;
+    const arr = this._project.gameData[module][subType];
+    const idx = arr.findIndex(r => r.id === id);
+    if (idx >= 0) { arr.splice(idx, 1); this._save(); }
   },
 
   /** Rename a node. Returns false if source not found or target name taken. */
