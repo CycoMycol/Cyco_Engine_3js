@@ -38,7 +38,6 @@ export function createMenuBar(options = {}) {
     { label: 'File',   items: fileMenu() },
     { label: 'Edit',   items: editMenu() },
     { label: 'View',   items: viewMenu() },
-    { label: 'Layout', items: layoutMenu() },
     { label: 'Window', items: windowMenu() },
     { label: 'Help',   items: helpMenu() },
   ];
@@ -391,11 +390,15 @@ function editMenu() {
 
 function viewMenu() {
   return [
-    { label: 'Zoom In',  action: () => {} },
-    { label: 'Zoom Out', action: () => {} },
+    { label: 'Zoom In',    action: () => {} },
+    { label: 'Zoom Out',   action: () => {} },
     { label: 'Reset Zoom', action: () => {} },
     { separator: true },
-    { label: 'Toggle Fullscreen', action: () => {} },
+    { label: 'Fullscreen', submenu: [
+      { label: 'Toggle Fullscreen', action: () => {} },
+    ]},
+    { separator: true },
+    { label: 'Layout', submenu: layoutMenu() },
   ];
 }
 
