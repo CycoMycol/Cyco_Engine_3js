@@ -390,13 +390,15 @@ function editMenu() {
 
 function viewMenu() {
   return [
-    { label: 'Zoom In',    action: () => {} },
-    { label: 'Zoom Out',   action: () => {} },
-    { label: 'Reset Zoom', action: () => {} },
-    { separator: true },
-    { label: 'Fullscreen', submenu: [
+    { label: 'Zoom', submenu: [
+      { label: 'Zoom In',           action: () => {} },
+      { label: 'Zoom Out',          action: () => {} },
+      { label: 'Reset Zoom',        action: () => {} },
+      { separator: true },
       { label: 'Toggle Fullscreen', action: () => {} },
     ]},
+    { separator: true },
+    { label: 'UI Theme', dynamicSubmenu: _themeSubmenu },
     { separator: true },
     { label: 'Layout', submenu: layoutMenu() },
   ];
@@ -415,9 +417,6 @@ function layoutMenu() {
       }
     },
     { label: 'Reset to Default', action: () => LayoutManager.resetToDefault() },
-    { separator: true },
-    // UI Theme submenu rebuilt on each hover so saved presets appear immediately
-    { label: 'UI Theme', dynamicSubmenu: _themeSubmenu },
   ];
 }
 
