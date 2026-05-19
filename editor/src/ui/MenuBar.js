@@ -74,11 +74,12 @@ export function createMenuBar(options = {}) {
   const layoutBtn = document.createElement('button');
   layoutBtn.className = 'panel-toggle-btn';
   layoutBtn.title = 'Save / Load Layout';
-  layoutBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="1" y="1" width="5" height="5" rx="1"/>
-    <rect x="8" y="1" width="5" height="5" rx="1"/>
-    <rect x="1" y="8" width="5" height="5" rx="1"/>
-    <rect x="8" y="8" width="5" height="5" rx="1"/>
+  layoutBtn.style.color = 'var(--ce-accent-orange)';
+  layoutBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14" fill="currentColor">
+    <rect x="1" y="1" width="5.5" height="5.5" rx="1"/>
+    <rect x="7.5" y="1" width="5.5" height="5.5" rx="1"/>
+    <rect x="1" y="7.5" width="5.5" height="5.5" rx="1"/>
+    <rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1"/>
   </svg>`;
   layoutBtn.addEventListener('click', (e) => {
     e.stopPropagation();
