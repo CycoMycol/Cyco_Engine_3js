@@ -222,9 +222,8 @@ export class BaseModule {
 
   _onViewChange(key, mode) {
     this._viewMode[key] = mode;
-    const table    = this._tables[key]?.element;
+    this._tables[key]?.showTable(mode === 'list');
     const cardWrap = this._activeCardWrap;
-    if (table)    table.style.display    = mode === 'list'  ? '' : 'none';
     if (cardWrap) cardWrap.style.display = mode === 'cards' ? '' : 'none';
   }
 

@@ -36,16 +36,14 @@ const NewProjectDialog = {
           <span class="ce-np-preview-path" id="np-preview-path">—</span>
         </div>
         <div class="ce-np-folder-list">
-          <div class="ce-np-folder-list-label">Default folders that will be created:</div>
-          <div class="ce-np-folder-chips">
-            <span class="ce-np-chip">audio</span>
-            <span class="ce-np-chip">fonts</span>
-            <span class="ce-np-chip">materials</span>
-            <span class="ce-np-chip">models</span>
-            <span class="ce-np-chip">scenes</span>
-            <span class="ce-np-chip">scripts</span>
-            <span class="ce-np-chip">textures</span>
+          <div class="ce-np-folder-list-header">
+            <label class="ce-np-checkbox-label">
+              <input type="checkbox" id="np-use-folders" checked>
+              <span class="ce-np-folder-list-label">Default folders that will be created:</span>
+            </label>
+            <button class="ce-btn ghost ce-np-add-folder-btn" id="np-add-folder" title="Add a custom folder">＋ Add Folder</button>
           </div>
+          <div class="ce-np-folder-chips" id="np-folder-chips"></div>
         </div>
       </div>
       <div class="ce-np-actions">
@@ -61,6 +59,59 @@ const NewProjectDialog = {
     dlg.querySelector('#np-name').focus();
   },
 
+  // ── Folder chips ────────────────────────────────────────────────────────────
+
+  _defaultFolders: ['audio','fonts','materials','models','scenes','scripts','textures'],
+
+  _buildChips(container) {
+    container.innerHTML = '';
+    for (const name of this._defaultFolders) {
+      container.appendChild(this._makeChip(name));
+    }
+  },
+
+  _makeChip(name) {
+    const chip = document.createElement('span');
+    chip.className = 'ce-np-chip';
+    chip.dataset.folder = name;
+    chip.textContent = name;
+    const rm = document.createElement('button');
+    rm.className = 'ce-np-chip-remove';
+    rm.textContent = '×';
+    rm.title = 'Remove folder';
+    rm.addEventListener('click', () => chip.remove());
+    chip.appendChild(rm);
+    return chip;
+  },
+
+  _startAddFolder(container) {
+    // Prevent double-adding
+    if (container.querySelector('.ce-np-chip-input')) return;
+    const chip = document.createElement('span');
+    chip.className = 'ce-np-chip ce-np-chip-editing';
+    const input = document.createElement('input');
+    input.className = 'ce-np-chip-input';
+    input.placeholder = 'folder name';
+    input.maxLength = 40;
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    const confirm = () => {
+      const val = input.value.trim().replace(/[^a-zA-Z0-9_\-]/g, '');
+      chip.remove();
+      if (val) container.appendChild(this._makeChip(val));
+    };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')  { e.preventDefault(); confirm(); }
+      if (e.key === 'Escape') { chip.remove(); }
+    });
+    input.addEventListener('blur', confirm);
+    chip.appendChild(input);
+    container.appendChild(chip);
+    input.focus();
+  },
+
+  // ── Events ──────────────────────────────────────────────────────────────────
+
   _bindEvents(dlg) {
     const nameInput      = dlg.querySelector('#np-name');
     const locationInput  = dlg.querySelector('#np-location');
@@ -70,6 +121,23 @@ const NewProjectDialog = {
     const createBtn      = dlg.querySelector('#np-create');
     const cancelBtn      = dlg.querySelector('#np-cancel');
     const browseBtn      = dlg.querySelector('#np-browse');
+    const useFoldersCb   = dlg.querySelector('#np-use-folders');
+    const addFolderBtn   = dlg.querySelector('#np-add-folder');
+    const chipsContainer = dlg.querySelector('#np-folder-chips');
+
+    // Populate initial chips
+    this._buildChips(chipsContainer);
+
+    // Toggle: enable/disable folders
+    const syncFolderState = () => {
+      const on = useFoldersCb.checked;
+      chipsContainer.classList.toggle('is-disabled', !on);
+      addFolderBtn.disabled = !on;
+    };
+    useFoldersCb.addEventListener('change', syncFolderState);
+    syncFolderState();
+
+    addFolderBtn.addEventListener('click', () => this._startAddFolder(chipsContainer));
 
     const updatePreview = () => {
       const name   = nameInput.value.trim()     || '(name)';
@@ -113,7 +181,13 @@ const NewProjectDialog = {
       }
       const location     = locationInput.value.trim() || 'C:/Projects';
       const createFolder = createFolderCb.checked;
-      ProjectManager.create(name, location, createFolder);
+      // Collect folder names from chips (null = use defaults when toggle is off → no folders)
+      const useFolders = useFoldersCb.checked;
+      const folders = useFolders
+        ? Array.from(chipsContainer.querySelectorAll('.ce-np-chip[data-folder]'))
+            .map(c => c.dataset.folder).filter(Boolean)
+        : [];
+      ProjectManager.create(name, location, createFolder, folders);
       this._close();
     };
 

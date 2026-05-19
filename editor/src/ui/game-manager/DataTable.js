@@ -37,6 +37,9 @@ export class DataTable {
   get element() { return this._el; }
   get selected() { return this._selected; }
 
+  /** Show or hide only the table wrap (toolbar remains visible). */
+  showTable(visible) { this._tableWrap.style.display = visible ? '' : 'none'; }
+
   // ── Build DOM ───────────────────────────────────────────────────────────────
 
   _build() {

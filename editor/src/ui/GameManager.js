@@ -13,6 +13,9 @@ const GameManager = {
       this._window = new GameManagerWindow();
       this._window._onClose = () => this.close();
       document.body.appendChild(this._window.element);
+    } else {
+      // Reload data each time GM is re-opened (project may have changed while closed)
+      this._window.reload();
     }
     this._window.show();
   },
