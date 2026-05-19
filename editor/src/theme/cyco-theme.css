@@ -656,6 +656,70 @@ html, body {
   text-transform: uppercase;
 }
 
+/* ─── Scene Hierarchy ─────────────────────────────────────────────────────── */
+.ce-hierarchy {
+  display: flex; flex-direction: column;
+  height: 100%; overflow: hidden;
+  background: var(--ce-bg-panel);
+  font-family: var(--ce-font-family);
+  font-size: var(--ce-font-size-base);
+  color: var(--ce-text-primary);
+}
+.ce-hier-toolbar {
+  padding: 5px 6px 4px;
+  border-bottom: 1px solid var(--ce-border);
+  background: var(--ce-bg-panel);
+  flex-shrink: 0;
+}
+.ce-hier-search {
+  width: 100%; box-sizing: border-box;
+  background: var(--ce-bg-base);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  padding: 3px 7px;
+  color: var(--ce-text-primary);
+  font-size: 11px;
+  outline: none;
+}
+.ce-hier-search:focus { border-color: var(--ce-accent-orange); }
+.ce-hier-tree {
+  flex: 1; overflow-y: auto; overflow-x: hidden;
+}
+.ce-hier-row {
+  display: flex; align-items: center;
+  height: 22px; padding-right: 4px;
+  cursor: pointer; user-select: none;
+  position: relative;
+}
+.ce-hier-row:nth-child(odd)  { background: var(--ce-bg-panel); }
+.ce-hier-row:nth-child(even) { background: var(--ce-bg-base);  }
+.ce-hier-row:hover   { background: var(--ce-bg-surface) !important; }
+.ce-hier-row.is-selected { background: color-mix(in srgb, var(--ce-accent-orange) 22%, var(--ce-bg-surface)) !important; }
+.ce-hier-indent { display: inline-block; flex-shrink: 0; }
+.ce-hier-arrow {
+  display: inline-block; width: 14px; flex-shrink: 0;
+  font-size: 9px; color: var(--ce-text-muted);
+  text-align: center; cursor: pointer;
+}
+.ce-hier-arrow-leaf { cursor: default; }
+.ce-hier-icon {
+  display: inline-block; width: 18px; flex-shrink: 0;
+  font-size: 10px; text-align: center;
+  color: var(--ce-text-muted);
+}
+.ce-hier-name {
+  flex: 1; font-size: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  padding-left: 2px;
+}
+.ce-hier-eye {
+  font-size: 10px; opacity: 0; flex-shrink: 0;
+  padding: 0 4px; transition: opacity 0.1s;
+  cursor: pointer;
+}
+.ce-hier-row:hover .ce-hier-eye { opacity: 0.5; }
+.ce-hier-row:hover .ce-hier-eye:hover { opacity: 1; }
+
 /* ─── Theme Dialog ────────────────────────────────────────────────────────── */
 dialog.ce-theme-dialog {
   background: var(--ce-bg-raised);
