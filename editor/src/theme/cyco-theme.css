@@ -130,8 +130,9 @@ html, body {
 #menu-bar .ce-logo {
   display: flex;
   align-items: center;
-  margin-right: 12px;
-  cursor: default;
+  padding: 0 2px;
+  margin-right: 4px;
+  cursor: pointer;
   flex-shrink: 0;
 }
 

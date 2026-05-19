@@ -27,19 +27,71 @@ export function createMenuBar(options = {}) {
   const left = document.createElement('div');
   left.className = 'menu-left';
 
-  // Logo
+  // Logo — doubles as the Help / About dropdown trigger
   const logoWrap = document.createElement('div');
-  logoWrap.className = 'ce-logo';
+  logoWrap.className = 'ce-logo menu-item';
+  logoWrap.title = 'Cyco Engine';
   logoWrap.appendChild(createLogo());
   left.appendChild(logoWrap);
 
+  {
+    const logoDropdown = buildDropdown(helpMenu());
+    logoDropdown.addEventListener('click', (e) => e.stopPropagation());
+    let logoCloseTimer = null;
+
+    function _openLogoDropdown() {
+      const rect = logoWrap.getBoundingClientRect();
+      logoDropdown.style.position = 'fixed';
+      logoDropdown.style.left   = rect.left + 'px';
+      logoDropdown.style.top    = rect.bottom + 'px';
+      logoDropdown.style.bottom = 'auto';
+      document.body.appendChild(logoDropdown);
+      logoDropdown.classList.add('open');
+      logoWrap.classList.add('open');
+      requestAnimationFrame(() => {
+        const ddRect = logoDropdown.getBoundingClientRect();
+        if (ddRect.bottom > window.innerHeight - 4) {
+          logoDropdown.style.top    = 'auto';
+          logoDropdown.style.bottom = (window.innerHeight - rect.top) + 'px';
+        }
+      });
+    }
+
+    function _closeLogoDropdown() {
+      logoDropdown.classList.remove('open');
+      logoWrap.classList.remove('open');
+      if (logoDropdown.parentElement === document.body) document.body.removeChild(logoDropdown);
+    }
+
+    logoWrap.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isOpen = logoDropdown.parentElement !== null;
+      _closeAll();
+      if (!isOpen) _openLogoDropdown();
+    });
+    logoWrap.addEventListener('mouseenter', () => {
+      clearTimeout(logoCloseTimer);
+      if (document.querySelector('.menu-item.open')) { _closeAll(); _openLogoDropdown(); }
+    });
+    logoWrap.addEventListener('mouseleave', () => {
+      logoCloseTimer = setTimeout(() => {
+        if (!logoWrap.matches(':hover') && !logoDropdown.matches(':hover')) _closeLogoDropdown();
+      }, 180);
+    });
+    logoDropdown.addEventListener('mouseenter', () => clearTimeout(logoCloseTimer));
+    logoDropdown.addEventListener('mouseleave', () => {
+      logoCloseTimer = setTimeout(() => {
+        if (!logoWrap.matches(':hover') && !logoDropdown.matches(':hover')) _closeLogoDropdown();
+      }, 180);
+    });
+  }
+
   // Menu items
   const menuItems = [
-    { label: 'File',   items: fileMenu() },
-    { label: 'Edit',   items: editMenu() },
-    { label: 'View',   items: viewMenu() },
-    { label: 'Window', items: windowMenu() },
-    { label: 'Help',   items: helpMenu() },
+    { label: 'File',        items: fileMenu() },
+    { label: 'Edit',        items: editMenu() },
+    { label: 'Environment', items: environmentMenu() },
+    { label: 'View',        items: viewMenu() },
   ];
 
   menuItems.forEach(m => {
@@ -472,6 +524,22 @@ function _themeSubmenu() {
     }
   });
   return items;
+}
+
+function environmentMenu() {
+  return [
+    { label: 'Camera',      action: () => {} },
+    { label: 'Viewport',    action: () => {} },
+    { label: 'Environment', action: () => {} },
+    { label: 'Renderer',    action: () => {} },
+    { label: 'Post Processing',      action: () => {} },
+    { separator: true },
+    { label: 'Lighting', submenu: [
+      { label: 'Global Illumination', action: () => {} },
+      { label: 'Volumetric Lighting', action: () => {} },
+      { label: 'Ambient Occlusion',   action: () => {} },
+    ]},
+  ];
 }
 
 function windowMenu() {
