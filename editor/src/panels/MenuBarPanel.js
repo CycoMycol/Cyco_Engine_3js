@@ -51,6 +51,9 @@ export class MenuBarPanel extends BasePanel {
       wrap.appendChild(handle);
       rightEl.appendChild(wrap);
       this._floatBtn = handle; // keep same ref name — onDidLocationChange uses it
+
+      // Push flex items left so they aren't hidden under the absolute wrapper
+      rightEl.style.paddingRight = wrap.offsetWidth + 'px';
       this._setupBarDrag(this._el.querySelector('#menu-bar'));
     });
   }

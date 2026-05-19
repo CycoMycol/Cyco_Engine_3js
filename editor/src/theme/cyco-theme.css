@@ -123,6 +123,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 2px;
+  position: relative; /* so .ce-bar-panel-actions positions inside here, not the whole bar */
 }
 
 /* Logo */
