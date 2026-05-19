@@ -719,6 +719,40 @@ html, body {
 }
 .ce-hier-row:hover .ce-hier-eye { opacity: 0.5; }
 .ce-hier-row:hover .ce-hier-eye:hover { opacity: 1; }
+.ce-hier-rename-input {
+  flex: 1; background: var(--ce-bg-base); border: 1px solid var(--ce-accent-orange);
+  border-radius: 2px; padding: 0 4px; color: var(--ce-text-primary);
+  font-size: 12px; outline: none; min-width: 0;
+}
+
+/* ─── Context Menu ────────────────────────────────────────────────────────── */
+.ce-ctx-menu {
+  position: fixed; z-index: 9999;
+  background: var(--ce-bg-raised);
+  border: 1px solid var(--ce-border);
+  border-radius: 5px;
+  padding: 4px 0;
+  min-width: 170px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  font-family: var(--ce-font-family);
+  font-size: 12px;
+  color: var(--ce-text-primary);
+  user-select: none;
+}
+.ce-ctx-item {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 5px 12px 5px 14px;
+  cursor: pointer; gap: 8px;
+}
+.ce-ctx-item:hover { background: var(--ce-bg-surface); }
+.ce-ctx-item.is-danger { color: #e05555; }
+.ce-ctx-item.is-danger:hover { background: rgba(224,85,85,0.12); }
+.ce-ctx-label { flex: 1; white-space: nowrap; }
+.ce-ctx-arrow { font-size: 9px; color: var(--ce-text-muted); flex-shrink: 0; }
+.ce-ctx-sep {
+  margin: 3px 0;
+  border-top: 1px solid var(--ce-border);
+}
 
 /* ─── Theme Dialog ────────────────────────────────────────────────────────── */
 dialog.ce-theme-dialog {

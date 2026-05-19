@@ -1,18 +1,5 @@
 import { BasePanel } from './BasePanel.js';
-
-// ─── Default placeholder scene tree ─────────────────────────────────────────
-const DEMO_NODES = [
-  { id: 1,  pid: null, name: 'Scene',              type: 'scene',  open: true  },
-  { id: 2,  pid: 1,    name: 'Main Camera',         type: 'camera', open: false },
-  { id: 3,  pid: 1,    name: 'Directional Light',   type: 'light',  open: false },
-  { id: 4,  pid: 1,    name: 'Player',              type: 'object', open: true  },
-  { id: 5,  pid: 4,    name: 'Body',                type: 'mesh',   open: false },
-  { id: 6,  pid: 4,    name: 'Weapon',              type: 'mesh',   open: false },
-  { id: 7,  pid: 1,    name: 'Environment',         type: 'object', open: true  },
-  { id: 8,  pid: 7,    name: 'Terrain',             type: 'mesh',   open: false },
-  { id: 9,  pid: 7,    name: 'Skybox',              type: 'mesh',   open: false },
-  { id: 10, pid: 7,    name: 'Water',               type: 'mesh',   open: false },
-];
+import { showHierarchyMenu, OBJECT_DEFAULTS } from '../ui/HierarchyContextMenu.js';
 
 const TYPE_ICON = {
   scene:  '⊞',
@@ -20,14 +7,23 @@ const TYPE_ICON = {
   light:  '✦',
   object: '⊕',
   mesh:   '▣',
+  sprite: '▧',
+  ui:     '☐',
 };
 
 export class LeftPanel extends BasePanel {
   _buildContent() {
+    // ── instance state
+    this._nodes = [
+      { id: 'root', pid: null, name: 'Scene', type: 'scene', open: true },
+    ];
+    this._selectedId = null;
+
+    // ── root wrapper
     const wrap = document.createElement('div');
     wrap.className = 'ce-hierarchy';
 
-    // ── toolbar row
+    // ── search toolbar
     const toolbar = document.createElement('div');
     toolbar.className = 'ce-hier-toolbar';
     const searchInput = document.createElement('input');
@@ -37,107 +33,186 @@ export class LeftPanel extends BasePanel {
     toolbar.appendChild(searchInput);
     wrap.appendChild(toolbar);
 
-    // ── tree container
+    // ── tree
     const tree = document.createElement('div');
     tree.className = 'ce-hier-tree';
     wrap.appendChild(tree);
+    this._tree = tree;
 
-    this._renderTree(tree, DEMO_NODES);
-
-    // live search filter
+    // live search
     searchInput.addEventListener('input', () => {
       const q = searchInput.value.toLowerCase();
       tree.querySelectorAll('.ce-hier-row').forEach(row => {
-        const match = !q || row.dataset.name.toLowerCase().includes(q);
-        row.style.display = match ? '' : 'none';
+        row.style.display = (!q || row.dataset.name.toLowerCase().includes(q)) ? '' : 'none';
       });
     });
 
+    // right-click on tree
+    tree.addEventListener('contextmenu', (e) => {
+      const row = e.target.closest('.ce-hier-row');
+      if (row) {
+        this._selectedId = row.dataset.id;
+        this._renderTree();
+      }
+      showHierarchyMenu(e, (action) => this._handleAction(action), !!row);
+    });
+
+    this._renderTree();
     return wrap;
   }
 
-  _renderTree(container, nodes) {
+  // ── Action handler ────────────────────────────────────────────────────────
+  _handleAction(action) {
+    if (action === 'rename')    { this._startRename();  return; }
+    if (action === 'duplicate') { this._duplicate();    return; }
+    if (action === 'delete')    { this._delete();       return; }
+
+    const def = OBJECT_DEFAULTS[action];
+    if (!def) return;
+
+    const pid = this._selectedId ?? 'root';
+    const parent = this._nodes.find(n => n.id === pid);
+    if (parent) parent.open = true;
+
+    this._nodes.push({
+      id:   Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      pid,
+      name: def.name,
+      type: def.type,
+      open: false,
+    });
+    this._renderTree();
+  }
+
+  _duplicate() {
+    if (!this._selectedId || this._selectedId === 'root') return;
+    const src = this._nodes.find(n => n.id === this._selectedId);
+    if (!src) return;
+    this._nodes.push({
+      ...src,
+      id:   Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+      name: src.name + ' (Copy)',
+    });
+    this._renderTree();
+  }
+
+  _delete() {
+    if (!this._selectedId || this._selectedId === 'root') return;
+    const toDelete = new Set();
+    const collect  = (id) => {
+      toDelete.add(id);
+      this._nodes.filter(n => n.pid === id).forEach(n => collect(n.id));
+    };
+    collect(this._selectedId);
+    this._nodes      = this._nodes.filter(n => !toDelete.has(n.id));
+    this._selectedId = null;
+    this._renderTree();
+  }
+
+  _startRename() {
+    if (!this._selectedId) return;
+    const row   = this._tree.querySelector(`.ce-hier-row[data-id="${this._selectedId}"]`);
+    const node  = this._nodes.find(n => n.id === this._selectedId);
+    const label = row?.querySelector('.ce-hier-name');
+    if (!row || !node || !label) return;
+
+    const input = document.createElement('input');
+    input.className = 'ce-hier-rename-input';
+    input.value = node.name;
+    label.replaceWith(input);
+    input.focus();
+    input.select();
+
+    const commit = () => {
+      node.name = input.value.trim() || node.name;
+      this._renderTree();
+    };
+    input.addEventListener('blur', commit);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')  { e.preventDefault(); commit(); }
+      if (e.key === 'Escape') { this._renderTree(); }
+    });
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────────
+  _renderTree() {
+    const container = this._tree;
     container.innerHTML = '';
-    // Build depth map
+
+    const nodes     = this._nodes;
+    const openSet   = new Set(nodes.filter(n => n.open).map(n => n.id));
+    const hasCh     = new Set(nodes.filter(n => n.pid !== null).map(n => n.pid));
+
     const depthOf = (node) => {
       let d = 0, cur = node;
       while (cur.pid !== null) {
         cur = nodes.find(n => n.id === cur.pid);
+        if (!cur) break;
         d++;
       }
       return d;
     };
 
-    // Determine visible nodes (collapsed children hidden)
-    const openSet = new Set(nodes.filter(n => n.open).map(n => n.id));
-    const hasChildren = new Set(nodes.filter(n => n.pid !== null).map(n => n.pid));
-
     const isVisible = (node) => {
       let cur = node;
       while (cur.pid !== null) {
-        const parent = nodes.find(n => n.id === cur.pid);
-        if (!openSet.has(parent.id)) return false;
-        cur = parent;
+        const p = nodes.find(n => n.id === cur.pid);
+        if (!p || !openSet.has(p.id)) return false;
+        cur = p;
       }
       return true;
     };
 
-    let rowIndex = 0;
-    nodes.forEach(node => {
-      if (!isVisible(node)) return;
-      const depth = depthOf(node);
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+
       const row = document.createElement('div');
-      row.className = 'ce-hier-row';
+      row.className = 'ce-hier-row' + (this._selectedId === node.id ? ' is-selected' : '');
       row.dataset.id   = node.id;
       row.dataset.name = node.name;
-      row.dataset.rowIndex = rowIndex++;
 
-      // indent
       const indent = document.createElement('span');
       indent.className = 'ce-hier-indent';
-      indent.style.width = `${depth * 16}px`;
+      indent.style.width = `${depthOf(node) * 16}px`;
       row.appendChild(indent);
 
-      // expand arrow
       const arrow = document.createElement('span');
-      arrow.className = 'ce-hier-arrow' + (hasChildren.has(node.id) ? '' : ' ce-hier-arrow-leaf');
-      arrow.textContent = hasChildren.has(node.id) ? (openSet.has(node.id) ? '▾' : '▸') : ' ';
-      if (hasChildren.has(node.id)) {
+      const hasC  = hasCh.has(node.id);
+      arrow.className = 'ce-hier-arrow' + (hasC ? '' : ' ce-hier-arrow-leaf');
+      arrow.textContent = hasC ? (openSet.has(node.id) ? '▾' : '▸') : ' ';
+      if (hasC) {
         arrow.addEventListener('click', (e) => {
           e.stopPropagation();
-          if (openSet.has(node.id)) openSet.delete(node.id);
-          else openSet.add(node.id);
-          this._renderTree(container, nodes);
+          node.open = !node.open;
+          this._renderTree();
         });
       }
       row.appendChild(arrow);
 
-      // type icon
       const icon = document.createElement('span');
       icon.className = 'ce-hier-icon';
       icon.textContent = TYPE_ICON[node.type] ?? '▣';
       row.appendChild(icon);
 
-      // name
       const label = document.createElement('span');
       label.className = 'ce-hier-name';
       label.textContent = node.name;
       row.appendChild(label);
 
-      // visibility toggle (eye)
       const eye = document.createElement('span');
       eye.className = 'ce-hier-eye';
       eye.textContent = '👁';
-      eye.title = 'Toggle visibility';
       row.appendChild(eye);
 
       row.addEventListener('click', () => {
+        this._selectedId = node.id;
         container.querySelectorAll('.ce-hier-row').forEach(r => r.classList.remove('is-selected'));
         row.classList.add('is-selected');
       });
 
       container.appendChild(row);
-    });
+    }
   }
 }
+
 
