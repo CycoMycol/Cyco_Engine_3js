@@ -52,25 +52,6 @@ export function createMenuBar(options = {}) {
   const right = document.createElement('div');
   right.className = 'menu-right';
 
-  // Panel toggle buttons
-  const toggleBtns = {};
-  PANEL_IDS.forEach(p => {
-    const btn = document.createElement('button');
-    btn.className = 'panel-toggle-btn';
-    btn.title = `Toggle ${p.label} Panel`;
-    btn.innerHTML = _panelIcon(p.id);
-    btn.dataset.panelId = p.id;
-    btn.addEventListener('click', () => {
-      LayoutManager.togglePanel(p.id);
-    });
-    toggleBtns[p.id] = btn;
-    right.appendChild(btn);
-  });
-
-  const sep = document.createElement('div');
-  sep.className = 'toggle-separator';
-  right.appendChild(sep);
-
   // Customize layout button
   const layoutBtn = document.createElement('button');
   layoutBtn.className = 'panel-toggle-btn';
@@ -93,16 +74,6 @@ export function createMenuBar(options = {}) {
 
   nav.appendChild(left);
   nav.appendChild(right);
-
-  // Sync toggle btn states when layout changes
-  document.addEventListener('cyco-layout-change', () => {
-    PANEL_IDS.forEach(p => {
-      const visible = LayoutManager.isPanelVisible(p.id);
-      const btn = toggleBtns[p.id];
-      btn.classList.toggle('active', visible);
-      btn.classList.toggle('panel-hidden', !visible);
-    });
-  });
 
   // Close all dropdowns on outside click
   document.addEventListener('click', _closeAll);
@@ -401,10 +372,7 @@ function viewMenu() {
 
 function layoutMenu() {
   return [
-    { label: 'Toggle Left Panel',   action: () => LayoutManager.togglePanel('scene-hierarchy') },
-    { label: 'Toggle Center Panel', action: () => LayoutManager.togglePanel('center-viewport') },
-    { label: 'Toggle Right Panel',  action: () => LayoutManager.togglePanel('properties') },
-    { label: 'Toggle Bottom Panel', action: () => LayoutManager.togglePanel('assets-browser') },
+    { label: 'Toggle', dynamicSubmenu: _toggleSubmenu },
     { separator: true },
     // Load Layout submenu rebuilt on each hover so new saves appear immediately
     { label: 'Load Layout', dynamicSubmenu: _savedLayoutsSubmenu },
@@ -418,6 +386,15 @@ function layoutMenu() {
     { separator: true },
     // UI Theme submenu rebuilt on each hover so saved presets appear immediately
     { label: 'UI Theme', dynamicSubmenu: _themeSubmenu },
+  ];
+}
+
+function _toggleSubmenu() {
+  return [
+    { label: 'Left Panel',   action: () => LayoutManager.togglePanel('scene-hierarchy'), checked: LayoutManager.isPanelVisible('scene-hierarchy') },
+    { label: 'Center Panel', action: () => LayoutManager.togglePanel('center-viewport'),  checked: LayoutManager.isPanelVisible('center-viewport')  },
+    { label: 'Right Panel',  action: () => LayoutManager.togglePanel('properties'),      checked: LayoutManager.isPanelVisible('properties')        },
+    { label: 'Bottom Panel', action: () => LayoutManager.togglePanel('assets-browser'),  checked: LayoutManager.isPanelVisible('assets-browser')    },
   ];
 }
 
