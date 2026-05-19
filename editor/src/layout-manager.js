@@ -18,7 +18,7 @@ const PANEL_CONFIGS = {
     id: 'center-viewport', component: 'CenterPanel', title: 'Viewport',
   },
   'scene-hierarchy': {
-    id: 'scene-hierarchy', component: 'LeftPanel', title: 'Scene Hierarchy',
+    id: 'scene-hierarchy', component: 'LeftPanel', title: 'Hierarchy',
     position: { direction: 'left', referencePanel: 'center-viewport' },
     initialWidth: 260,
   },

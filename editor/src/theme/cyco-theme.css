@@ -656,7 +656,7 @@ html, body {
   text-transform: uppercase;
 }
 
-/* ─── Scene Hierarchy ─────────────────────────────────────────────────────── */
+/* ─── Hierarchy ───────────────────────────────────────────────────────────── */
 .ce-hierarchy {
   display: flex; flex-direction: column;
   height: 100%; overflow: hidden;
@@ -665,14 +665,17 @@ html, body {
   font-size: var(--ce-font-size-base);
   color: var(--ce-text-primary);
 }
+
+/* toolbar: search box + plus button */
 .ce-hier-toolbar {
+  display: flex; align-items: center; gap: 4px;
   padding: 5px 6px 4px;
   border-bottom: 1px solid var(--ce-border);
   background: var(--ce-bg-panel);
   flex-shrink: 0;
 }
 .ce-hier-search {
-  width: 100%; box-sizing: border-box;
+  flex: 1; min-width: 0; box-sizing: border-box;
   background: var(--ce-bg-base);
   border: 1px solid var(--ce-border);
   border-radius: 4px;
@@ -682,6 +685,20 @@ html, body {
   outline: none;
 }
 .ce-hier-search:focus { border-color: var(--ce-accent-orange); }
+.ce-hier-add-btn {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  background: var(--ce-accent-orange);
+  color: #fff;
+  border: none; border-radius: 4px;
+  font-size: 16px; line-height: 1;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: filter 0.1s;
+}
+.ce-hier-add-btn:hover { filter: brightness(1.15); }
+
+/* tree */
 .ce-hier-tree {
   flex: 1; overflow-y: auto; overflow-x: hidden;
 }
@@ -695,6 +712,16 @@ html, body {
 .ce-hier-row:nth-child(even) { background: var(--ce-bg-base);  }
 .ce-hier-row:hover   { background: var(--ce-bg-surface) !important; }
 .ce-hier-row.is-selected { background: color-mix(in srgb, var(--ce-accent-orange) 22%, var(--ce-bg-surface)) !important; }
+.ce-hier-row.is-dragging { opacity: 0.35; }
+
+/* drag-and-drop drop indicators */
+.ce-hier-row.drop-before { box-shadow: inset 0 2px 0 var(--ce-accent-orange); }
+.ce-hier-row.drop-after  { box-shadow: inset 0 -2px 0 var(--ce-accent-orange); }
+.ce-hier-row.drop-inside {
+  background: color-mix(in srgb, var(--ce-accent-orange) 18%, var(--ce-bg-surface)) !important;
+  outline: 1px solid var(--ce-accent-orange);
+}
+
 .ce-hier-indent { display: inline-block; flex-shrink: 0; }
 .ce-hier-arrow {
   display: inline-block; width: 14px; flex-shrink: 0;
@@ -712,13 +739,29 @@ html, body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   padding-left: 2px;
 }
-.ce-hier-eye {
-  font-size: 10px; opacity: 0; flex-shrink: 0;
-  padding: 0 4px; transition: opacity 0.1s;
-  cursor: pointer;
+.ce-hier-name.is-locked { opacity: 0.5; font-style: italic; }
+.ce-hier-row.is-hidden-obj .ce-hier-name { opacity: 0.38; }
+
+/* per-row action buttons (eye / lock / delete) */
+.ce-hier-btn {
+  font-size: 11px; opacity: 0; flex-shrink: 0;
+  padding: 0 3px; cursor: pointer;
+  transition: opacity 0.1s;
+  line-height: 22px;
 }
-.ce-hier-row:hover .ce-hier-eye { opacity: 0.5; }
-.ce-hier-row:hover .ce-hier-eye:hover { opacity: 1; }
+.ce-hier-row:hover .ce-hier-btn { opacity: 0.45; }
+.ce-hier-row:hover .ce-hier-btn:hover { opacity: 1; }
+
+/* eye: always visible at reduced opacity when hidden */
+.ce-hier-eye.is-hidden { opacity: 0.35 !important; }
+
+/* lock: orange tint + always visible when locked */
+.ce-hier-lock.is-locked { opacity: 0.85 !important; color: var(--ce-accent-orange); }
+
+/* delete X → confirm checkmark */
+.ce-hier-del:hover { color: #e05555; opacity: 1 !important; }
+.ce-hier-del.is-confirm { color: #4caf50 !important; opacity: 1 !important; font-weight: bold; }
+
 .ce-hier-rename-input {
   flex: 1; background: var(--ce-bg-base); border: 1px solid var(--ce-accent-orange);
   border-radius: 2px; padding: 0 4px; color: var(--ce-text-primary);
