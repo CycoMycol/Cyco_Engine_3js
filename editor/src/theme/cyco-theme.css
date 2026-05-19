@@ -1539,15 +1539,31 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
 .ce-np-preview-label { font-size: 11px; color: var(--ce-text-muted); white-space: nowrap; }
 .ce-np-preview-path { font-size: 11px; color: var(--ce-accent-orange); word-break: break-all; }
 .ce-np-folder-list { display: flex; flex-direction: column; gap: 6px; }
+.ce-np-folder-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ce-np-folder-list-label { font-size: 10px; color: var(--ce-text-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.ce-np-folder-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.ce-np-add-folder-btn { font-size: 11px; padding: 1px 7px !important; height: 18px !important; line-height: 1; }
+.ce-np-add-folder-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.ce-np-folder-chips { display: flex; flex-wrap: wrap; gap: 5px; transition: opacity 0.15s; }
+.ce-np-folder-chips.is-disabled { opacity: 0.3; pointer-events: none; }
 .ce-np-chip {
-  padding: 2px 8px;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px 2px 8px;
   background: var(--ce-bg-base);
   border: 1px solid var(--ce-border);
   border-radius: 4px;
   font-size: 11px;
   color: var(--ce-text-muted);
+}
+.ce-np-chip-remove {
+  background: none; border: none; padding: 0; margin: 0; line-height: 1;
+  font-size: 13px; cursor: pointer; color: var(--ce-text-muted);
+  opacity: 0.5; transition: opacity 0.1s;
+}
+.ce-np-chip-remove:hover { opacity: 1; color: var(--ce-accent-orange); }
+.ce-np-chip-editing { padding: 2px 4px; }
+.ce-np-chip-input {
+  background: none; border: none; outline: none; padding: 0;
+  font-size: 11px; color: var(--ce-text-primary); width: 80px;
 }
 .ce-np-actions {
   display: flex;

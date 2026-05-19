@@ -41,7 +41,7 @@ const NewProjectDialog = {
               <input type="checkbox" id="np-use-folders" checked>
               <span class="ce-np-folder-list-label">Default folders that will be created:</span>
             </label>
-            <button class="ce-btn ghost ce-np-add-folder-btn" id="np-add-folder" title="Add a custom folder">＋ Add Folder</button>
+            <button class="ce-btn primary ce-np-add-folder-btn" id="np-add-folder" title="Add a custom folder">＋ Add Folder</button>
           </div>
           <div class="ce-np-folder-chips" id="np-folder-chips"></div>
         </div>
@@ -61,7 +61,7 @@ const NewProjectDialog = {
 
   // ── Folder chips ────────────────────────────────────────────────────────────
 
-  _defaultFolders: ['audio','fonts','materials','models','scenes','scripts','textures'],
+  _defaultFolders: ['audio','fonts','materials','models','prefabs','scenes','scripts','textures'],
 
   _buildChips(container) {
     container.innerHTML = '';

@@ -35,20 +35,24 @@ const ProjectManager = {
 
   /**
    * Create a new project.
-   * @param {string} name         Project name
-   * @param {string} location     Display path (stored as metadata — browser can't write to disk)
-   * @param {boolean} createFolder Whether to append /name to the path
+   * @param {string}   name          Project name
+   * @param {string}   location      Display path
+   * @param {boolean}  createFolder  Whether to append /name to the path
+   * @param {string[]|null} folders  Custom folder list, or null to use DEFAULT_TREE
    */
-  create(name, location, createFolder) {
+  create(name, location, createFolder, folders = null) {
     const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     const displayPath = createFolder
       ? `${(location || '/projects').replace(/\\+/g, '/')}/${name}`
       : (location || '/projects').replace(/\\+/g, '/');
+    const tree = {};
+    const folderList = folders ?? Object.keys(DEFAULT_TREE);
+    for (const f of folderList) tree[f] = {};
     this._project = {
       id,
       name,
       path: displayPath,
-      tree: JSON.parse(JSON.stringify(DEFAULT_TREE)),
+      tree,
       gameData: JSON.parse(JSON.stringify(EMPTY_GAME_DATA)),
     };
     this._save();
