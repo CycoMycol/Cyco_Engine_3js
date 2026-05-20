@@ -11,10 +11,10 @@
  */
 
 // "Pop out" — bar is docked, click to float
-const FLOAT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="7" height="7" rx="1"/><polyline points="4,1 10,1 10,7"/></svg>`;
+export const FLOAT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="7" height="7" rx="1"/><polyline points="4,1 10,1 10,7"/></svg>`;
 
 // "Push in" — bar is floating, click to snap back
-const SNAPBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="1" width="7" height="7" rx="1"/><polyline points="7,10 1,10 1,4"/></svg>`;
+export const SNAPBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="1" width="7" height="7" rx="1"/><polyline points="7,10 1,10 1,4"/></svg>`;
 
 /**
  * @param {HTMLElement} barEl — the bar element to make floatable.

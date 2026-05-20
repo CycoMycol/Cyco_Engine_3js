@@ -320,6 +320,42 @@ html, body {
   border-radius: 0 0 5px 5px;
 }
 
+/* Left toolbar inside float window: remove the border-right, fill rounded corners */
+.ce-bar-float-window .ce-vp-lefttool {
+  border-right: none;
+  border-radius: 0 0 5px 5px;
+}
+
+/* Drag grip at the very top of the left toolbar (shows FLOAT_SVG / SNAPBACK_SVG via innerHTML) */
+.ce-vp-lefttool-grip {
+  width: 28px;
+  height: 20px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  color: var(--ce-text-muted);
+  opacity: 0.5;
+  transition: opacity 0.15s;
+  user-select: none;
+}
+.ce-vp-lefttool-grip:hover  { opacity: 1; }
+.ce-vp-lefttool-grip:active { cursor: grabbing; }
+/* When floating the grip shows SNAPBACK_SVG and acts as a click-to-dock button */
+.ce-vp-lefttool-grip.is-floating {
+  cursor: pointer;
+  color: var(--ce-accent-orange);
+  opacity: 0.75;
+}
+.ce-vp-lefttool-grip.is-floating:hover  { opacity: 1; }
+.ce-vp-lefttool-grip.is-floating:active { cursor: pointer; }
+
+/* Float window for the left toolbar — keep it narrow */
+.ce-vp-lt-float-win {
+  width: 36px;
+}
+
 /* Float toggle button on menu bar / toolbar */
 .ce-bar-float-btn {
   display: flex;
@@ -1963,6 +1999,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   padding: 6px 0;
   gap: 2px;
   flex-shrink: 0;
+  align-self: stretch;
 }
 .ce-vp-tool-btn {
   display: flex;
