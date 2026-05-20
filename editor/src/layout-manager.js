@@ -47,38 +47,91 @@ const LayoutManager = {
   _restoringLayout: false,
   _autoSaveTimer: null,
 
-  /** Call once after createDockview() returns the api. */
-  init(api) {
+  /**
+   * Call once after createDockview() returns the api.
+   * @param {object} api          - DockviewApi instance.
+   * @param {object} defaultLayout - DEFAULT_LAYOUT JSON (imported from layout.js).
+   *   Stored so resetToDefault() can restore it.  The api.fromJSON(DEFAULT_LAYOUT)
+   *   call in initLayout() has already applied it, so we capture the scaled result
+   *   via api.toJSON() as the true default (sized to the current container).
+   */
+  init(api, defaultLayout) {
     this.api = api;
 
     // All panels start visible
     ALL_IDS.forEach(id => { this._visibility[id] = true; });
 
-    // Capture default layout synchronously so resetToDefault() always works
+    // Capture the container-scaled default layout so resetToDefault() works
+    // correctly regardless of window size.
     try { this._defaultLayout = api.toJSON(); } catch(_) {}
+    if (!this._defaultLayout && defaultLayout) this._defaultLayout = defaultLayout;
 
-    // Re-sync on any layout change (drag, resize, tab close)
+    // Re-sync on any layout change (panel add/remove/move)
     api.onDidLayoutChange(() => {
       if (this._restoringLayout) return;
       this._resyncVisibility();
       this._scheduleAutoSave();
       document.dispatchEvent(new CustomEvent('cyco-layout-change'));
     });
+
+    // Save immediately when the page is refreshed or closed so panel sizes
+    // (set by sash/divider drags) are always captured at the last moment.
+    window.addEventListener('beforeunload', () => {
+      if (!this._restoringLayout) this._doAutoSave();
+    });
   },
 
   /**
-   * Restore the last auto-saved layout from localStorage.
-   * Call this after init() to resume the user's previous session.
+   * Set _pendingOrient hints for bar panels from a layout's panel definitions.
+   * Must be called before api.fromJSON(layout) so that LeftToolbarPanel.init()
+   * reads the correct expected orientation.
+   * @param {object} layout - dockview layout JSON (has a .panels map).
+   */
+  _setPendingOrientFromLayout(layout) {
+    this._pendingOrient = this._pendingOrient ?? {};
+    for (const barId of ['toolbar-panel', 'menu-bar-panel', 'left-toolbar']) {
+      const p = layout.panels?.[barId];
+      if (!p) continue;
+      if (p.minimumWidth != null || p.maximumWidth != null) {
+        this._pendingOrient[barId] = 'vertical';
+      } else if (p.minimumHeight != null || p.maximumHeight != null) {
+        this._pendingOrient[barId] = 'horizontal';
+      }
+    }
+  },
+
+  /**
+   * Restore the last auto-saved layout from localStorage, or apply the default
+   * layout if no save exists.  This is the ONE AND ONLY place that calls
+   * api.fromJSON() during startup, preventing the double-fromJSON size bug.
+   * Call this after init().
    */
   restoreAutoSaved() {
     if (!this.api) return;
     const raw = localStorage.getItem(AUTO_SAVE_KEY);
-    if (!raw) return;
+
+    // No saved layout — apply the default.
+    if (!raw) {
+      if (this._defaultLayout) {
+        this._setPendingOrientFromLayout(this._defaultLayout);
+        this._restoringLayout = true;
+        this.api.fromJSON(this._defaultLayout);
+        this._restoringLayout = false;
+      }
+      return;
+    }
+
     // If the saved layout pre-dates dockable menu/toolbar panels, discard it so
     // the fresh default layout (with those panels) is used instead.
     if (!raw.includes('"menu-bar-panel"') || !raw.includes('"toolbar-panel"') || !raw.includes('"left-toolbar"')) {
       console.info('[Cyco] Saved layout is from an older version; resetting to default layout.');
       localStorage.removeItem(AUTO_SAVE_KEY);
+      if (this._defaultLayout) {
+        this._setPendingOrientFromLayout(this._defaultLayout);
+        this._restoringLayout = true;
+        this.api.fromJSON(this._defaultLayout);
+        this._restoringLayout = false;
+      }
       return;
     }
     // Validate that bar panels are present in the layout.
@@ -93,6 +146,12 @@ const LayoutManager = {
       if (!barsPresent) {
         console.info('[Cyco] Saved layout is missing bar panels; resetting.');
         localStorage.removeItem(AUTO_SAVE_KEY);
+        if (this._defaultLayout) {
+          this._setPendingOrientFromLayout(this._defaultLayout);
+          this._restoringLayout = true;
+          this.api.fromJSON(this._defaultLayout);
+          this._restoringLayout = false;
+        }
         return;
       }
     } catch (_) { /* if parse fails we'll try again below and catch there */ }
@@ -101,15 +160,59 @@ const LayoutManager = {
       // Support both legacy plain-layout JSON and new { layout, snapshots } format
       const layout    = data.layout    ?? data;
       const snapshots = data.snapshots ?? {};
+      // Set orientation hints so bar panel init() applies correct constraints during fromJSON.
+      this._setPendingOrientFromLayout(layout);
       this._restoringLayout = true;
       this.api.fromJSON(layout);
       this._snapshots = snapshots;
       this._resyncVisibility();
       this._restoringLayout = false;
       document.dispatchEvent(new CustomEvent('cyco-layout-change'));
+
+      // After fromJSON, dockview's internal width/height mismatch causes a ResizeObserver
+      // RAF at ~T+16ms to re-normalize all panel sizes. Wait 50ms (after that RAF), then
+      // force the correct sizes from the saved layout.
+      setTimeout(() => {
+        try {
+          const root = layout.grid?.root;
+          const vStack = (root?.data?.length === 1 && root.data[0]?.type === 'branch') ? root.data[0] : root;
+          const contentBranch = vStack?.data?.find(n => n.type === 'branch');
+          if (!contentBranch?.data) return;
+
+          // Fix column widths (horizontal content branch — hierarchy, mid, properties)
+          for (const col of contentBranch.data) {
+            if (col.type !== 'leaf') continue;
+            const panelId = col.data?.views?.[0];
+            const grpApi = panelId && this.api.getPanel(panelId)?.api?.group?.api;
+            if (grpApi) grpApi.setSize({ width: col.size });
+          }
+
+          // Fix row heights inside the center (mid) column — assets-browser height etc.
+          const midBranch = contentBranch.data.find(n => n.type === 'branch');
+          if (midBranch?.data) {
+            for (const row of midBranch.data) {
+              if (row.type !== 'leaf') continue;
+              const panelId = row.data?.views?.[0];
+              const grpApi = panelId && this.api.getPanel(panelId)?.api?.group?.api;
+              if (grpApi) grpApi.setSize({ height: row.size });
+            }
+          }
+        } catch(_) {}
+      }, 50);
+
+
     } catch(e) {
       this._restoringLayout = false;
       console.warn('restoreAutoSaved error:', e);
+      // Fall back to default layout
+      if (this._defaultLayout) {
+        try {
+          this._setPendingOrientFromLayout(this._defaultLayout);
+          this._restoringLayout = true;
+          this.api.fromJSON(this._defaultLayout);
+          this._restoringLayout = false;
+        } catch(_) { this._restoringLayout = false; }
+      }
     }
   },
 
@@ -150,17 +253,7 @@ const LayoutManager = {
 
       // Detect bar orientations from snapshot panel JSON so BasePanel.init()
       // can apply the correct constraints (vertical vs horizontal).
-      // Width-only constraints → vertical column; height-only → horizontal row.
-      this._pendingOrient = this._pendingOrient ?? {};
-      for (const barId of ['toolbar-panel', 'menu-bar-panel']) {
-        const p = snapshot.panels?.[barId];
-        if (!p) continue;
-        if (p.minimumWidth != null || p.maximumWidth != null) {
-          this._pendingOrient[barId] = 'vertical';
-        } else if (p.minimumHeight != null || p.maximumHeight != null) {
-          this._pendingOrient[barId] = 'horizontal';
-        }
-      }
+      this._setPendingOrientFromLayout(snapshot);
 
       this._restoringLayout = true;
       this.api.fromJSON(snapshot);
@@ -337,8 +430,9 @@ const LayoutManager = {
   _doAutoSave() {
     if (!this.api) return;
     try {
+      const layout = this.api.toJSON();
       localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify({
-        layout:    this.api.toJSON(),
+        layout,
         snapshots: this._snapshots,
       }));
     } catch(e) { console.warn('_doAutoSave error:', e); }
@@ -360,6 +454,7 @@ const LayoutManager = {
     try {
       const layouts = this._loadLayouts();
       if (!layouts[name]) return;
+      this._setPendingOrientFromLayout(layouts[name]);
       this._restoringLayout = true;
       this.api.fromJSON(layouts[name]);
       this._snapshots = {};
@@ -379,6 +474,7 @@ const LayoutManager = {
   resetToDefault() {
     if (!this.api || !this._defaultLayout) return;
     try {
+      this._setPendingOrientFromLayout(this._defaultLayout);
       this._restoringLayout = true;
       this.api.fromJSON(this._defaultLayout);
       ALL_IDS.forEach(id => { this._visibility[id] = true; });

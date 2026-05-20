@@ -37,6 +37,11 @@ export function initLayout(container) {
     },
   });
 
+  // Apply the default layout to initialize the container dimensions.
+  // LayoutManager.restoreAutoSaved() will call fromJSON again if there is a
+  // saved layout.  NOTE: both calls share the same createComponent factory, so
+  // panel init() fires once per fromJSON; _pendingOrient is re-applied before
+  // the restore call.
   api.fromJSON(DEFAULT_LAYOUT);
 
   return api;

@@ -470,10 +470,10 @@ export class BasePanel {
 
     const addPanelZones = (panelId) => {
       if (panelId === selfId) return; // don't create zones for the panel being dragged
-      // Bar panels must not dock adjacent to specific content panels — that inserts them inside
-      // the content branch instead of the top-level vertical stack, which breaks the layout.
-      // They only use vp-edge zones.
-      if (selfId === 'menu-bar-panel' || selfId === 'toolbar-panel' || selfId === 'left-toolbar') return;
+      // Horizontal-only bars (menu bar, GM toolbar) must not dock adjacent to specific content
+      // panels — that inserts them inside the content branch instead of the top-level vertical
+      // stack, which breaks the layout. They only use vp-edge zones.
+      if (selfId === 'menu-bar-panel' || selfId === 'toolbar-panel') return;
       const p = dockApi?.getPanel(panelId);
       if (!p) return;
       const gEl = p.api?.group?.element;
@@ -804,7 +804,10 @@ export class BasePanel {
       LayoutManager._restoringLayout = false;
 
       if (this._floatBtn) this._updateFloatBtn(this._floatBtn);
-      setTimeout(() => this._cleanupEmptyGroups(), 100);
+      setTimeout(() => {
+        this._cleanupEmptyGroups();
+        LayoutManager._scheduleAutoSave?.();
+      }, 100);
 
     } catch (err) {
       LayoutManager._restoringLayout = false;
@@ -1004,6 +1007,7 @@ export class BasePanel {
       setTimeout(() => {
         this._cleanupEmptyGroups();
         this._logLayout('layout after dock (100ms)');
+        LayoutManager._scheduleAutoSave?.();
       }, 100);
 
     } catch (err) {
