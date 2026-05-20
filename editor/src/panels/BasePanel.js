@@ -470,10 +470,10 @@ export class BasePanel {
 
     const addPanelZones = (panelId) => {
       if (panelId === selfId) return; // don't create zones for the panel being dragged
-      // Horizontal-only bars (menu bar, GM toolbar) must not dock adjacent to specific content
-      // panels — that inserts them inside the content branch instead of the top-level vertical
-      // stack, which breaks the layout. They only use vp-edge zones.
-      if (selfId === 'menu-bar-panel' || selfId === 'toolbar-panel') return;
+      // Bar panels must not dock adjacent to specific content panels — that inserts them inside
+      // the content branch instead of the top-level vertical stack, which breaks the layout.
+      // They only use vp-edge zones.
+      if (selfId === 'menu-bar-panel' || selfId === 'toolbar-panel' || selfId === 'left-toolbar') return;
       const p = dockApi?.getPanel(panelId);
       if (!p) return;
       const gEl = p.api?.group?.element;
@@ -777,14 +777,23 @@ export class BasePanel {
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;
-        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
-        if (groupEl) {
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}`);
+        if (!groupEl || groupEl.classList.contains('dv-groupview-floating')) continue;
+        if (groupEl.classList.contains('ce-bar-vertical')) {
           LayoutManager._pendingOrient[bId] = 'vertical';
           const rect = groupEl.getBoundingClientRect();
           const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
           const bp = { ...newLayout.panels[bId] };
           delete bp.minimumHeight; delete bp.maximumHeight;
           bp.minimumWidth = otherBarH; bp.maximumWidth = otherBarH;
+          newLayout.panels[bId] = bp;
+        } else {
+          LayoutManager._pendingOrient[bId] = 'horizontal';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.height > 0 && rect.height < 100) ? Math.round(rect.height) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumWidth; delete bp.maximumWidth;
+          bp.minimumHeight = otherBarH; bp.maximumHeight = otherBarH;
           newLayout.panels[bId] = bp;
         }
       }
@@ -819,10 +828,6 @@ export class BasePanel {
 
     try {
       const json = dockApi.toJSON();
-
-      // ── RAW SIZE DIAGNOSTIC ──────────────────────────────────────────────
-      { const _r = json.grid?.root; const _vs = (_r?.data?.length===1&&_r.data[0]?.type==='branch')?_r.data[0]:_r; console.log(`[DBG-SIZE] toJSON grid w=${json.grid?.width} h=${json.grid?.height} | root.size=${_r?.size} vStack.size=${_vs?.size}`); console.log(`[DBG-SIZE] vStack rows:`, (_vs?.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); (_vs?.data??[]).forEach((row,ri)=>{ if(row.type==='branch'){ console.log(`[DBG-SIZE] row[${ri}] children:`, (row.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); } }); }
-      // ────────────────────────────────────────────────────────────────────
 
       // Remove barPanel leaf from a grid node recursively.
       // Also strips stale empty-views leaves that remain after addFloatingGroup.
@@ -956,17 +961,16 @@ export class BasePanel {
       // _pendingOrient to restore the correct orientation.
       LayoutManager._pendingOrient = LayoutManager._pendingOrient ?? {};
 
-      // Preserve orientation of OTHER bars that are already docked vertically.
-      // DOM class detection is the most reliable way to know current orientation.
+      // Preserve orientation of ALL other bars (vertical or horizontal) so their
+      // init() methods don't apply wrong constraints during fromJSON reconstruction.
       const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;
-        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
-        if (groupEl) {
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}`);
+        if (!groupEl || groupEl.classList.contains('dv-groupview-floating')) continue;
+        if (groupEl.classList.contains('ce-bar-vertical')) {
           LayoutManager._pendingOrient[bId] = 'vertical';
-          // Also strip height constraints from the panel JSON (they would collapse the column
-          // height during fromJSON) and ensure width constraints are set.
           const rect = groupEl.getBoundingClientRect();
           const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
           const bp = { ...newLayout.panels[bId] };
@@ -975,15 +979,21 @@ export class BasePanel {
           bp.minimumWidth = otherBarH;
           bp.maximumWidth = otherBarH;
           newLayout.panels[bId] = bp;
+        } else {
+          LayoutManager._pendingOrient[bId] = 'horizontal';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.height > 0 && rect.height < 100) ? Math.round(rect.height) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumWidth;
+          delete bp.maximumWidth;
+          bp.minimumHeight = otherBarH;
+          bp.maximumHeight = otherBarH;
+          newLayout.panels[bId] = bp;
         }
       }
 
       // Hint for the panel being moved
       LayoutManager._pendingOrient[panelId] = zone.isVertical ? 'vertical' : 'horizontal';
-
-      // ── RAW SIZE DIAGNOSTIC (newLayout) ─────────────────────────────────
-      { const _nr = newLayout.grid?.root; const _nvs = (_nr?.data?.length===1&&_nr.data[0]?.type==='branch')?_nr.data[0]:_nr; console.log(`[DBG-SIZE] newLayout grid w=${newLayout.grid?.width} h=${newLayout.grid?.height} | root.size=${_nr?.size} vStack.size=${_nvs?.size}`); console.log(`[DBG-SIZE] newVStack rows:`, (_nvs?.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); }
-      // ────────────────────────────────────────────────────────────────────
 
       LayoutManager._restoringLayout = true;
       dockApi.fromJSON(newLayout);
@@ -1251,14 +1261,23 @@ export class BasePanel {
       const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
       for (const bId of BAR_IDS) {
         if (!newLayout.panels?.[bId]) continue;
-        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
-        if (groupEl) {
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}`);
+        if (!groupEl || groupEl.classList.contains('dv-groupview-floating')) continue;
+        if (groupEl.classList.contains('ce-bar-vertical')) {
           LayoutManager._pendingOrient[bId] = 'vertical';
           const rect = groupEl.getBoundingClientRect();
           const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
           const bp = { ...newLayout.panels[bId] };
           delete bp.minimumHeight; delete bp.maximumHeight;
           bp.minimumWidth = otherBarH; bp.maximumWidth = otherBarH;
+          newLayout.panels[bId] = bp;
+        } else {
+          LayoutManager._pendingOrient[bId] = 'horizontal';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.height > 0 && rect.height < 100) ? Math.round(rect.height) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumWidth; delete bp.maximumWidth;
+          bp.minimumHeight = otherBarH; bp.maximumHeight = otherBarH;
           newLayout.panels[bId] = bp;
         }
       }
@@ -1365,14 +1384,23 @@ export class BasePanel {
       const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
       for (const bId of BAR_IDS) {
         if (!newLayout.panels?.[bId]) continue;
-        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
-        if (groupEl) {
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}`);
+        if (!groupEl || groupEl.classList.contains('dv-groupview-floating')) continue;
+        if (groupEl.classList.contains('ce-bar-vertical')) {
           LayoutManager._pendingOrient[bId] = 'vertical';
           const rect = groupEl.getBoundingClientRect();
           const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
           const bp = { ...newLayout.panels[bId] };
           delete bp.minimumHeight; delete bp.maximumHeight;
           bp.minimumWidth = otherBarH; bp.maximumWidth = otherBarH;
+          newLayout.panels[bId] = bp;
+        } else {
+          LayoutManager._pendingOrient[bId] = 'horizontal';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.height > 0 && rect.height < 100) ? Math.round(rect.height) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumWidth; delete bp.maximumWidth;
+          bp.minimumHeight = otherBarH; bp.maximumHeight = otherBarH;
           newLayout.panels[bId] = bp;
         }
       }
