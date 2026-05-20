@@ -189,27 +189,6 @@ export class BasePanel {
   }
 
   /** Dump the current positions of all bar + content panels to the console. */
-  _logLayout(label) {
-    const dockApi = LayoutManager.api;
-    if (!dockApi) return;
-    const groups = dockApi.groups ?? [];
-    const snap = groups.map(g => {
-      const el = g.element;
-      if (!el) return null;
-      const r = el.getBoundingClientRect();
-      const floating = el.classList.contains('dv-groupview-floating');
-      const views = (g.panels ?? []).map(p => p.id);
-      return `  ${views.join('/')} | y=${Math.round(r.y)} x=${Math.round(r.x)} w=${Math.round(r.width)} h=${Math.round(r.height)}${floating ? ' [FLOATING]' : ''}`;
-    }).filter(Boolean);
-    console.log(`[DBG] ─── ${label} ───`);
-    snap.forEach(s => console.log(s));
-    // Also log current JSON floating list
-    try {
-      const fg = (dockApi.toJSON()?.floatingGroups ?? []).map(fg => fg.data?.views);
-      if (fg.length) console.log(`  floatingGroups in JSON: ${JSON.stringify(fg)}`);
-    } catch(_) {}
-  }
-
   /**
    * Core drag logic shared by handle button and bar background mousedown.
    * handleEl is used for float/snap-back on no-drag clicks.
@@ -219,8 +198,6 @@ export class BasePanel {
     const startY = e.clientY;
     let didDrag = false;
     const _selfId = this._panelApi?.id;
-    console.log(`[DBG] mousedown on "${_selfId}" at (${e.clientX},${e.clientY}) — floating=${this._floating}`);
-    this._logLayout('layout at drag start');
 
     if (this._floating) {
       // ── Floating: drag to reposition OR drop onto a dock zone ────────────
@@ -254,13 +231,9 @@ export class BasePanel {
         document.removeEventListener('mouseup', onUp);
         this._stopDropTracking();
         if (!didDrag && handleEl) {
-          console.log(`[DBG] "${_selfId}" no-drag → toggleFloat (snap back)`);
           this._toggleFloat(handleEl);
         } else if (activeZone) {
-          console.log(`[DBG] "${_selfId}" dropped on zone "${activeZone.id}"`);
           this._dockAtZone(activeZone);
-        } else {
-          console.log(`[DBG] "${_selfId}" mouseup — no zone hit, stays floating`);
         }
       };
       document.addEventListener('mousemove', onMove);
@@ -273,12 +246,10 @@ export class BasePanel {
           didDrag = true;
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
-          console.log(`[DBG] "${_selfId}" drag threshold hit → floating now`);
           this._floatAtPosition(ev.clientX, ev.clientY);
           if (this._floating) {
             const floatContainer = this._findFloatingContainer();
             this._startDropTracking();
-            console.log(`[DBG] "${_selfId}" drop zones: ${(this._dropZoneData ?? []).map(z => z.id).join(', ')}`);
             let lastX = ev.clientX, lastY = ev.clientY;
             let activeZone = null;
             let _lastZoneId = null;
@@ -305,10 +276,7 @@ export class BasePanel {
               document.removeEventListener('mouseup', onUpFloat);
               this._stopDropTracking();
               if (activeZone) {
-                console.log(`[DBG] "${_selfId}" dropped on zone "${activeZone.id}"`);
                 this._dockAtZone(activeZone);
-              } else {
-                console.log(`[DBG] "${_selfId}" mouseup — no zone hit, stays floating`);
               }
             };
             document.addEventListener('mousemove', onMoveFloat);
@@ -336,8 +304,6 @@ export class BasePanel {
     this._floatSnapshot = dockApi.toJSON();
     this._floating = true;
     const { width, height } = this._floatDimensions;
-    const _myId = this._panelApi?.id;
-    console.log(`[DBG] _floatAtPosition "${_myId}" at cursor (${clientX},${clientY})`);
     try {
       const panel = dockApi.getPanel(this._panelApi.id);
       if (!panel) throw new Error('panel not found');
@@ -347,7 +313,6 @@ export class BasePanel {
         width,
         height,
       });
-      console.log(`[DBG] "${_myId}" addFloatingGroup OK — floatingGroups now: ${JSON.stringify((dockApi.toJSON()?.floatingGroups ?? []).map(fg => fg.data?.views))}`);
       setTimeout(() => {
         this._fixFloatingSize();
         this._cleanupEmptyGroups();
@@ -597,9 +562,6 @@ export class BasePanel {
     if (!zone) return;
     const dockApi = LayoutManager.api;
     if (!dockApi) return;
-
-    console.log(`[DBG] _dockAtZone "${this._panelApi?.id}" → zone "${zone.id}"${zone.panelId ? ` (panel-edge of ${zone.panelId})` : ''}`);
-    this._logLayout('layout before dock');
 
     this._floating = false;
     const prevSnapshot = this._floatSnapshot;
@@ -1002,11 +964,9 @@ export class BasePanel {
       dockApi.fromJSON(newLayout);
       LayoutManager._restoringLayout = false;
 
-      console.log(`[DBG] fromJSON done for "${panelId}" \u2192 zone "${zone.id}"`);
       if (this._floatBtn) this._updateFloatBtn(this._floatBtn);
       setTimeout(() => {
         this._cleanupEmptyGroups();
-        this._logLayout('layout after dock (100ms)');
         LayoutManager._scheduleAutoSave?.();
       }, 100);
 
