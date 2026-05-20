@@ -229,44 +229,72 @@ export function makeFloatable(barEl, options = {}) {
     document.addEventListener('mouseup',   onUp);
   }
 
-  // Dock to viewport edges on drag release.
+  // Dock zones: anywhere outside the viewport OR within edgeDockPx of an edge.
   function _checkDockDrop(mx, my) {
     const body = document.querySelector(edgeDockSelector);
     if (!body) return;
     const r = body.getBoundingClientRect();
-    if      (mx < r.left   + edgeDockPx) _dockTo('left');
-    else if (mx > r.right  - edgeDockPx) _dockTo('right');
-    else if (my < r.top    + edgeDockPx) _dockTo('top');
-    else if (my > r.bottom - edgeDockPx) _dockTo('bottom');
-    // else: stays floating wherever released
+
+    let side = null;
+    if (mx < r.left || mx > r.right || my < r.top || my > r.bottom) {
+      // Outside viewport -- dock to whichever side the cursor has crossed the most.
+      const dl = r.left   - mx;
+      const dr = mx - r.right;
+      const dt = r.top    - my;
+      const db = my - r.bottom;
+      const best = Math.max(dl, dr, dt, db);
+      if      (best === dl) side = 'left';
+      else if (best === dr) side = 'right';
+      else if (best === dt) side = 'top';
+      else                  side = 'bottom';
+    } else {
+      // Inside viewport -- check edge zones.
+      if      (mx < r.left   + edgeDockPx) side = 'left';
+      else if (mx > r.right  - edgeDockPx) side = 'right';
+      else if (my < r.top    + edgeDockPx) side = 'top';
+      else if (my > r.bottom - edgeDockPx) side = 'bottom';
+    }
+
+    if (side) _dockTo(side);
   }
 
-  // Show which zone the cursor is in â€” screen edge takes priority, then viewport edge.
+  // Show which dock zone the cursor is in.
   function _updateIndicator(el, mx, my) {
     const PAD = 4;
     const TW  = 36;  // toolbar width  (left/right)
     const TH  = 36;  // toolbar height (top/bottom)
 
-    // Viewport-edge zone indicator
     const body = document.querySelector(edgeDockSelector);
     if (!body) { el.style.display = 'none'; return; }
     const r = body.getBoundingClientRect();
-    const Z = edgeDockPx;
 
-    if (mx < r.left + Z) {
-      _setRect(el, r.left + PAD, r.top + PAD, TW, r.height - PAD * 2); return;
-    }
-    if (mx > r.right - Z) {
-      _setRect(el, r.right - TW - PAD, r.top + PAD, TW, r.height - PAD * 2); return;
-    }
-    if (my < r.top + Z) {
-      _setRect(el, r.left + PAD, r.top + PAD, r.width - PAD * 2, TH); return;
-    }
-    if (my > r.bottom - Z) {
-      _setRect(el, r.left + PAD, r.bottom - TH - PAD, r.width - PAD * 2, TH); return;
+    let side = null;
+    if (mx < r.left || mx > r.right || my < r.top || my > r.bottom) {
+      const dl = r.left   - mx;
+      const dr = mx - r.right;
+      const dt = r.top    - my;
+      const db = my - r.bottom;
+      const best = Math.max(dl, dr, dt, db);
+      if      (best === dl) side = 'left';
+      else if (best === dr) side = 'right';
+      else if (best === dt) side = 'top';
+      else                  side = 'bottom';
+    } else {
+      const Z = edgeDockPx;
+      if      (mx < r.left   + Z) side = 'left';
+      else if (mx > r.right  - Z) side = 'right';
+      else if (my < r.top    + Z) side = 'top';
+      else if (my > r.bottom - Z) side = 'bottom';
     }
 
-    el.style.display = 'none';
+    if (!side) { el.style.display = 'none'; return; }
+
+    switch (side) {
+      case 'left':   _setRect(el, r.left + PAD, r.top + PAD, TW, r.height - PAD * 2); break;
+      case 'right':  _setRect(el, r.right - TW - PAD, r.top + PAD, TW, r.height - PAD * 2); break;
+      case 'top':    _setRect(el, r.left + PAD, r.top + PAD, r.width - PAD * 2, TH); break;
+      case 'bottom': _setRect(el, r.left + PAD, r.bottom - TH - PAD, r.width - PAD * 2, TH); break;
+    }
   }
 
   function _setRect(el, x, y, w, h) {

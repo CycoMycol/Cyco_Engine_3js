@@ -1,4 +1,4 @@
-/**
+﻿/**
  * BasePanel.js — base class for all dockview panels.
  * Subclasses implement _buildContent() to return their content element.
  * Provides Float (⧉) and Size Toggle buttons in the tab actions area.
@@ -548,7 +548,7 @@ export class BasePanel {
     const dockApi = LayoutManager.api;
     const panelId = this._panelApi.id;
     const barH    = this._barHeight;
-    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel'];
+    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
 
     try {
       const json = dockApi.toJSON();
@@ -674,7 +674,7 @@ export class BasePanel {
 
       // Stash orientation hints and preserve other bars already docked vertically.
       LayoutManager._pendingOrient = LayoutManager._pendingOrient ?? {};
-      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group' };
+      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;
@@ -716,7 +716,7 @@ export class BasePanel {
     const dockApi = LayoutManager.api;
     const panelId = this._panelApi.id;
     const barH    = this._barHeight;
-    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel'];
+    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
 
     try {
       const json = dockApi.toJSON();
@@ -835,7 +835,7 @@ export class BasePanel {
 
       // Preserve orientation of OTHER bars that are already docked vertically.
       // DOM class detection is the most reliable way to know current orientation.
-      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group' };
+      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;

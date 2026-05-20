@@ -1,7 +1,6 @@
 ﻿/** CenterPanel.js — Viewport panel with left tool sidebar and top bar */
 
 import { BasePanel } from './BasePanel.js';
-import { makeFloatable } from '../ui/FloatBar.js';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -40,15 +39,9 @@ export class CenterPanel extends BasePanel {
     this._physicsEdit = false;
     this._activeScene = 'Scene';
     this._scenes      = ['Scene'];
-    this._activeTool  = 'translate'; // translate | rotate | scale | rect
-    this._worldSpace  = true;        // true = World, false = Local
-    this._snapEnabled = false;
     this._sceneHandle  = null;
     this._renderHandle = null;
     this._cameraHandle = null;
-    this._toolBtns     = {};
-    this._worldBtn     = null;
-    this._snapBtn      = null;
     this._vpSizeBtn    = null;
     this._vpFloatBtn   = null;  // float button in the topbar
     this._tabSnapBtn   = null;  // snap-back button injected into the dockview tab
@@ -65,8 +58,6 @@ export class CenterPanel extends BasePanel {
     // Body: left toolbar + viewport canvas
     const body = document.createElement('div');
     body.className = 'ce-viewport-body';
-    body.appendChild(this._buildLeftToolbar());
-
     const vp = document.createElement('div');
     vp.className = 'ce-viewport-canvas';
     const lbl = document.createElement('div');
@@ -306,78 +297,6 @@ export class CenterPanel extends BasePanel {
       }));
     });
     return items;
-  }
-
-  // ── Left toolbar ──────────────────────────────────────────────────────────────
-
-  _buildLeftToolbar() {
-    const bar = document.createElement('div');
-    bar.className = 'ce-vp-lefttool';
-
-    // Float button at top
-    bar.appendChild(makeFloatable(bar, {
-      dragFromBar:      true,
-      edgeDock:         true,
-      edgeDockSelector: '.ce-viewport-body',
-      edgeDockViewport: '.ce-viewport-root',
-      edgeDockPx:       64,
-    }));
-
-    bar.appendChild(_toolSep());
-
-    // Transform tools
-    const tools = [
-      { id: 'translate', tip: 'Translate  W' },
-      { id: 'rotate',    tip: 'Rotate  E'    },
-      { id: 'scale',     tip: 'Scale  R'     },
-      { id: 'rect',      tip: 'Rect Transform  T' },
-    ];
-    tools.forEach(t => {
-      const btn = _toolBtn(_toolIcon(t.id), t.tip, () => {
-        this._activeTool = t.id;
-        this._refreshToolBtns();
-      });
-      btn.dataset.tool = t.id;
-      this._toolBtns[t.id] = btn;
-      bar.appendChild(btn);
-    });
-
-    bar.appendChild(_toolSep());
-
-    // World / Local toggle
-    this._worldBtn = _toolBtn(_toolIcon('world'), 'World Space', () => {
-      this._worldSpace = !this._worldSpace;
-      this._worldBtn.title     = this._worldSpace ? 'World Space' : 'Local Space';
-      this._worldBtn.innerHTML = _toolIcon(this._worldSpace ? 'world' : 'local');
-      this._worldBtn.classList.toggle('active', !this._worldSpace);
-    });
-    bar.appendChild(this._worldBtn);
-
-    // Snap toggle
-    this._snapBtn = _toolBtn(_toolIcon('snap'), 'Toggle Grid Snapping', () => {
-      this._snapEnabled = !this._snapEnabled;
-      this._snapBtn.classList.toggle('active', this._snapEnabled);
-    });
-    bar.appendChild(this._snapBtn);
-
-    bar.appendChild(_toolSep());
-
-    // Focus
-    bar.appendChild(_toolBtn(_toolIcon('focus'), 'Focus Selection  F', () => {}));
-
-    // Spacer at bottom -- open drag area for drag-to-float
-    const spacer = document.createElement('div');
-    spacer.style.flex = '1';
-    bar.appendChild(spacer);
-
-    this._refreshToolBtns();
-    return bar;
-  }
-
-  _refreshToolBtns() {
-    Object.entries(this._toolBtns).forEach(([id, btn]) => {
-      btn.classList.toggle('active', id === this._activeTool);
-    });
   }
 }
 

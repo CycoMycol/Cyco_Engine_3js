@@ -76,7 +76,7 @@ const LayoutManager = {
     if (!raw) return;
     // If the saved layout pre-dates dockable menu/toolbar panels, discard it so
     // the fresh default layout (with those panels) is used instead.
-    if (!raw.includes('"menu-bar-panel"') || !raw.includes('"toolbar-panel"')) {
+    if (!raw.includes('"menu-bar-panel"') || !raw.includes('"toolbar-panel"') || !raw.includes('"left-toolbar"')) {
       console.info('[Cyco] Saved layout is from an older version; resetting to default layout.');
       localStorage.removeItem(AUTO_SAVE_KEY);
       return;
@@ -88,7 +88,8 @@ const LayoutManager = {
       const layoutStr = JSON.stringify((data.layout ?? data)?.grid ?? {});
       const barsPresent =
         layoutStr.includes('"menu-bar-panel"') &&
-        layoutStr.includes('"toolbar-panel"');
+        layoutStr.includes('"toolbar-panel"') &&
+        layoutStr.includes('"left-toolbar"');
       if (!barsPresent) {
         console.info('[Cyco] Saved layout is missing bar panels; resetting.');
         localStorage.removeItem(AUTO_SAVE_KEY);

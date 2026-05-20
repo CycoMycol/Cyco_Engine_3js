@@ -1,4 +1,4 @@
-/* ─── Vendored Fonts ──────────────────────────────────────────────────────── */
+﻿/* ─── Vendored Fonts ──────────────────────────────────────────────────────── */
 @font-face {
   font-family: 'Inter';
   src: url('../../libs/fonts/inter-variable.woff2') format('woff2-variations');
@@ -695,6 +695,44 @@ html, body {
   display: none !important;
 }
 
+/* ── Left Toolbar panel (LeftToolbarPanel) ─────────────────────────────────── */
+/* Default state: vertical bar (docked left/right) — fills full height, 36 px wide */
+.ce-left-toolbar-group > .dv-content-container {
+  overflow: hidden;
+}
+.ce-left-toolbar-group .ce-panel-content {
+  height: 100%;
+  background: transparent;
+}
+/* Horizontal state: docked top/bottom (no ce-bar-vertical class) */
+.ce-left-toolbar-group:not(.ce-bar-vertical) > .dv-content-container {
+  flex-grow: 0 !important;
+}
+.ce-left-toolbar-group:not(.ce-bar-vertical) .ce-panel-content {
+  height: auto;
+}
+.ce-left-toolbar-group:not(.ce-bar-vertical) #left-toolbar {
+  flex-direction: row !important;
+  width: 100% !important;
+  height: 36px !important;
+  padding: 0 6px !important;
+  border-right: none !important;
+  border-bottom: 1px solid var(--ce-border);
+  align-self: auto !important;
+}
+.ce-left-toolbar-group:not(.ce-bar-vertical) .ce-vp-tool-sep {
+  width: 1px !important;
+  height: 20px !important;
+  margin: 0 2px !important;
+}
+/* Actions area uses surface colour for left toolbar */
+.ce-left-toolbar-group .ce-bar-panel-actions {
+  background: var(--ce-bg-surface);
+}
+/* Hide dockview close button in left-toolbar tab */
+.ce-left-toolbar-group .dv-default-tab .dv-tab-action {
+  display: none !important;
+}
 /* ─── Panel Content Placeholders ─────────────────────────────────────────── */
 .ce-panel-content {
   display: flex;
