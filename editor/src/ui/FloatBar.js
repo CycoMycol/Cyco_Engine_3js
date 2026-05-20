@@ -1,50 +1,102 @@
-/**
- * FloatBar.js — adds a float/dock toggle button to any toolbar or menu bar.
+﻿/**
+ * FloatBar.js â€” float/dock toggle for toolbars and menu bars.
  *
- * Usage: append the returned button wherever you want it in the bar.
+ * Basic usage (menu bar, top toolbar):
  *   const floatBtn = makeFloatable(barElement);
- *   rightSection.appendChild(floatBtn);
  *
- * When floated the bar is lifted into a draggable floating window.
- * A comment-node placeholder keeps its original DOM slot so it snaps
- * back exactly where it came from.
+ * With edge-docking (viewport left toolbar):
+ *   const floatBtn = makeFloatable(barElement, {
+ *     dragFromBar:      true,
+ *     edgeDock:         true,
+ *     edgeDockSelector: '.ce-viewport-body',
+ *     edgeDockViewport: '.ce-viewport-root',
+ *     edgeDockPx:       64,
+ *   });
  */
 
-// "Pop out" — bar is docked, click to float
-export const FLOAT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="7" height="7" rx="1"/><polyline points="4,1 10,1 10,7"/></svg>`;
+// "Pop out" â€” bar is docked, click to float
+export const FLOAT_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="currentColor"><circle cx="3.5" cy="2.5" r="1.2"/><circle cx="7.5" cy="2.5" r="1.2"/><circle cx="3.5" cy="5.5" r="1.2"/><circle cx="7.5" cy="5.5" r="1.2"/><circle cx="3.5" cy="8.5" r="1.2"/><circle cx="7.5" cy="8.5" r="1.2"/></svg>`;
 
-// "Push in" — bar is floating, click to snap back
+// "Push in" â€” bar is floating, click to snap back
 export const SNAPBACK_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="1" width="7" height="7" rx="1"/><polyline points="7,10 1,10 1,4"/></svg>`;
 
 /**
- * @param {HTMLElement} barEl — the bar element to make floatable.
- * @returns {HTMLButtonElement} — toggle button; append it anywhere inside barEl.
+ * @param {HTMLElement} barEl
+ * @param {Object}  [options]
+ * @param {boolean} [options.dragFromBar=false]      drag to float from any non-button area
+ * @param {boolean} [options.edgeDock=false]         dock to viewport edges on release
+ * @param {string}  [options.edgeDockSelector]       CSS selector for viewport reference element
+ * @param {string}  [options.edgeDockViewport]       CSS selector for viewport root element
+ * @param {number}  [options.edgeDockPx=64]          px from viewport edge â†’ viewport dock zone
+ * @param {number}  [options.screenEdgePx=32]        px from screen edge â†’ screen dock zone
+ * @returns {HTMLButtonElement}
  */
-export function makeFloatable(barEl) {
+export function makeFloatable(barEl, options = {}) {
+  const {
+    dragFromBar      = false,
+    edgeDock         = false,
+    edgeDockSelector = '.ce-viewport-body',
+    edgeDockViewport = '.ce-viewport-root',
+    edgeDockPx       = 64,
+    screenEdgePx     = 32,
+  } = options;
+
   let floating    = false;
   let floatWin    = null;
   let placeholder = null;
+  let prevOrient  = [];
 
   const btn = document.createElement('button');
   btn.className = 'ce-bar-float-btn';
   _updateBtn();
 
+  let _suppressNextClick = false;
+
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
+    if (_suppressNextClick) { _suppressNextClick = false; return; }
     floating ? _dock() : _float();
   });
 
-  // ── float ────────────────────────────────────────────────────────────────
+  // Allow drag-to-float directly from the float button (6 px threshold).
+  // _suppressNextClick prevents the click event from re-docking after a drag.
+  btn.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || floating) return;
+    const sx = e.clientX, sy = e.clientY;
+    const onBtnDragMove = (mv) => {
+      if (Math.hypot(mv.clientX - sx, mv.clientY - sy) < 6) return;
+      document.removeEventListener('mousemove', onBtnDragMove);
+      document.removeEventListener('mouseup',   onBtnDragCancel);
+      _suppressNextClick = true;
+      _float(sx, sy);
+    };
+    const onBtnDragCancel = () => {
+      document.removeEventListener('mousemove', onBtnDragMove);
+      document.removeEventListener('mouseup',   onBtnDragCancel);
+    };
+    document.addEventListener('mousemove', onBtnDragMove);
+    document.addEventListener('mouseup',   onBtnDragCancel);
+  });
 
-  function _float() {
-    // Drop a comment node to remember the original position.
+  // â”€â”€ float â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  function _float(startX, startY) {
+    if (floating) return;
+
+    // Capture rect FIRST -- before any class or DOM change that triggers reflow.
+    // Removing orientation classes (is-top / is-bottom) first causes the browser
+    // to reflow horizontal -> vertical before we measure, so startX - rect.left
+    // becomes wildly wrong for horizontal bars.
+    const rect = barEl.getBoundingClientRect();
+
+    if (edgeDock) {
+      prevOrient = ['is-right', 'is-top', 'is-bottom'].filter(c => barEl.classList.contains(c));
+      barEl.classList.remove('is-right', 'is-top', 'is-bottom');
+    }
+
     placeholder = document.createComment('ce-bar-float-placeholder');
     barEl.parentNode.insertBefore(placeholder, barEl);
 
-    // Measure before detaching so we can open near the original location.
-    const rect = barEl.getBoundingClientRect();
-
-    // Build the floating window.
     floatWin = document.createElement('div');
     floatWin.className = 'ce-bar-float-window';
     floatWin.style.left = rect.left + 'px';
@@ -52,7 +104,12 @@ export function makeFloatable(barEl) {
 
     const grip = document.createElement('div');
     grip.className = 'ce-bar-float-grip';
-    _makeDraggable(floatWin, grip);
+    grip.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const wr = floatWin.getBoundingClientRect();
+      _beginDrag(e.clientX - wr.left, e.clientY - wr.top);
+    });
 
     floatWin.appendChild(grip);
     floatWin.appendChild(barEl);
@@ -60,53 +117,167 @@ export function makeFloatable(barEl) {
 
     floating = true;
     _updateBtn();
+
+    // If initiated by a bar mousedown, begin drag immediately.
+    // Clamp ox/oy to the actual floatWin size -- prevents cursor mis-sync
+    // when the bar changes orientation (e.g. horizontal is-top -> vertical).
+    if (startX !== undefined && startY !== undefined) {
+      const fw = floatWin.offsetWidth;
+      const fh = floatWin.offsetHeight;
+      const ox = Math.max(2, Math.min(startX - rect.left, fw - 2));
+      const oy = Math.max(2, Math.min(startY - rect.top,  fh - 2));
+      floatWin.style.left = (startX - ox) + 'px';
+      floatWin.style.top  = (startY - oy) + 'px';
+      _beginDrag(ox, oy);
+    }
   }
 
-  // ── dock back ─────────────────────────────────────────────────────────────
+  // â”€â”€ dock back to placeholder â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   function _dock() {
-    if (!floatWin || !placeholder) return;
+    if (!floatWin || !placeholder || !placeholder.parentNode) return;
 
-    // Replace the comment placeholder with the bar element.
+    if (edgeDock) {
+      prevOrient.forEach(c => barEl.classList.add(c));
+      prevOrient = [];
+    }
+
     placeholder.parentNode.replaceChild(barEl, placeholder);
     placeholder = null;
-
     floatWin.remove();
     floatWin = null;
-
     floating = false;
     _updateBtn();
   }
 
-  // ── drag ─────────────────────────────────────────────────────────────────
+  // â”€â”€ dock into a viewport edge â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-  function _makeDraggable(win, handle) {
-    handle.addEventListener('mousedown', (e) => {
-      e.preventDefault();
-      // Use getBoundingClientRect() so the offset is always in viewport
-      // coordinates — offsetLeft/offsetTop are unreliable for position:fixed
-      // elements and cause the window to jump away from the cursor.
-      const rect = win.getBoundingClientRect();
-      const ox = e.clientX - rect.left;
-      const oy = e.clientY - rect.top;
+  function _dockTo(side) {
+    if (!edgeDock) return;
+    const body = document.querySelector(edgeDockSelector);
+    const root = document.querySelector(edgeDockViewport);
+    if (!body || !root) return;
 
-      const onMove = (mv) => {
-        // Clamp to viewport so the grip never goes fully off-screen.
-        const maxX = window.innerWidth  - win.offsetWidth;
-        const maxY = window.innerHeight - win.offsetHeight;
-        win.style.left = Math.max(0, Math.min(mv.clientX - ox, maxX)) + 'px';
-        win.style.top  = Math.max(0, Math.min(mv.clientY - oy, maxY)) + 'px';
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup',   onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup',   onUp);
-    });
+    if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+    placeholder = null;
+    prevOrient  = [];
+    if (floatWin) floatWin.remove();
+    floatWin = null;
+    floating = false;
+
+    barEl.classList.remove('is-right', 'is-top', 'is-bottom');
+    _updateBtn();
+
+    switch (side) {
+      case 'left':
+        body.insertBefore(barEl, body.firstChild);
+        break;
+      case 'right':
+        barEl.classList.add('is-right');
+        body.appendChild(barEl);
+        break;
+      case 'top': {
+        barEl.classList.add('is-top');
+        const topBar = root.querySelector('.ce-vp-topbar');
+        root.insertBefore(barEl, topBar ? topBar.nextSibling : root.firstChild);
+        break;
+      }
+      case 'bottom':
+        barEl.classList.add('is-bottom');
+        root.appendChild(barEl);
+        break;
+    }
   }
 
-  // ── helpers ───────────────────────────────────────────────────────────────
+  // â”€â”€ drag â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  function _beginDrag(ox, oy) {
+    // Inline styles guarantee orange color regardless of CSS cascade / load order.
+    let indicator = null;
+    if (edgeDock) {
+      indicator = document.createElement('div');
+      indicator.style.cssText = [
+        'position:fixed',
+        'z-index:8999',
+        'pointer-events:none',
+        'display:none',
+        'background:rgba(224,114,40,0.15)',
+        'border:2px solid rgba(224,114,40,0.75)',
+        'border-radius:4px',
+        'box-sizing:border-box',
+        'transition:opacity 60ms',
+      ].join(';');
+      document.body.appendChild(indicator);
+    }
+
+    const onMove = (mv) => {
+      if (!floatWin) return;
+      // Unclamped: allow bar to reach any corner of the screen.
+      floatWin.style.left = (mv.clientX - ox) + 'px';
+      floatWin.style.top  = (mv.clientY - oy) + 'px';
+      if (indicator) _updateIndicator(indicator, mv.clientX, mv.clientY);
+    };
+
+    const onUp = (upEv) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+      if (indicator) { indicator.remove(); indicator = null; }
+      if (edgeDock)  _checkDockDrop(upEv.clientX, upEv.clientY);
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+  }
+
+  // Dock to viewport edges on drag release.
+  function _checkDockDrop(mx, my) {
+    const body = document.querySelector(edgeDockSelector);
+    if (!body) return;
+    const r = body.getBoundingClientRect();
+    if      (mx < r.left   + edgeDockPx) _dockTo('left');
+    else if (mx > r.right  - edgeDockPx) _dockTo('right');
+    else if (my < r.top    + edgeDockPx) _dockTo('top');
+    else if (my > r.bottom - edgeDockPx) _dockTo('bottom');
+    // else: stays floating wherever released
+  }
+
+  // Show which zone the cursor is in â€” screen edge takes priority, then viewport edge.
+  function _updateIndicator(el, mx, my) {
+    const PAD = 4;
+    const TW  = 36;  // toolbar width  (left/right)
+    const TH  = 36;  // toolbar height (top/bottom)
+
+    // Viewport-edge zone indicator
+    const body = document.querySelector(edgeDockSelector);
+    if (!body) { el.style.display = 'none'; return; }
+    const r = body.getBoundingClientRect();
+    const Z = edgeDockPx;
+
+    if (mx < r.left + Z) {
+      _setRect(el, r.left + PAD, r.top + PAD, TW, r.height - PAD * 2); return;
+    }
+    if (mx > r.right - Z) {
+      _setRect(el, r.right - TW - PAD, r.top + PAD, TW, r.height - PAD * 2); return;
+    }
+    if (my < r.top + Z) {
+      _setRect(el, r.left + PAD, r.top + PAD, r.width - PAD * 2, TH); return;
+    }
+    if (my > r.bottom - Z) {
+      _setRect(el, r.left + PAD, r.bottom - TH - PAD, r.width - PAD * 2, TH); return;
+    }
+
+    el.style.display = 'none';
+  }
+
+  function _setRect(el, x, y, w, h) {
+    el.style.display = 'block';
+    el.style.left    = x + 'px';
+    el.style.top     = y + 'px';
+    el.style.width   = w + 'px';
+    el.style.height  = h + 'px';
+  }
+
+  // â”€â”€ helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   function _updateBtn() {
     if (floating) {
@@ -120,5 +291,32 @@ export function makeFloatable(barEl) {
     }
   }
 
+  // â”€â”€ drag from bar open areas (optional) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  if (dragFromBar) {
+    barEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || floating) return;
+      if (e.target.closest('button')) return;
+      e.preventDefault();
+      // Delay float until the mouse actually moves > 6 px.
+      // Prevents the toolbar from floating on an accidental click,
+      // and avoids an instant re-dock-to-same-side on quick release.
+      const sx = e.clientX, sy = e.clientY;
+      const onDragMove = (mv) => {
+        if (Math.hypot(mv.clientX - sx, mv.clientY - sy) < 6) return;
+        document.removeEventListener('mousemove', onDragMove);
+        document.removeEventListener('mouseup',   onDragCancel);
+        _float(sx, sy);
+      };
+      const onDragCancel = () => {
+        document.removeEventListener('mousemove', onDragMove);
+        document.removeEventListener('mouseup',   onDragCancel);
+      };
+      document.addEventListener('mousemove', onDragMove);
+      document.addEventListener('mouseup',   onDragCancel);
+    });
+  }
+
   return btn;
 }
+

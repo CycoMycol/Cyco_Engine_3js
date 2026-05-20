@@ -320,40 +320,63 @@ html, body {
   border-radius: 0 0 5px 5px;
 }
 
-/* Left toolbar inside float window: remove the border-right, fill rounded corners */
+/* Left toolbar inside float window: no side borders, rounded bottom */
 .ce-bar-float-window .ce-vp-lefttool {
   border-right: none;
+  border-left:  none;
   border-radius: 0 0 5px 5px;
 }
 
-/* Drag grip at the very top of the left toolbar (shows FLOAT_SVG / SNAPBACK_SVG via innerHTML) */
-.ce-vp-lefttool-grip {
-  width: 28px;
-  height: 20px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: grab;
-  color: var(--ce-text-muted);
-  opacity: 0.5;
-  transition: opacity 0.15s;
-  user-select: none;
-}
-.ce-vp-lefttool-grip:hover  { opacity: 1; }
-.ce-vp-lefttool-grip:active { cursor: grabbing; }
-/* When floating the grip shows SNAPBACK_SVG and acts as a click-to-dock button */
-.ce-vp-lefttool-grip.is-floating {
-  cursor: pointer;
-  color: var(--ce-accent-orange);
-  opacity: 0.75;
-}
-.ce-vp-lefttool-grip.is-floating:hover  { opacity: 1; }
-.ce-vp-lefttool-grip.is-floating:active { cursor: pointer; }
-
 /* Float window for the left toolbar — keep it narrow */
-.ce-vp-lt-float-win {
-  width: 36px;
+.ce-vp-lt-float-win { width: 36px; }
+
+/* Dock zone indicator — shown while dragging near a viewport edge */
+.ce-dock-indicator {
+  position: fixed;
+  z-index: 8999;
+  background: rgba(224, 114, 40, 0.18);
+  border: 2px solid var(--ce-accent-orange);
+  border-radius: 4px;
+  pointer-events: none;
+  display: none;
+}
+
+/* Grab cursor on the bar background (open/empty areas = draggable like bottom toolbar) */
+.ce-vp-lefttool { cursor: grab; }
+.ce-vp-lefttool:active { cursor: grabbing; }
+/* Inside float window the float-grip strip handles dragging */
+.ce-bar-float-window .ce-vp-lefttool,
+.ce-bar-float-window .ce-vp-lefttool:active { cursor: default; }
+
+/* ── Dock orientations ───────────────────────────────────────────────────── */
+
+/* Right-docked: flip border to left side */
+.ce-vp-lefttool.is-right {
+  border-right: none;
+  border-left: 1px solid var(--ce-border);
+}
+
+/* Top / Bottom docked: become a horizontal bar */
+.ce-vp-lefttool.is-top,
+.ce-vp-lefttool.is-bottom {
+  flex-direction: row;
+  width: auto;
+  min-width: 0;
+  height: 36px;
+  min-height: 36px;
+  border-right: none;
+  padding: 0 6px;
+  align-self: auto;
+}
+.ce-vp-lefttool.is-top    { border-bottom: 1px solid var(--ce-border); }
+.ce-vp-lefttool.is-bottom { border-top:    1px solid var(--ce-border); }
+
+/* Separators rotate in horizontal mode */
+.ce-vp-lefttool.is-top .ce-vp-tool-sep,
+.ce-vp-lefttool.is-bottom .ce-vp-tool-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
 }
 
 /* Float toggle button on menu bar / toolbar */
@@ -2031,6 +2054,17 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   background: var(--ce-border);
   margin: 3px 0;
   flex-shrink: 0;
+}
+/* Float button inside the left toolbar — match tool-button size/style */
+.ce-vp-lefttool .ce-bar-float-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+}
+.ce-vp-lefttool.is-top .ce-bar-float-btn,
+.ce-vp-lefttool.is-bottom .ce-bar-float-btn {
+  width: 28px;
+  height: 28px;
 }
 
 /* ── Topbar panel action buttons (float / size / close) ── */

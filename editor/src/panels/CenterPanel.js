@@ -1,7 +1,7 @@
-/** CenterPanel.js — Viewport panel with left tool sidebar and top bar */
+﻿/** CenterPanel.js — Viewport panel with left tool sidebar and top bar */
 
 import { BasePanel } from './BasePanel.js';
-import { FLOAT_SVG, SNAPBACK_SVG } from '../ui/FloatBar.js';
+import { makeFloatable } from '../ui/FloatBar.js';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -314,100 +314,18 @@ export class CenterPanel extends BasePanel {
     const bar = document.createElement('div');
     bar.className = 'ce-vp-lefttool';
 
-    // ── Closure-based float / drag state ─────────────────────────────────────
-    let _floating   = false;
-    let _floatWin   = null;
-    let _holder     = null;
-    const SNAP_PX   = 18; // px from edge to trigger snap-to-edge
-
-    const _beginDrag = (win, startX, startY) => {
-      const rect = win.getBoundingClientRect();
-      const ox = startX - rect.left;
-      const oy = startY - rect.top;
-      const onMove = (mv) => {
-        const maxX = window.innerWidth  - win.offsetWidth;
-        const maxY = window.innerHeight - win.offsetHeight;
-        let x = Math.max(0, Math.min(mv.clientX - ox, maxX));
-        let y = Math.max(0, Math.min(mv.clientY - oy, maxY));
-        if (x < SNAP_PX)        x = 0;
-        else if (x > maxX - SNAP_PX) x = maxX;
-        if (y < SNAP_PX)        y = 0;
-        else if (y > maxY - SNAP_PX) y = maxY;
-        win.style.left = x + 'px';
-        win.style.top  = y + 'px';
-      };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup',   onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup',   onUp);
-    };
-
-    const _float = (mouseX, mouseY) => {
-      if (_floating) return;
-      _holder = document.createComment('ce-vp-lt-placeholder');
-      bar.parentNode.insertBefore(_holder, bar);
-      const rect = bar.getBoundingClientRect();
-
-      _floatWin = document.createElement('div');
-      _floatWin.className = 'ce-bar-float-window ce-vp-lt-float-win';
-      _floatWin.style.left = rect.left + 'px';
-      _floatWin.style.top  = rect.top  + 'px';
-
-      const winGrip = document.createElement('div');
-      winGrip.className = 'ce-bar-float-grip';
-      winGrip.addEventListener('mousedown', (e) => {
-        if (e.button !== 0) return;
-        e.preventDefault();
-        _beginDrag(_floatWin, e.clientX, e.clientY);
-      });
-
-      _floatWin.appendChild(winGrip);
-      _floatWin.appendChild(bar);
-      document.body.appendChild(_floatWin);
-      _floating = true;
-      grip.innerHTML = SNAPBACK_SVG;
-      grip.title = 'Snap back to viewport';
-      grip.classList.add('is-floating');
-
-      if (mouseX !== undefined) {
-        requestAnimationFrame(() => _beginDrag(_floatWin, mouseX, mouseY));
-      }
-    };
-
-    const _dock = () => {
-      if (!_floating || !_holder) return;
-      _holder.parentNode.replaceChild(bar, _holder);
-      _holder = null;
-      _floatWin.remove();
-      _floatWin = null;
-      _floating = false;
-      grip.innerHTML = FLOAT_SVG;
-      grip.title = 'Drag to float';
-      grip.classList.remove('is-floating');
-    };
-
-    // ── Grip — drag to float (docked) / click to snap back (floating) ────────
-    const grip = document.createElement('div');
-    grip.className = 'ce-vp-lefttool-grip';
-    grip.innerHTML = FLOAT_SVG;
-    grip.title = 'Drag to float';
-    grip.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      if (!_floating) _float(e.clientX, e.clientY);
-    });
-    grip.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (_floating) _dock();
-    });
-    bar.appendChild(grip);
+    // Float button at top
+    bar.appendChild(makeFloatable(bar, {
+      dragFromBar:      true,
+      edgeDock:         true,
+      edgeDockSelector: '.ce-viewport-body',
+      edgeDockViewport: '.ce-viewport-root',
+      edgeDockPx:       64,
+    }));
 
     bar.appendChild(_toolSep());
 
-    // ── Transform tools ───────────────────────────────────────────────────────
+    // Transform tools
     const tools = [
       { id: 'translate', tip: 'Translate  W' },
       { id: 'rotate',    tip: 'Rotate  E'    },
@@ -429,7 +347,7 @@ export class CenterPanel extends BasePanel {
     // World / Local toggle
     this._worldBtn = _toolBtn(_toolIcon('world'), 'World Space', () => {
       this._worldSpace = !this._worldSpace;
-      this._worldBtn.title  = this._worldSpace ? 'World Space' : 'Local Space';
+      this._worldBtn.title     = this._worldSpace ? 'World Space' : 'Local Space';
       this._worldBtn.innerHTML = _toolIcon(this._worldSpace ? 'world' : 'local');
       this._worldBtn.classList.toggle('active', !this._worldSpace);
     });
@@ -444,8 +362,13 @@ export class CenterPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
-    // Focus (fire-and-forget)
+    // Focus
     bar.appendChild(_toolBtn(_toolIcon('focus'), 'Focus Selection  F', () => {}));
+
+    // Spacer at bottom -- open drag area for drag-to-float
+    const spacer = document.createElement('div');
+    spacer.style.flex = '1';
+    bar.appendChild(spacer);
 
     this._refreshToolBtns();
     return bar;
