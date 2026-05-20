@@ -120,7 +120,13 @@ export class CenterPanel extends BasePanel {
     floatBtn.className = 'ce-vp-action-btn';
     this._vpFloatBtn = floatBtn;
     this._updateFloatBtn(floatBtn);
-    floatBtn.addEventListener('click', () => this._toggleFloat(floatBtn));
+    floatBtn.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      this._startPanelDrag(e, floatBtn);
+    });
+    floatBtn.addEventListener('click', (e) => e.stopPropagation());
     bar.appendChild(floatBtn);
 
     // Size toggle
@@ -161,7 +167,15 @@ export class CenterPanel extends BasePanel {
     return null;
   }
 
-  // Override: when floating, move the snap-back button to the dockview tab strip
+  // Override: also call _attachTabSnapBackBtn when floating via drag (_floatAtPosition)
+  _floatAtPosition(clientX, clientY) {
+    super._floatAtPosition(clientX, clientY);
+    if (this._floating) {
+      requestAnimationFrame(() => this._attachTabSnapBackBtn(this._vpFloatBtn));
+    }
+  }
+
+  // Override: when floating via toggle button, move the snap-back button to the dockview tab strip
   _toggleFloat(btn) {
     if (!this._floating) {
       // Going to float — call super first

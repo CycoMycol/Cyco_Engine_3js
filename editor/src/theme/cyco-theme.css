@@ -696,6 +696,11 @@ html, body {
 }
 
 /* ── Left Toolbar panel (LeftToolbarPanel) ─────────────────────────────────── */
+/* Group is always transparent — bar element provides the background */
+.ce-left-toolbar-group.dv-groupview {
+  background: transparent !important;
+  --dv-group-view-background-color: transparent;
+}
 /* Default state: vertical bar (docked left/right) — fills full height, 36 px wide */
 .ce-left-toolbar-group > .dv-content-container {
   overflow: hidden;
@@ -719,15 +724,19 @@ html, body {
   border-right: none !important;
   border-bottom: 1px solid var(--ce-border);
   align-self: auto !important;
+  background: var(--ce-bg-toolbar) !important;
 }
 .ce-left-toolbar-group:not(.ce-bar-vertical) .ce-vp-tool-sep {
   width: 1px !important;
   height: 20px !important;
   margin: 0 2px !important;
 }
-/* Actions area uses surface colour for left toolbar */
+/* Actions area: surface colour in vertical, toolbar colour in horizontal */
 .ce-left-toolbar-group .ce-bar-panel-actions {
   background: var(--ce-bg-surface);
+}
+.ce-left-toolbar-group:not(.ce-bar-vertical) .ce-bar-panel-actions {
+  background: var(--ce-bg-toolbar);
 }
 /* Hide dockview close button in left-toolbar tab */
 .ce-left-toolbar-group .dv-default-tab .dv-tab-action {

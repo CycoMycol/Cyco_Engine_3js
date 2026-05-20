@@ -68,14 +68,17 @@ export class BasePanel {
       const actionsWrap = document.createElement('div');
       actionsWrap.style.cssText = 'display:flex;align-items:center;gap:2px;margin-left:4px;';
 
-      // Float button
+      // Float button — mousedown enables drag-to-dock; no-drag click toggles float
       const floatBtn = document.createElement('button');
       floatBtn.className = 'ce-panel-action';
       this._updateFloatBtn(floatBtn);
-      floatBtn.addEventListener('click', (e) => {
+      floatBtn.addEventListener('mousedown', (e) => {
+        if (e.button !== 0) return;
         e.stopPropagation();
-        this._toggleFloat(floatBtn);
+        e.preventDefault();
+        this._startPanelDrag(e, floatBtn);
       });
+      floatBtn.addEventListener('click', (e) => e.stopPropagation());
 
       // Size toggle button
       const sizeBtn = document.createElement('button');
@@ -185,6 +188,28 @@ export class BasePanel {
     });
   }
 
+  /** Dump the current positions of all bar + content panels to the console. */
+  _logLayout(label) {
+    const dockApi = LayoutManager.api;
+    if (!dockApi) return;
+    const groups = dockApi.groups ?? [];
+    const snap = groups.map(g => {
+      const el = g.element;
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      const floating = el.classList.contains('dv-groupview-floating');
+      const views = (g.panels ?? []).map(p => p.id);
+      return `  ${views.join('/')} | y=${Math.round(r.y)} x=${Math.round(r.x)} w=${Math.round(r.width)} h=${Math.round(r.height)}${floating ? ' [FLOATING]' : ''}`;
+    }).filter(Boolean);
+    console.log(`[DBG] ─── ${label} ───`);
+    snap.forEach(s => console.log(s));
+    // Also log current JSON floating list
+    try {
+      const fg = (dockApi.toJSON()?.floatingGroups ?? []).map(fg => fg.data?.views);
+      if (fg.length) console.log(`  floatingGroups in JSON: ${JSON.stringify(fg)}`);
+    } catch(_) {}
+  }
+
   /**
    * Core drag logic shared by handle button and bar background mousedown.
    * handleEl is used for float/snap-back on no-drag clicks.
@@ -193,6 +218,9 @@ export class BasePanel {
     const startX = e.clientX;
     const startY = e.clientY;
     let didDrag = false;
+    const _selfId = this._panelApi?.id;
+    console.log(`[DBG] mousedown on "${_selfId}" at (${e.clientX},${e.clientY}) — floating=${this._floating}`);
+    this._logLayout('layout at drag start');
 
     if (this._floating) {
       // ── Floating: drag to reposition OR drop onto a dock zone ────────────
@@ -226,9 +254,13 @@ export class BasePanel {
         document.removeEventListener('mouseup', onUp);
         this._stopDropTracking();
         if (!didDrag && handleEl) {
+          console.log(`[DBG] "${_selfId}" no-drag → toggleFloat (snap back)`);
           this._toggleFloat(handleEl);
         } else if (activeZone) {
+          console.log(`[DBG] "${_selfId}" dropped on zone "${activeZone.id}"`);
           this._dockAtZone(activeZone);
+        } else {
+          console.log(`[DBG] "${_selfId}" mouseup — no zone hit, stays floating`);
         }
       };
       document.addEventListener('mousemove', onMove);
@@ -241,12 +273,15 @@ export class BasePanel {
           didDrag = true;
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
+          console.log(`[DBG] "${_selfId}" drag threshold hit → floating now`);
           this._floatAtPosition(ev.clientX, ev.clientY);
           if (this._floating) {
             const floatContainer = this._findFloatingContainer();
             this._startDropTracking();
+            console.log(`[DBG] "${_selfId}" drop zones: ${(this._dropZoneData ?? []).map(z => z.id).join(', ')}`);
             let lastX = ev.clientX, lastY = ev.clientY;
             let activeZone = null;
+            let _lastZoneId = null;
             let floatPosInit = false;
 
             const onMoveFloat = (ev2) => {
@@ -269,7 +304,12 @@ export class BasePanel {
               document.removeEventListener('mousemove', onMoveFloat);
               document.removeEventListener('mouseup', onUpFloat);
               this._stopDropTracking();
-              if (activeZone) this._dockAtZone(activeZone);
+              if (activeZone) {
+                console.log(`[DBG] "${_selfId}" dropped on zone "${activeZone.id}"`);
+                this._dockAtZone(activeZone);
+              } else {
+                console.log(`[DBG] "${_selfId}" mouseup — no zone hit, stays floating`);
+              }
             };
             document.addEventListener('mousemove', onMoveFloat);
             document.addEventListener('mouseup', onUpFloat);
@@ -296,6 +336,8 @@ export class BasePanel {
     this._floatSnapshot = dockApi.toJSON();
     this._floating = true;
     const { width, height } = this._floatDimensions;
+    const _myId = this._panelApi?.id;
+    console.log(`[DBG] _floatAtPosition "${_myId}" at cursor (${clientX},${clientY})`);
     try {
       const panel = dockApi.getPanel(this._panelApi.id);
       if (!panel) throw new Error('panel not found');
@@ -305,6 +347,7 @@ export class BasePanel {
         width,
         height,
       });
+      console.log(`[DBG] "${_myId}" addFloatingGroup OK — floatingGroups now: ${JSON.stringify((dockApi.toJSON()?.floatingGroups ?? []).map(fg => fg.data?.views))}`);
       setTimeout(() => {
         this._fixFloatingSize();
         this._cleanupEmptyGroups();
@@ -407,7 +450,7 @@ export class BasePanel {
    * Build the list of drop-zone descriptors based on current layout.
    * Each descriptor: { id, direction, panelId?, isVertical, rect }
    */
-  _computeDropZones() {
+  _computeDropZones(includeSwap = false) {
     const zones = [];
     const W = window.innerWidth;
     const H = window.innerHeight;
@@ -423,12 +466,18 @@ export class BasePanel {
     // y=25 hits vp-top rather than p-scene-hierarchy-above.
     const dockApi = LayoutManager.api;
     const PANEL_EDGE = 40;
+    const selfId = this._panelApi?.id;
 
     const addPanelZones = (panelId) => {
+      if (panelId === selfId) return; // don't create zones for the panel being dragged
+      // Horizontal-only bars (menu bar, GM toolbar) must not dock adjacent to specific content
+      // panels — that inserts them inside the content branch instead of the top-level vertical
+      // stack, which breaks the layout. They only use vp-edge zones.
+      if (selfId === 'menu-bar-panel' || selfId === 'toolbar-panel') return;
       const p = dockApi?.getPanel(panelId);
       if (!p) return;
       const gEl = p.api?.group?.element;
-      if (!gEl) return;
+      if (!gEl || gEl.classList.contains('dv-groupview-floating')) return; // skip floating
       const r = gEl.getBoundingClientRect();
       if (r.width < 20 || r.height < 20) return;
       const m = PANEL_EDGE;
@@ -436,9 +485,43 @@ export class BasePanel {
       zones.push({ id: `p-${panelId}-below`, direction: 'bottom', panelId, isVertical: false, rect: { left: r.left,         top: r.bottom - m,   width: r.width,          height: m             } });
       zones.push({ id: `p-${panelId}-left`,  direction: 'left',   panelId, isVertical: true,  rect: { left: r.left,         top: r.top + m,      width: m,                height: r.height-2*m  } });
       zones.push({ id: `p-${panelId}-right`, direction: 'right',  panelId, isVertical: true,  rect: { left: r.right - m,    top: r.top + m,      width: m,                height: r.height-2*m  } });
+      // Center zone: merge into the same tab group (only for non-bar panel drags)
+      if (includeSwap && r.width > 2 * m && r.height > 2 * m) {
+        zones.push({ id: `p-${panelId}-swap`, direction: 'swap', panelId, isVertical: null,
+          rect: { left: r.left + m, top: r.top + m, width: r.width - 2 * m, height: r.height - 2 * m } });
+      }
     };
 
-    // 1. center-viewport edges first
+    // 1a. Inner horizontal zones — just below menu bar / just above game manager toolbar.
+    // These must come FIRST (highest priority) so they beat the p-center-viewport-above/below
+    // panel edge zones which also cover that area. Excluded from the left/right EDGE columns
+    // so they don't interfere with vp-left/vp-right.
+    const menuBarEl = dockApi?.getPanel('menu-bar-panel')?.api?.group?.element;
+    if (menuBarEl && selfId !== 'menu-bar-panel' && !menuBarEl.classList.contains('dv-groupview-floating')) {
+      const mr = menuBarEl.getBoundingClientRect();
+      if (mr.width > 200 && !menuBarEl.classList.contains('ce-bar-vertical')) {
+        zones.push({ id: 'vp-top-inner', direction: 'below-menu', isVertical: false,
+          rect: { left: EDGE, top: mr.bottom, width: W - 2 * EDGE, height: EDGE } });
+      }
+    }
+    const gmToolbarEl = dockApi?.getPanel('toolbar-panel')?.api?.group?.element;
+    if (gmToolbarEl) {
+      const toolbarIsFloating = gmToolbarEl.classList.contains('dv-groupview-floating');
+      if (!toolbarIsFloating) {
+        const tr = gmToolbarEl.getBoundingClientRect();
+        if (tr.width > 200 && !gmToolbarEl.classList.contains('ce-bar-vertical')) {
+          zones.push({ id: 'vp-bottom-inner', direction: 'above-toolbar', isVertical: false,
+            rect: { left: EDGE, top: tr.top - EDGE, width: W - 2 * EDGE, height: EDGE } });
+        }
+      } else if (selfId === 'toolbar-panel') {
+        // Toolbar is the panel being dragged — add a zone just above the bottom edge
+        // so the user can dock it back near its original position.
+        zones.push({ id: 'vp-bottom-inner', direction: 'above-toolbar', isVertical: false,
+          rect: { left: EDGE, top: H - 2 * EDGE, width: W - 2 * EDGE, height: EDGE } });
+      }
+    }
+
+    // 1b. center-viewport edges (among panel-edge zones)
     addPanelZones('center-viewport');
 
     // 2. Viewport edges (full-screen strips)
@@ -456,13 +539,13 @@ export class BasePanel {
   }
 
   /** Create and show a fixed overlay with all drop-zone indicator divs. */
-  _startDropTracking() {
+  _startDropTracking(includeSwap = false) {
     this._stopDropTracking();
     const overlay = document.createElement('div');
     overlay.className = 'ce-drop-overlay';
     overlay.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:9500;';
 
-    this._dropZoneData = this._computeDropZones();
+    this._dropZoneData = this._computeDropZones(includeSwap);
     for (const zone of this._dropZoneData) {
       const el = document.createElement('div');
       el.className = 'ce-drop-indicator';
@@ -515,6 +598,9 @@ export class BasePanel {
     const dockApi = LayoutManager.api;
     if (!dockApi) return;
 
+    console.log(`[DBG] _dockAtZone "${this._panelApi?.id}" → zone "${zone.id}"${zone.panelId ? ` (panel-edge of ${zone.panelId})` : ''}`);
+    this._logLayout('layout before dock');
+
     this._floating = false;
     const prevSnapshot = this._floatSnapshot;
     this._floatSnapshot = null;
@@ -524,7 +610,17 @@ export class BasePanel {
       // Viewport edge — full-width rows / full-height columns
       this._dockAtVpEdge(zone, prevSnapshot);
     } else {
-      // Panel edge — insert adjacent to a specific content panel
+      // Panel edge — insert adjacent to a specific content panel.
+      // Safety: horizontal-only bars must never go through _dockAtPanelEdge because
+      // that places them inside a content branch column instead of the top-level
+      // vertical stack, breaking the layout.
+      const panelId = this._panelApi?.id;
+      if (panelId === 'menu-bar-panel' || panelId === 'toolbar-panel') {
+        console.warn(`[Cyco] safety: blocked _dockAtPanelEdge for horizontal bar "${panelId}" at zone "${zone.id}"`);
+        this._floating = true;
+        this._floatSnapshot = prevSnapshot;
+        return;
+      }
       this._dockAtPanelEdge(zone, prevSnapshot);
     }
   }
@@ -554,13 +650,16 @@ export class BasePanel {
       const json = dockApi.toJSON();
 
       // Remove this bar from the grid (it's floating, but clean up just in case)
+      // Also strips stale empty-views leaves that remain after addFloatingGroup.
       const removeBar = (node) => {
         if (!node) return null;
         if (node.type === 'leaf') {
-          return (node.data?.views ?? []).includes(panelId) ? null : node;
+          const views = node.data?.views ?? [];
+          return (views.includes(panelId) || views.length === 0) ? null : node;
         }
         const filtered = (node.data ?? []).map(removeBar).filter(Boolean);
         if (filtered.length === 0) return null;
+        if (filtered.length === 1 && (node.data ?? []).length > 1) return { ...filtered[0], size: node.size };
         return { ...node, data: filtered };
       };
 
@@ -721,14 +820,21 @@ export class BasePanel {
     try {
       const json = dockApi.toJSON();
 
-      // Remove barPanel leaf from a grid node recursively
+      // ── RAW SIZE DIAGNOSTIC ──────────────────────────────────────────────
+      { const _r = json.grid?.root; const _vs = (_r?.data?.length===1&&_r.data[0]?.type==='branch')?_r.data[0]:_r; console.log(`[DBG-SIZE] toJSON grid w=${json.grid?.width} h=${json.grid?.height} | root.size=${_r?.size} vStack.size=${_vs?.size}`); console.log(`[DBG-SIZE] vStack rows:`, (_vs?.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); (_vs?.data??[]).forEach((row,ri)=>{ if(row.type==='branch'){ console.log(`[DBG-SIZE] row[${ri}] children:`, (row.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); } }); }
+      // ────────────────────────────────────────────────────────────────────
+
+      // Remove barPanel leaf from a grid node recursively.
+      // Also strips stale empty-views leaves that remain after addFloatingGroup.
       const removeBar = (node) => {
         if (!node) return null;
         if (node.type === 'leaf') {
-          return (node.data?.views ?? []).includes(panelId) ? null : node;
+          const views = node.data?.views ?? [];
+          return (views.includes(panelId) || views.length === 0) ? null : node;
         }
         const filtered = (node.data ?? []).map(removeBar).filter(Boolean);
         if (filtered.length === 0) return null;
+        if (filtered.length === 1 && (node.data ?? []).length > 1) return { ...filtered[0], size: node.size };
         return { ...node, data: filtered };
       };
 
@@ -773,19 +879,36 @@ export class BasePanel {
       };
 
       let newRoot;
-      if (zone.id === 'vp-top' || zone.id === 'vp-bottom') {
+      if (zone.id === 'vp-top' || zone.id === 'vp-bottom' ||
+          zone.id === 'vp-top-inner' || zone.id === 'vp-bottom-inner') {
         const vStack = getVerticalStack(cleanRoot);
         if (!vStack || vStack.type !== 'branch') throw new Error('vertical stack not found');
-
         if (vStack === cleanRoot) {
           // Root IS the horizontal content branch (dockview collapsed the vertical wrapper).
-          // We must wrap it in a new VERTICAL branch so barLeaf becomes a ROW, not a COLUMN.
-          //   New structure:  new_root (H) → newVertStack (V) → [barLeaf (row), cleanRoot (H, columns)]
+          // Treat inner zones same as top/bottom — wrap in a new VERTICAL branch.
+          const atTop = zone.id === 'vp-top' || zone.id === 'vp-top-inner';
           const newVertStack = { type: 'branch', data:
-            zone.id === 'vp-top' ? [barLeaf, cleanRoot] : [cleanRoot, barLeaf] };
+            atTop ? [barLeaf, cleanRoot] : [cleanRoot, barLeaf] };
           newRoot = { type: 'branch', data: [newVertStack] };
+        } else if (zone.id === 'vp-top-inner') {
+          // Insert immediately AFTER the menu-bar-panel leaf in the vertical stack
+          const menuIdx = (vStack.data ?? []).findIndex(n =>
+            n.type === 'leaf' && (n.data?.views ?? []).includes('menu-bar-panel'));
+          const insertAt = menuIdx >= 0 ? menuIdx + 1 : 1;
+          const rows = [...vStack.data.slice(0, insertAt), barLeaf, ...vStack.data.slice(insertAt)];
+          const newVStack = { ...vStack, data: rows };
+          newRoot = { ...cleanRoot, data: [newVStack] };
+        } else if (zone.id === 'vp-bottom-inner') {
+          // Insert immediately BEFORE the toolbar-panel leaf in the vertical stack
+          const toolbarIdx = (vStack.data ?? []).findIndex(n =>
+            n.type === 'leaf' && (n.data?.views ?? []).includes('toolbar-panel'));
+          // When toolbar is floating (being dragged), toolbarIdx=-1; append at end = original position
+          const insertAt = toolbarIdx >= 0 ? toolbarIdx : vStack.data.length;
+          const rows = [...vStack.data.slice(0, insertAt), barLeaf, ...vStack.data.slice(insertAt)];
+          const newVStack = { ...vStack, data: rows };
+          newRoot = { ...cleanRoot, data: [newVStack] };
         } else {
-          // Normal structure: cleanRoot wraps a vertical stack
+          // vp-top / vp-bottom: insert at very start / very end of the vertical stack
           const rows = zone.id === 'vp-top'
             ? [barLeaf, ...(vStack.data ?? [])]
             : [...(vStack.data ?? []), barLeaf];
@@ -858,12 +981,20 @@ export class BasePanel {
       // Hint for the panel being moved
       LayoutManager._pendingOrient[panelId] = zone.isVertical ? 'vertical' : 'horizontal';
 
+      // ── RAW SIZE DIAGNOSTIC (newLayout) ─────────────────────────────────
+      { const _nr = newLayout.grid?.root; const _nvs = (_nr?.data?.length===1&&_nr.data[0]?.type==='branch')?_nr.data[0]:_nr; console.log(`[DBG-SIZE] newLayout grid w=${newLayout.grid?.width} h=${newLayout.grid?.height} | root.size=${_nr?.size} vStack.size=${_nvs?.size}`); console.log(`[DBG-SIZE] newVStack rows:`, (_nvs?.data??[]).map(n=>`${n.type}[${n.type==='leaf'?(n.data?.views??[]).join('/'):''+n.data?.length+'ch'}]:sz=${n.size}`).join(' | ')); }
+      // ────────────────────────────────────────────────────────────────────
+
       LayoutManager._restoringLayout = true;
       dockApi.fromJSON(newLayout);
       LayoutManager._restoringLayout = false;
 
+      console.log(`[DBG] fromJSON done for "${panelId}" \u2192 zone "${zone.id}"`);
       if (this._floatBtn) this._updateFloatBtn(this._floatBtn);
-      setTimeout(() => this._cleanupEmptyGroups(), 100);
+      setTimeout(() => {
+        this._cleanupEmptyGroups();
+        this._logLayout('layout after dock (100ms)');
+      }, 100);
 
     } catch (err) {
       LayoutManager._restoringLayout = false;
@@ -873,6 +1004,391 @@ export class BasePanel {
       this._floatSnapshot = prevSnapshot;
     }
   }
+
+  // ── Non-bar panel drag-to-dock system ─────────────────────────────────────
+
+  /**
+   * Drag handler for regular content panels (non-bar).
+   * Like _startBarDrag but uses _dockPanelAtZone and enables swap (center) zones.
+   */
+  _startPanelDrag(e, btn) {
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let didDrag = false;
+
+    if (this._floating) {
+      // ── Floating: drag to reposition OR drop onto a dock zone ────────────
+      const container = this._findFloatingContainer();
+      const baseLeft = container ? container.offsetLeft : 0;
+      const baseTop  = container ? container.offsetTop  : 0;
+      let activeZone = null;
+      let posInit    = false;
+
+      const onMove = (ev) => {
+        if (!didDrag && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3)) {
+          didDrag = true;
+          this._startDropTracking(true);
+        }
+        if (didDrag && container) {
+          if (!posInit) { posInit = true; container.style.right = 'auto'; container.style.bottom = 'auto'; }
+          container.style.left = (baseLeft + ev.clientX - startX) + 'px';
+          container.style.top  = Math.max(0, baseTop + ev.clientY - startY) + 'px';
+        }
+        if (didDrag) {
+          activeZone = this._getDropZoneAt(ev.clientX, ev.clientY);
+          this._updateDropZoneHighlight(activeZone);
+        }
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        this._stopDropTracking();
+        if (!didDrag && btn) { this._toggleFloat(btn); }
+        else if (activeZone) { this._dockPanelAtZone(activeZone); }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+
+    } else {
+      // ── Docked: drag to float, then allow drop-zone docking; click to toggle ──
+      const onMove = (ev) => {
+        if (!didDrag && (Math.abs(ev.clientX - startX) > 5 || Math.abs(ev.clientY - startY) > 5)) {
+          didDrag = true;
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          this._floatAtPosition(ev.clientX, ev.clientY);
+          if (this._floating) {
+            const floatContainer = this._findFloatingContainer();
+            this._startDropTracking(true);
+            let lastX = ev.clientX, lastY = ev.clientY;
+            let activeZone = null;
+            let floatPosInit = false;
+
+            const onMoveFloat = (ev2) => {
+              if (floatContainer) {
+                if (!floatPosInit) {
+                  floatPosInit = true;
+                  floatContainer.style.right  = 'auto'; floatContainer.style.bottom = 'auto';
+                  floatContainer.style.left = floatContainer.offsetLeft + 'px';
+                  floatContainer.style.top  = floatContainer.offsetTop  + 'px';
+                }
+                floatContainer.style.left = (parseFloat(floatContainer.style.left || '0') + ev2.clientX - lastX) + 'px';
+                floatContainer.style.top  = Math.max(0, parseFloat(floatContainer.style.top || '0') + ev2.clientY - lastY) + 'px';
+              }
+              lastX = ev2.clientX; lastY = ev2.clientY;
+              activeZone = this._getDropZoneAt(ev2.clientX, ev2.clientY);
+              this._updateDropZoneHighlight(activeZone);
+            };
+            const onUpFloat = () => {
+              document.removeEventListener('mousemove', onMoveFloat);
+              document.removeEventListener('mouseup', onUpFloat);
+              this._stopDropTracking();
+              if (activeZone) this._dockPanelAtZone(activeZone);
+            };
+            document.addEventListener('mousemove', onMoveFloat);
+            document.addEventListener('mouseup', onUpFloat);
+          }
+        }
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        if (!didDrag && btn) this._toggleFloat(btn);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    }
+  }
+
+  /** Route a content-panel drop to the right docking method. */
+  _dockPanelAtZone(zone) {
+    if (!zone) return;
+    const dockApi = LayoutManager.api;
+    if (!dockApi) return;
+    this._floating = false;
+    const prevSnapshot = this._floatSnapshot;
+    this._floatSnapshot = null;
+    if (zone.direction === 'swap') {
+      this._mergePanelIntoGroup(zone.panelId, prevSnapshot);
+    } else {
+      this._expectedOrientation = zone.isVertical ? 'vertical' : 'horizontal';
+      if (!zone.panelId) {
+        this._dockPanelAtVpEdge(zone, prevSnapshot);
+      } else {
+        this._dockPanelAtPanelEdge(zone, prevSnapshot);
+      }
+    }
+  }
+
+  /** Merge the floating panel into the target panel's tab group via JSON. */
+  _mergePanelIntoGroup(targetPanelId, prevSnapshot) {
+    const dockApi = LayoutManager.api;
+    const panelId = this._panelApi.id;
+    try {
+      const json = dockApi.toJSON();
+      const removePanel = (node) => {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+          const views = node.data?.views ?? [];
+          return (views.includes(panelId) || views.length === 0) ? null : node;
+        }
+        const filtered = (node.data ?? []).map(removePanel).filter(Boolean);
+        if (filtered.length === 0) return null;
+        if (filtered.length === 1 && (node.data ?? []).length > 1) return { ...filtered[0], size: node.size };
+        return { ...node, data: filtered };
+      };
+      const floating = (json.floatingGroups ?? []).filter(fg => !(fg.data?.views ?? []).includes(panelId));
+      const cleanRoot = removePanel(json.grid?.root);
+      const addToTargetLeaf = (node) => {
+        if (!node) return node;
+        if (node.type === 'leaf' && (node.data?.views ?? []).includes(targetPanelId)) {
+          return { ...node, data: { ...node.data, views: [panelId, ...(node.data.views ?? [])], activeView: panelId } };
+        }
+        if (node.type === 'branch') return { ...node, data: node.data.map(addToTargetLeaf) };
+        return node;
+      };
+      const newRoot = addToTargetLeaf(cleanRoot);
+      const newLayout = { ...json, grid: { ...json.grid, root: newRoot }, floatingGroups: floating };
+      if (newLayout.panels?.[panelId]) {
+        const p = { ...newLayout.panels[panelId] };
+        delete p.minimumWidth; delete p.maximumWidth; delete p.minimumHeight; delete p.maximumHeight;
+        newLayout.panels[panelId] = p;
+      }
+      LayoutManager._restoringLayout = true;
+      dockApi.fromJSON(newLayout);
+      LayoutManager._restoringLayout = false;
+      setTimeout(() => this._cleanupEmptyGroups(), 100);
+    } catch (err) {
+      LayoutManager._restoringLayout = false;
+      console.warn('[Cyco] _mergePanelIntoGroup error:', err);
+      this._floating = true; this._floatSnapshot = prevSnapshot;
+    }
+  }
+
+  /** Get the floating panel's current rendered size for use when re-docking. */
+  _getPanelFloatSize(defaultW = 300, defaultH = 240) {
+    const container = this._findFloatingContainer();
+    if (container) {
+      const r = container.getBoundingClientRect();
+      if (r.width > 20) return { width: Math.round(r.width), height: Math.round(r.height) };
+    }
+    return { width: defaultW, height: defaultH };
+  }
+
+  /**
+   * Dock a content panel at a viewport edge — like _dockAtVpEdge but uses
+   * the panel's current floating size instead of a fixed bar height.
+   */
+  _dockPanelAtVpEdge(zone, prevSnapshot) {
+    const dockApi = LayoutManager.api;
+    const panelId = this._panelApi.id;
+    const { width: panelW, height: panelH } = this._getPanelFloatSize();
+    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
+    try {
+      const json = dockApi.toJSON();
+      const removePanel = (node) => {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+          const views = node.data?.views ?? [];
+          return (views.includes(panelId) || views.length === 0) ? null : node;
+        }
+        const filtered = (node.data ?? []).map(removePanel).filter(Boolean);
+        if (filtered.length === 0) return null;
+        if (filtered.length === 1 && (node.data ?? []).length > 1) return { ...filtered[0], size: node.size };
+        return { ...node, data: filtered };
+      };
+      const floating = (json.floatingGroups ?? []).filter(fg => !(fg.data?.views ?? []).includes(panelId));
+      const cleanRoot = removePanel(json.grid?.root);
+      const panelSize = (zone.id === 'vp-left' || zone.id === 'vp-right') ? panelW : panelH;
+      const panelLeaf = { type: 'leaf', data: { id: `grp-${panelId}`, views: [panelId], activeView: panelId }, size: panelSize };
+
+      const getVerticalStack = (root) => {
+        if (root?.type === 'branch' && root.data?.length === 1 && root.data[0]?.type === 'branch') return root.data[0];
+        return root;
+      };
+      const findContentBranch = (node) => {
+        if (!node || node.type === 'leaf') return null;
+        const hasDirectContent = (node.data ?? []).some(child =>
+          child.type === 'leaf' && (child.data?.views ?? []).some(v => !BAR_IDS.includes(v))
+        );
+        if (hasDirectContent) return node;
+        for (const child of node.data ?? []) { const f = findContentBranch(child); if (f) return f; }
+        return null;
+      };
+
+      let newRoot;
+      if (zone.id === 'vp-top' || zone.id === 'vp-bottom') {
+        const vStack = getVerticalStack(cleanRoot);
+        if (!vStack || vStack.type !== 'branch') throw new Error('vertical stack not found');
+        if (vStack === cleanRoot) {
+          const newVertStack = { type: 'branch', data: zone.id === 'vp-top' ? [panelLeaf, cleanRoot] : [cleanRoot, panelLeaf] };
+          newRoot = { type: 'branch', data: [newVertStack] };
+        } else {
+          const rows = zone.id === 'vp-top' ? [panelLeaf, ...(vStack.data ?? [])] : [...(vStack.data ?? []), panelLeaf];
+          newRoot = { ...cleanRoot, data: [{ ...vStack, data: rows }] };
+        }
+      } else {
+        const contentBranch = findContentBranch(cleanRoot);
+        if (!contentBranch) throw new Error('content branch not found');
+        const cols = zone.id === 'vp-left'
+          ? [panelLeaf, ...(contentBranch.data ?? [])]
+          : [...(contentBranch.data ?? []), panelLeaf];
+        const replaceNode = (node) => {
+          if (node === contentBranch) return { ...contentBranch, data: cols };
+          if (node?.type !== 'branch') return node;
+          return { ...node, data: node.data.map(replaceNode) };
+        };
+        newRoot = replaceNode(cleanRoot);
+      }
+
+      const newLayout = { ...json, grid: { ...json.grid, root: newRoot }, floatingGroups: floating };
+      if (newLayout.panels?.[panelId]) {
+        const p = { ...newLayout.panels[panelId] };
+        delete p.minimumWidth; delete p.maximumWidth; delete p.minimumHeight; delete p.maximumHeight;
+        newLayout.panels[panelId] = p;
+      }
+      LayoutManager._pendingOrient = LayoutManager._pendingOrient ?? {};
+      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
+      for (const bId of BAR_IDS) {
+        if (!newLayout.panels?.[bId]) continue;
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
+        if (groupEl) {
+          LayoutManager._pendingOrient[bId] = 'vertical';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumHeight; delete bp.maximumHeight;
+          bp.minimumWidth = otherBarH; bp.maximumWidth = otherBarH;
+          newLayout.panels[bId] = bp;
+        }
+      }
+      LayoutManager._restoringLayout = true;
+      dockApi.fromJSON(newLayout);
+      LayoutManager._restoringLayout = false;
+      setTimeout(() => this._cleanupEmptyGroups(), 100);
+    } catch (err) {
+      LayoutManager._restoringLayout = false;
+      console.warn('[Cyco] _dockPanelAtVpEdge error:', err);
+      this._expectedOrientation = null;
+      this._floating = true; this._floatSnapshot = prevSnapshot;
+    }
+  }
+
+  /**
+   * Dock a content panel adjacent to another panel — like _dockAtPanelEdge but
+   * splits the target area 50/50 instead of using a fixed bar height.
+   */
+  _dockPanelAtPanelEdge(zone, prevSnapshot) {
+    const dockApi = LayoutManager.api;
+    const panelId = this._panelApi.id;
+    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
+    try {
+      const json = dockApi.toJSON();
+      const removePanel = (node) => {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+          const views = node.data?.views ?? [];
+          return (views.includes(panelId) || views.length === 0) ? null : node;
+        }
+        const filtered = (node.data ?? []).map(removePanel).filter(Boolean);
+        if (filtered.length === 0) return null;
+        if (filtered.length === 1 && (node.data ?? []).length > 1) return { ...filtered[0], size: node.size };
+        return { ...node, data: filtered };
+      };
+      const floating = (json.floatingGroups ?? []).filter(fg => !(fg.data?.views ?? []).includes(panelId));
+      const cleanRoot = removePanel(json.grid?.root);
+
+      const findLeaf = (node, targetId, depth = 0, parent = null, idx = 0) => {
+        if (!node) return null;
+        if (node.type === 'leaf') return (node.data?.views ?? []).includes(targetId) ? { leaf: node, depth, parent, idx } : null;
+        for (let i = 0; i < (node.data ?? []).length; i++) {
+          const hit = findLeaf(node.data[i], targetId, depth + 1, node, i);
+          if (hit) return hit;
+        }
+        return null;
+      };
+      const replaceDeep = (node, target, replacement) => {
+        if (node === target) return replacement;
+        if (node?.type !== 'branch') return node;
+        return { ...node, data: node.data.map(c => replaceDeep(c, target, replacement)) };
+      };
+      const insertInParent = (root, parentNode, childIndex, insertBefore, newItem) => {
+        const walk = (node) => {
+          if (node === parentNode) {
+            const d = [...node.data];
+            d.splice(insertBefore ? childIndex : childIndex + 1, 0, newItem);
+            return { ...node, data: d };
+          }
+          if (node?.type !== 'branch') return node;
+          return { ...node, data: node.data.map(walk) };
+        };
+        return walk(root);
+      };
+
+      const found = findLeaf(cleanRoot, zone.panelId);
+      if (!found) throw new Error(`[Cyco] panel "${zone.panelId}" not found in grid`);
+      const { leaf: targetLeaf, depth: targetDepth, parent, idx: idxInParent } = found;
+      const parentIsH = ((targetDepth - 1) % 2 === 0);
+      const insertBefore = (zone.direction === 'left' || zone.direction === 'top');
+      const wantColumns  = (zone.direction === 'left' || zone.direction === 'right');
+      // Split the target's current size 50/50
+      const half = Math.max(50, Math.round((targetLeaf.size ?? 200) / 2));
+      const panelLeaf = { type: 'leaf', data: { id: `grp-${panelId}`, views: [panelId], activeView: panelId }, size: half };
+
+      let newRoot;
+      if (wantColumns) {
+        if (parentIsH) {
+          newRoot = insertInParent(cleanRoot, parent, idxInParent, insertBefore, panelLeaf);
+        } else {
+          const innerLeaf = { ...targetLeaf, size: Math.max(50, (targetLeaf.size ?? 200) - half) };
+          const data = insertBefore ? [panelLeaf, innerLeaf] : [innerLeaf, panelLeaf];
+          newRoot = replaceDeep(cleanRoot, targetLeaf, { type: 'branch', data, size: targetLeaf.size });
+        }
+      } else {
+        if (!parentIsH) {
+          newRoot = insertInParent(cleanRoot, parent, idxInParent, insertBefore, panelLeaf);
+        } else {
+          const innerLeaf = { ...targetLeaf, size: Math.max(50, (targetLeaf.size ?? 200) - half) };
+          const data = insertBefore ? [panelLeaf, innerLeaf] : [innerLeaf, panelLeaf];
+          newRoot = replaceDeep(cleanRoot, targetLeaf, { type: 'branch', data, size: targetLeaf.size });
+        }
+      }
+
+      if (!newRoot) throw new Error('[Cyco] _dockPanelAtPanelEdge: failed to build new grid');
+      const newLayout = { ...json, grid: { ...json.grid, root: newRoot }, floatingGroups: floating };
+      if (newLayout.panels?.[panelId]) {
+        const p = { ...newLayout.panels[panelId] };
+        delete p.minimumWidth; delete p.maximumWidth; delete p.minimumHeight; delete p.maximumHeight;
+        newLayout.panels[panelId] = p;
+      }
+      LayoutManager._pendingOrient = LayoutManager._pendingOrient ?? {};
+      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
+      for (const bId of BAR_IDS) {
+        if (!newLayout.panels?.[bId]) continue;
+        const groupEl = document.querySelector(`.${_barGroupClassMap[bId]}.ce-bar-vertical`);
+        if (groupEl) {
+          LayoutManager._pendingOrient[bId] = 'vertical';
+          const rect = groupEl.getBoundingClientRect();
+          const otherBarH = (rect.width > 0 && rect.width < 100) ? Math.round(rect.width) : 32;
+          const bp = { ...newLayout.panels[bId] };
+          delete bp.minimumHeight; delete bp.maximumHeight;
+          bp.minimumWidth = otherBarH; bp.maximumWidth = otherBarH;
+          newLayout.panels[bId] = bp;
+        }
+      }
+      LayoutManager._restoringLayout = true;
+      dockApi.fromJSON(newLayout);
+      LayoutManager._restoringLayout = false;
+      setTimeout(() => this._cleanupEmptyGroups(), 100);
+    } catch (err) {
+      LayoutManager._restoringLayout = false;
+      console.warn('[Cyco] _dockPanelAtPanelEdge error:', err);
+      this._expectedOrientation = null;
+      this._floating = true; this._floatSnapshot = prevSnapshot;
+    }
+  }
+
+  // ── End non-bar panel drag-to-dock ─────────────────────────────────────────
 
   _toggleFloat(btn) {
     const dockApi = LayoutManager.api;
