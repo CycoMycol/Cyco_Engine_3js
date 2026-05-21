@@ -60,11 +60,23 @@ export class RightViewportPanel extends BasePanel {
 
     // Main Camera & Global Light quick-select buttons
     bar.appendChild(_toolBtn(_cameraIcon(), 'Main Camera', () => {
-      document.dispatchEvent(new CustomEvent('cyco-select-node', { detail: 'main-camera' }));
+      const vp  = window.__cyco?.viewportEngine;
+      const cam = vp?.camera ?? null;
+      if (cam) {
+        window.dispatchEvent(new CustomEvent('cyco-select-node', {
+          detail: { object: cam, objects: [cam], type: 'camera' }
+        }));
+      }
     }));
 
     bar.appendChild(_toolBtn(_lightIcon(), 'Global Light', () => {
-      document.dispatchEvent(new CustomEvent('cyco-select-node', { detail: 'env-light' }));
+      const vp    = window.__cyco?.viewportEngine;
+      const light = vp?._hemisphereLight ?? vp?._ambientLight ?? null;
+      if (light) {
+        window.dispatchEvent(new CustomEvent('cyco-select-node', {
+          detail: { object: light, objects: [light], type: 'light' }
+        }));
+      }
     }));
 
     bar.appendChild(_toolSep());
@@ -84,6 +96,15 @@ export class RightViewportPanel extends BasePanel {
       document.dispatchEvent(new CustomEvent('cyco-rvp-snap', { detail: this._snapEnabled }));
     });
     bar.appendChild(this._snapBtn);
+
+    bar.appendChild(_toolSep());
+
+    // Grid Settings — opens GridProperties in the Properties panel
+    bar.appendChild(_toolBtn(
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="16" x2="21" y2="16"/><line x1="8" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="16" y2="21"/></svg>',
+      'Grid Settings',
+      () => { window.dispatchEvent(new CustomEvent('cyco-show-properties', { detail: { type: 'grid' } })); }
+    ));
 
     bar.appendChild(_toolSep());
 
