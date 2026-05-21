@@ -90,6 +90,31 @@ export class LeftToolbarPanel extends BasePanel {
     spacer.style.flex = '1';
     bar.appendChild(spacer);
 
+    bar.appendChild(_toolSep());
+
+    // Camera View — opens CameraViewPanel as floating window
+    bar.appendChild(_toolBtn(
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e05050" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>',
+      'Camera View',
+      () => {
+        const dvApi = window.__cyco?.dockviewApi;
+        if (!dvApi) return;
+        const existing = dvApi.getPanel('camera-view');
+        if (existing) {
+          existing.api.close();
+        } else {
+          dvApi.addPanel({
+            id: 'camera-view',
+            component: 'CameraViewPanel',
+            title: 'Camera View',
+            floating: { x: 260, y: 90, width: 340, height: 260 },
+          });
+        }
+      }
+    ));
+
+    bar.appendChild(_toolSep());
+
     this._refreshToolBtns();
     this._refreshViewBtns();
     return bar;

@@ -161,6 +161,9 @@ const LayoutManager = {
       // Support both legacy plain-layout JSON and new { layout, snapshots } format
       const layout    = data.layout    ?? data;
       const snapshots = data.snapshots ?? {};
+      // Strip on-demand panels (camera-view etc.) so they are never auto-restored
+      // into the grid from an old or floating save.
+      this._stripTransientPanels(layout);
       // Set orientation hints so bar panel init() applies correct constraints during fromJSON.
       this._setPendingOrientFromLayout(layout);
       this._restoringLayout = true;
@@ -418,6 +421,53 @@ const LayoutManager = {
     ALL_IDS.forEach(id => {
       this._visibility[id] = !!this.api.getPanel(id);
     });
+  },
+
+  /**
+   * Remove on-demand (transient) panels from a layout snapshot before restoring.
+   * Panels like camera-view are opened on-demand; they should not be re-added
+   * automatically on reload — especially since an old save may have stored them
+   * in the grid (top-left) rather than floating.
+   */
+  _stripTransientPanels(layout) {
+    const TRANSIENT = new Set(['camera-view']);
+    if (!layout) return layout;
+
+    // Remove from panels map
+    for (const id of TRANSIENT) delete layout.panels?.[id];
+
+    // Remove from floatingGroups
+    if (Array.isArray(layout.floatingGroups)) {
+      layout.floatingGroups = layout.floatingGroups.filter(fg => {
+        const views = fg?.data?.views ?? [];
+        return !views.some(v => TRANSIENT.has(v));
+      });
+      if (!layout.floatingGroups.length) delete layout.floatingGroups;
+    }
+
+    // Remove from grid tree (handles the case where the user docked it)
+    if (layout.grid?.root) {
+      layout.grid.root = this._stripGridNode(layout.grid.root, TRANSIENT);
+    }
+
+    return layout;
+  },
+
+  _stripGridNode(node, transient) {
+    if (!node) return null;
+    if (node.type === 'leaf') {
+      const views = (node.data?.views ?? []).filter(v => !transient.has(v));
+      if (!views.length) return null;
+      const activeView = transient.has(node.data?.activeView) ? views[0] : node.data?.activeView;
+      return { ...node, data: { ...node.data, views, activeView } };
+    }
+    if (node.type === 'branch') {
+      const data = (node.data ?? []).map(c => this._stripGridNode(c, transient)).filter(Boolean);
+      if (!data.length) return null;
+      if (data.length === 1) return data[0];
+      return { ...node, data };
+    }
+    return node;
   },
 
   _scheduleAutoSave() {

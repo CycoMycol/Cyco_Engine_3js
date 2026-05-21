@@ -126,5 +126,6 @@ if (typeof window !== 'undefined') {
     selectionManager,
     transformGizmo,
     commandManager,
+    dockviewApi: dockApi,
   };
 }
