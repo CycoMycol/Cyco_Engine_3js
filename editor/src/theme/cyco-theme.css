@@ -3087,7 +3087,7 @@ select.ce-gm-input {
   border-top: 1px solid rgba(224, 114, 40, 0.15);
   transition: background 80ms;
 }
-.ce-prop-section-hdr:hover { background: var(--ce-bg-panel); }
+.ce-prop-section-hdr:hover { background: rgba(224, 114, 40, 0.18); }
 .ce-prop-arrow {
   font-size: 9px;
   color: var(--ce-accent-orange);
