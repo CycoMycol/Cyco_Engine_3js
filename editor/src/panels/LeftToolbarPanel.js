@@ -45,23 +45,29 @@ export class LeftToolbarPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
-    // Transform tools
-    const tools = [
-      { id: 'translate', tip: 'Translate  W' },
-      { id: 'rotate',    tip: 'Rotate  E'    },
-      { id: 'scale',     tip: 'Scale  R'     },
-      { id: 'rect',      tip: 'Rect Transform  T' },
-    ];
-    tools.forEach(t => {
-      const btn = _toolBtn(_toolIcon(t.id), t.tip, () => {
-        this._activeTool = t.id;
-        this._refreshToolBtns();
-        document.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: t.id }));
-      });
-      btn.dataset.tool = t.id;
-      this._toolBtns[t.id] = btn;
-      bar.appendChild(btn);
+    // Transform cycle toggle (translate → rotate → scale)
+    const CYCLE = ['translate', 'rotate', 'scale'];
+    const cycleId = CYCLE.includes(this._activeTool) ? this._activeTool : 'translate';
+    const transformBtn = _toolBtn(_toolIcon(cycleId), _toolTip(cycleId), () => {
+      const cur  = CYCLE.includes(this._activeTool) ? this._activeTool : 'translate';
+      const next = CYCLE[(CYCLE.indexOf(cur) + 1) % CYCLE.length];
+      this._activeTool = next;
+      this._refreshToolBtns();
+      document.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: next }));
     });
+    transformBtn.dataset.tool = 'transform';
+    this._toolBtns['transform'] = transformBtn;
+    bar.appendChild(transformBtn);
+
+    // Rect Transform
+    const rectBtn = _toolBtn(_toolIcon('rect'), 'Rect Transform  T', () => {
+      this._activeTool = 'rect';
+      this._refreshToolBtns();
+      document.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: 'rect' }));
+    });
+    rectBtn.dataset.tool = 'rect';
+    this._toolBtns['rect'] = rectBtn;
+    bar.appendChild(rectBtn);
 
     bar.appendChild(_toolSep());
 
@@ -100,9 +106,17 @@ export class LeftToolbarPanel extends BasePanel {
   }
 
   _refreshToolBtns() {
-    Object.entries(this._toolBtns).forEach(([id, btn]) => {
-      btn.classList.toggle('active', id === this._activeTool);
-    });
+    const CYCLE = ['translate', 'rotate', 'scale'];
+    const onCycle = CYCLE.includes(this._activeTool);
+    const cycleId  = onCycle ? this._activeTool : 'translate';
+    const tb = this._toolBtns['transform'];
+    if (tb) {
+      tb.classList.toggle('active', onCycle);
+      tb.innerHTML = _toolIcon(cycleId);
+      tb.title     = _toolTip(cycleId);
+    }
+    const rb = this._toolBtns['rect'];
+    if (rb) rb.classList.toggle('active', this._activeTool === 'rect');
   }
 
   // ── Header actions (drag handle) ────────────────────────────────────────────
@@ -281,5 +295,15 @@ function _toolIcon(id) {
       <line x1="15" y1="10" x2="18" y2="10"/>
     </svg>`;
     default: return '';
+  }
+}
+
+function _toolTip(id) {
+  switch (id) {
+    case 'translate': return 'Translate  W';
+    case 'rotate':    return 'Rotate  E';
+    case 'scale':     return 'Scale  R';
+    case 'rect':      return 'Rect Transform  T';
+    default:          return '';
   }
 }
