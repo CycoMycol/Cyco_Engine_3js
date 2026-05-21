@@ -26,6 +26,13 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 /** Sentinel value: no active focus animation. */
 const NO_FOCUS = null;
 
+/** Return just the filename part of a URL for display in the loading overlay. */
+function _shortFilename(url) {
+  if (!url) return '…';
+  try { return decodeURIComponent(url.split('/').pop().split('?')[0]) || url; }
+  catch { return url; }
+}
+
 export class ViewportEngine {
   /**
    * @param {import('./RendererManager.js').RendererManager} rendererManager
@@ -76,6 +83,10 @@ export class ViewportEngine {
     this._onFogChange           = this._onFogChange.bind(this);
     this._onEnvMapChange        = this._onEnvMapChange.bind(this);
     this._onEnvBgToggle         = this._onEnvBgToggle.bind(this);
+    this._onLoadingStart        = this._onLoadingStart.bind(this);
+    this._onLoadingProgress     = this._onLoadingProgress.bind(this);
+    this._onLoadingDone         = this._onLoadingDone.bind(this);
+    this._onLoadingError        = this._onLoadingError.bind(this);
 
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
     window.addEventListener('cyco-rvp-focus',               this._onFocus);
@@ -86,6 +97,10 @@ export class ViewportEngine {
     window.addEventListener('cyco-fog-change',              this._onFogChange);
     window.addEventListener('cyco-env-map-change',          this._onEnvMapChange);
     window.addEventListener('cyco-env-background-toggle',   this._onEnvBgToggle);
+    window.addEventListener('cyco-loading-start',           this._onLoadingStart);
+    window.addEventListener('cyco-loading-progress',        this._onLoadingProgress);
+    window.addEventListener('cyco-loading-done',            this._onLoadingDone);
+    window.addEventListener('cyco-loading-error',           this._onLoadingError);
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -121,6 +136,9 @@ export class ViewportEngine {
 
     // Right-click context menu
     this._buildContextMenu(container);
+
+    // Loading overlay (sits above the canvas, shows asset load progress)
+    this._buildLoadingOverlay(container);
 
     // Start render loop
     this._startLoop();
@@ -316,6 +334,147 @@ export class ViewportEngine {
     this.viewHelper = new ViewHelper(this.camera, renderer.domElement);
   }
 
+  _buildLoadingOverlay(container) {
+    // Remove any previous overlay (e.g. container swap)
+    this._loadingOverlay?.remove();
+
+    // Ensure the container is a positioning ancestor
+    if (getComputedStyle(container).position === 'static') {
+      container.style.position = 'relative';
+    }
+
+    // Inject spin keyframes once
+    if (!document.getElementById('cyco-loading-kf')) {
+      const kf = document.createElement('style');
+      kf.id = 'cyco-loading-kf';
+      kf.textContent = '@keyframes cyco-spin{to{transform:rotate(360deg)}}';
+      document.head.appendChild(kf);
+    }
+
+    const ov = document.createElement('div');
+    Object.assign(ov.style, {
+      position: 'absolute', inset: '0',
+      display: 'flex', flexDirection: 'column',
+      alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(22,19,14,0.88)',
+      zIndex: '999',
+      opacity: '0',
+      transition: 'opacity 0.2s ease',
+      pointerEvents: 'none',
+      userSelect: 'none',
+    });
+
+    // Spinner ring
+    const spinner = document.createElement('div');
+    Object.assign(spinner.style, {
+      width: '30px', height: '30px',
+      borderRadius: '50%',
+      border: '3px solid rgba(255,255,255,0.12)',
+      borderTopColor: '#e87d3e',
+      animation: 'cyco-spin 0.75s linear infinite',
+      marginBottom: '14px',
+      flexShrink: '0',
+    });
+
+    // Filename
+    const fileLabel = document.createElement('div');
+    Object.assign(fileLabel.style, {
+      color: 'rgba(255,255,255,0.55)',
+      fontSize: '11px',
+      maxWidth: '230px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      marginBottom: '10px',
+      textAlign: 'center',
+    });
+    fileLabel.textContent = 'Loading…';
+
+    // Progress track
+    const track = document.createElement('div');
+    Object.assign(track.style, {
+      width: '200px', height: '4px',
+      background: 'rgba(255,255,255,0.1)',
+      borderRadius: '2px',
+      overflow: 'hidden',
+      marginBottom: '7px',
+    });
+
+    const fill = document.createElement('div');
+    Object.assign(fill.style, {
+      height: '100%', width: '0%',
+      background: '#e87d3e',
+      borderRadius: '2px',
+      transition: 'width 0.15s ease',
+    });
+    track.appendChild(fill);
+
+    // "N of M" counter
+    const counter = document.createElement('div');
+    Object.assign(counter.style, {
+      color: 'rgba(255,255,255,0.3)',
+      fontSize: '10px',
+    });
+
+    ov.appendChild(spinner);
+    ov.appendChild(fileLabel);
+    ov.appendChild(track);
+    ov.appendChild(counter);
+    container.appendChild(ov);
+
+    this._loadingOverlay   = ov;
+    this._loadingFill      = fill;
+    this._loadingFileLabel = fileLabel;
+    this._loadingCounter   = counter;
+  }
+
+  // ─── Loading overlay handlers ─────────────────────────────────────────────
+
+  _onLoadingStart({ detail } = {}) {
+    if (!this._loadingOverlay) return;
+    this._loadingFill.style.width = '0%';
+    this._loadingFill.style.background = '#e87d3e';
+    this._loadingFileLabel.textContent = _shortFilename(detail?.url ?? '');
+    this._loadingCounter.textContent = '';
+    this._loadingOverlay.style.opacity = '1';
+    this._loadingOverlay.style.pointerEvents = 'auto';
+    clearTimeout(this._loadingHideTimer);
+  }
+
+  _onLoadingProgress({ detail } = {}) {
+    if (!this._loadingOverlay) return;
+    const { url, loaded, total, pct } = detail ?? {};
+    this._loadingFill.style.width = `${pct ?? 0}%`;
+    this._loadingFileLabel.textContent = _shortFilename(url ?? '');
+    this._loadingCounter.textContent = total > 0 ? `${loaded} of ${total}` : '';
+  }
+
+  _onLoadingDone() {
+    if (!this._loadingOverlay) return;
+    this._loadingFill.style.width = '100%';
+    clearTimeout(this._loadingHideTimer);
+    this._loadingHideTimer = setTimeout(() => {
+      if (this._loadingOverlay) {
+        this._loadingOverlay.style.opacity = '0';
+        this._loadingOverlay.style.pointerEvents = 'none';
+      }
+    }, 350);
+  }
+
+  _onLoadingError({ detail } = {}) {
+    if (!this._loadingOverlay) return;
+    this._loadingFileLabel.textContent = `⚠ Error: ${_shortFilename(detail?.url ?? '')}`;
+    this._loadingFill.style.background = '#e84040';
+    clearTimeout(this._loadingHideTimer);
+    this._loadingHideTimer = setTimeout(() => {
+      if (this._loadingOverlay) {
+        this._loadingOverlay.style.opacity = '0';
+        this._loadingOverlay.style.pointerEvents = 'none';
+        this._loadingFill.style.background = '#e87d3e';
+      }
+    }, 2500);
+  }
+
   _buildResizeObserver(container) {
     this._resizeObserver = new ResizeObserver(entries => {
       for (const entry of entries) {
@@ -494,6 +653,9 @@ export class ViewportEngine {
       }
       this._container = container;
 
+      // Rebuild loading overlay in the new container
+      this._buildLoadingOverlay(container);
+
       // Use _handleResize so cyco-vp-resize fires and PostProcessingPipeline rebuilds
       const { width, height } = container.getBoundingClientRect();
       this._handleResize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
@@ -536,6 +698,12 @@ export class ViewportEngine {
     window.removeEventListener('cyco-fog-change',               this._onFogChange);
     window.removeEventListener('cyco-env-map-change',           this._onEnvMapChange);
     window.removeEventListener('cyco-env-background-toggle',    this._onEnvBgToggle);
+    window.removeEventListener('cyco-loading-start',            this._onLoadingStart);
+    window.removeEventListener('cyco-loading-progress',         this._onLoadingProgress);
+    window.removeEventListener('cyco-loading-done',             this._onLoadingDone);
+    window.removeEventListener('cyco-loading-error',            this._onLoadingError);
+    clearTimeout(this._loadingHideTimer);
+    this._loadingOverlay?.remove();
 
     // Dispose scene objects
     this.scene?.traverse(child => {

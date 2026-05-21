@@ -85,10 +85,21 @@ document.addEventListener('cyco-action', (e) => {
 
 // Shared LoadingManager — passed to all loaders
 const loadingManager = new THREE.LoadingManager();
+loadingManager.onStart = (url, loaded, total) => {
+  window.dispatchEvent(new CustomEvent('cyco-loading-start', {
+    detail: { url, loaded, total }
+  }));
+};
 loadingManager.onProgress = (url, loaded, total) => {
   window.dispatchEvent(new CustomEvent('cyco-loading-progress', {
     detail: { url, loaded, total, pct: Math.round((loaded / total) * 100) }
   }));
+};
+loadingManager.onLoad = () => {
+  window.dispatchEvent(new CustomEvent('cyco-loading-done'));
+};
+loadingManager.onError = (url) => {
+  window.dispatchEvent(new CustomEvent('cyco-loading-error', { detail: { url } }));
 };
 
 // Core renderer + viewport
