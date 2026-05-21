@@ -21,12 +21,11 @@
  */
 
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass }     from 'three/addons/postprocessing/RenderPass.js';
-import { OutlinePass }    from 'three/addons/postprocessing/OutlinePass.js';
-import { GTAOPass }       from 'three/addons/postprocessing/GTAOPass.js';
+import { EffectComposer }  from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
+import { OutlinePass }     from 'three/addons/postprocessing/OutlinePass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass }     from 'three/addons/postprocessing/OutputPass.js';
+import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 
 export class PostProcessingPipeline {
   /**
@@ -40,9 +39,6 @@ export class PostProcessingPipeline {
 
     /** @type {OutlinePass|null} — exposed for SelectionManager to set selectedObjects */
     this.outlinePass = null;
-
-    /** @type {GTAOPass|null} */
-    this.gtaoPass = null;
 
     /** @type {UnrealBloomPass|null} */
     this.bloomPass = null;
@@ -83,16 +79,12 @@ export class PostProcessingPipeline {
     this.outlinePass.hiddenEdgeColor.set(0x333333);
     this._composer.addPass(this.outlinePass);
 
-    // 3. Ground Truth AO (preferred over SSAOPass)
-    this.gtaoPass = new GTAOPass(scene, camera, w, h);
-    this.gtaoPass.output = GTAOPass.OUTPUT.Default;
-    this._composer.addPass(this.gtaoPass);
-
-    // 4. Bloom
+    // 3. Bloom (GTAOPass removed — requires G-buffer/depth pre-pass not supported
+    //    in a plain EffectComposer setup; re-add with MRT/depth buffer in Phase 15)
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.5, 0.4, 0.85);
     this._composer.addPass(this.bloomPass);
 
-    // 5. OutputPass — MUST be last — applies tone mapping + sRGB output conversion
+    // 4. OutputPass — MUST be last — applies tone mapping + sRGB output conversion
     this._composer.addPass(new OutputPass());
 
     // Tell ViewportEngine that the pipeline is active (it will skip direct renderer.render())
@@ -105,7 +97,6 @@ export class PostProcessingPipeline {
     this._composer.dispose?.();
     this._composer   = null;
     this.outlinePass = null;
-    this.gtaoPass    = null;
     this.bloomPass   = null;
     this.engine.setPipelineActive(false);
   }
@@ -156,22 +147,31 @@ export class PostProcessingPipeline {
 
   _onTick() {
     if (!this._composer) return;
-    this._composer.render();
+    try {
+      this._composer.render();
+    } catch (err) {
+      console.error('[PostProcessingPipeline] Composer render error — falling back to direct rendering:', err);
+      this._disposeWebGLPipeline(); // clears _composer and sets pipelineActive = false
+    }
   }
 
   _onResize(event) {
     if (!this._composer) return;
+    // Rebuild the entire pipeline at the new size rather than patching individual pass internals.
+    // OutlinePass and UnrealBloomPass create render targets in their constructors
+    // and don't reliably resize them via resolution.set() / setSize().
+    const renderer = this.engine.rendererManager?.renderer;
+    const type     = this.engine.rendererManager?.activeType ?? 'webgl';
+    const scene    = this.engine.scene;
+    const camera   = this.engine.camera;
+    if (!renderer || !scene || !camera) return;
     const { width, height } = event.detail;
-    this._composer.setSize(width, height);
-
-    if (this.outlinePass) {
-      this.outlinePass.resolution.set(width, height);
-    }
-    if (this.gtaoPass) {
-      this.gtaoPass.setSize(width, height);
-    }
-    if (this.bloomPass) {
-      this.bloomPass.resolution.set(width, height);
+    const w = Math.max(1, Math.floor(width));
+    const h = Math.max(1, Math.floor(height));
+    if (type === 'webgl') {
+      this._buildWebGLPipeline(renderer, scene, camera, w, h);
+    } else {
+      this._rebuildForType(renderer, type);
     }
   }
 

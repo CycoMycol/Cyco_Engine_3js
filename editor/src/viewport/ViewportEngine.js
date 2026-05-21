@@ -270,9 +270,12 @@ export class ViewportEngine {
       renderer.render(this.scene, this.camera);
     }
 
-    // ViewHelper renders on top of main frame
+    // ViewHelper renders on top of main frame — must use autoClear=false so it
+    // doesn't wipe the already-rendered scene before drawing its axes widget.
     if (this.viewHelper) {
+      renderer.autoClear = false;
       this.viewHelper.render(renderer);
+      renderer.autoClear = true;
     }
   }
 
@@ -363,15 +366,9 @@ export class ViewportEngine {
       }
       this._container = container;
 
-      // Sync renderer size to new (possibly resized) container
+      // Use _handleResize so cyco-vp-resize fires and PostProcessingPipeline rebuilds
       const { width, height } = container.getBoundingClientRect();
-      const w = Math.max(1, Math.floor(width));
-      const h = Math.max(1, Math.floor(height));
-      this.rendererManager.resize(w, h);
-      if (this.camera) {
-        this.camera.aspect = w / h;
-        this.camera.updateProjectionMatrix();
-      }
+      this._handleResize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
       return;
     }
 
