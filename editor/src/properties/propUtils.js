@@ -14,6 +14,8 @@ import CeColorPicker from '../ui/CeColorPicker.js';
  * Uses Pointer Lock API so dragging continues past monitor edges.
  */
 function _attachScrub(trigger, inp, speed, decimals) {
+  trigger.title = 'Drag to change value\nShift = ×10 speed · Alt = ×0.1 speed';
+
   let startVal = 0;
   let accDelta = 0;
 

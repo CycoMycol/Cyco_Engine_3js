@@ -3075,19 +3075,22 @@ select.ce-gm-input {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 4px 8px;
-  background: var(--ce-bg-surface);
+  padding: 5px 8px;
+  background: var(--ce-bg-toolbar);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
   user-select: none;
-  color: var(--ce-text-primary);
+  color: var(--ce-accent-orange);
+  letter-spacing: 0.02em;
+  border-top: 1px solid rgba(224, 114, 40, 0.15);
   transition: background 80ms;
 }
-.ce-prop-section-hdr:hover { background: var(--ce-bg-raised); }
+.ce-prop-section-hdr:hover { background: var(--ce-bg-panel); }
 .ce-prop-arrow {
   font-size: 9px;
-  color: var(--ce-text-muted);
+  color: var(--ce-accent-orange);
+  opacity: 0.7;
   flex-shrink: 0;
   width: 10px;
 }
@@ -3112,6 +3115,11 @@ select.ce-gm-input {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Read-only info rows (e.g. Type, Aspect) — label stands out bold+white */
+.ce-prop-row:has(.ce-prop-readonly) .ce-prop-row-label {
+  color: var(--ce-text-primary);
+  font-weight: 600;
 }
 
 /* Vec3 inputs */
@@ -3165,18 +3173,18 @@ select.ce-gm-input {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 7px;
+  width: 14px;
   height: 14px;
   flex-shrink: 0;
   background: var(--ce-bg-surface);
   border: 1px solid var(--ce-border);
-  border-radius: 2px;
+  border-radius: 3px;
   cursor: ew-resize;
   user-select: none;
   color: var(--ce-text-muted);
   transition: background 80ms, color 80ms;
 }
-.ce-prop-scrub-handle::before { content: '⋮'; font-size: 9px; line-height: 1; }
+.ce-prop-scrub-handle::before { content: '⠿'; font-size: 9px; line-height: 1; }
 .ce-prop-scrub-handle:hover { background: var(--ce-accent-orange); color: #fff; border-color: var(--ce-accent-orange); }
 
 /* Num input wrapped with scrub handle */
@@ -3218,12 +3226,17 @@ select.ce-gm-input {
   border: none;
 }
 .ce-prop-slider-val {
-  color: var(--ce-text-muted);
+  box-sizing: border-box;
+  width: 52px;
+  flex-shrink: 0;
   font-size: 10px;
   font-family: 'JetBrains Mono', monospace;
-  width: 30px;
   text-align: right;
-  flex-shrink: 0;
+  padding: 2px 3px;
+  color: var(--ce-text-primary);
+  background: var(--ce-bg-raised);
+  border: 1px solid var(--ce-border);
+  border-radius: 3px;
 }
 
 /* Checkbox */
