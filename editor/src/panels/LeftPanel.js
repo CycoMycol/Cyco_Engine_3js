@@ -67,15 +67,13 @@ const FALLBACK_ICON_SVG = `<svg viewBox="0 0 14 14" width="13" height="13" xmlns
 </svg>`;
 
 // IDs that can never be deleted or dragged away
-const PROTECTED = new Set(['root', 'main-camera', 'env-light']);
+const PROTECTED = new Set(['root']);
 
 export class LeftPanel extends BasePanel {
   _buildContent() {
     // ── instance state ────────────────────────────────────────────────────────
     this._nodes = [
-      { id: 'root',        pid: null,   name: 'Scene',        type: 'scene',  open: true,  locked: false, visible: true },
-      { id: 'main-camera', pid: 'root', name: 'Main Camera',  type: 'camera', open: false, locked: false, visible: true },
-      { id: 'env-light',   pid: 'root', name: 'Global Light', type: 'light',  open: false, locked: false, visible: true },
+      { id: 'root', pid: null, name: 'Scene', type: 'scene', open: true, locked: false, visible: true },
     ];
     this._selectedIds  = new Set();   // multi-select set
     this._lastClickId  = null;        // most-recently clicked (for rename/add-child)
@@ -83,28 +81,51 @@ export class LeftPanel extends BasePanel {
     this._dragIds      = [];          // ids currently being dragged
     this._dropInfo     = null;        // { targetId, mode }
     this._groupCounter = 0;
+    this._activeScene     = 'Scene';   // currently active scene name
+    this._scenes          = ['Scene']; // list of scene names
+    this._pendingDelScene = null;      // scene name pending delete confirm
 
     // ── root wrapper ──────────────────────────────────────────────────────────
     const wrap = document.createElement('div');
     wrap.className = 'ce-hierarchy';
 
-    // ── toolbar ───────────────────────────────────────────────────────────────
-    const toolbar = document.createElement('div');
-    toolbar.className = 'ce-hier-toolbar';
-
+    // ── search bar (collapsible, sits above scene row) ───────────────────────
+    const searchBar = document.createElement('div');
+    searchBar.className = 'ce-hier-search-bar';
     const searchInput = document.createElement('input');
     searchInput.className = 'ce-hier-search';
     searchInput.placeholder = 'Search…';
     searchInput.type = 'text';
+    searchBar.appendChild(searchInput);
+    wrap.appendChild(searchBar);
+
+    // ── scene row: dropdown + search toggle + add button ─────────────────────
+    const sceneBar = document.createElement('div');
+    sceneBar.className = 'ce-hier-scene-bar';
+    _hierSceneDd(sceneBar, this);
+
+    const searchToggleBtn = document.createElement('button');
+    searchToggleBtn.className = 'ce-hier-search-toggle';
+    searchToggleBtn.title = 'Search hierarchy';
+    searchToggleBtn.innerHTML = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="4"/><line x1="9.5" y1="9.5" x2="14" y2="14"/></svg>`;
+    searchToggleBtn.addEventListener('click', () => {
+      const open = searchBar.classList.toggle('open');
+      searchToggleBtn.classList.toggle('active', open);
+      if (open) { searchInput.focus(); }
+      else {
+        searchInput.value = '';
+        tree.querySelectorAll('.ce-hier-row').forEach(r => r.style.display = '');
+      }
+    });
+    sceneBar.appendChild(searchToggleBtn);
 
     const addBtn = document.createElement('button');
     addBtn.className = 'ce-hier-add-btn';
     addBtn.textContent = '+';
     addBtn.title = 'Add object';
+    sceneBar.appendChild(addBtn);
 
-    toolbar.appendChild(searchInput);
-    toolbar.appendChild(addBtn);
-    wrap.appendChild(toolbar);
+    wrap.appendChild(sceneBar);
 
     // ── tree ──────────────────────────────────────────────────────────────────
     const tree = document.createElement('div');
@@ -585,5 +606,244 @@ export class LeftPanel extends BasePanel {
       container.appendChild(row);
     }
   }
+}
+
+// ── Scene dropdown helpers ─────────────────────────────────────────────────────
+
+function _hierSceneDd(container, panel) {
+  panel._pendingDelScene = null;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'ce-vp-dd-wrap ce-hier-scene-dd';
+
+  const btn = document.createElement('button');
+  btn.className = 'ce-vp-dd-btn';
+
+  const iconEl = document.createElement('span');
+  iconEl.className = 'ce-vp-dd-icon';
+  iconEl.innerHTML = `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3">
+    <rect x="2" y="4" width="12" height="9" rx="1"/>
+    <path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" stroke-linecap="round"/>
+    <line x1="5" y1="8" x2="11" y2="8"/>
+    <line x1="5" y1="10.5" x2="9" y2="10.5"/>
+  </svg>`;
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'ce-vp-dd-label ce-hier-scene-label';
+  labelEl.textContent = panel._activeScene;
+
+  const arrow = document.createElement('span');
+  arrow.className = 'ce-vp-dd-arrow';
+  arrow.textContent = '▾';
+
+  btn.appendChild(iconEl);
+  btn.appendChild(labelEl);
+  btn.appendChild(arrow);
+  wrap.appendChild(btn);
+
+  const dd = document.createElement('div');
+  dd.className = 'ce-vp-dropdown';
+  wrap.appendChild(dd);
+  container.appendChild(wrap);
+
+  // ── Main view: list all scenes ──────────────────────────────────────────────
+  function rebuildMain() {
+    dd.innerHTML = '';
+    panel._pendingDelScene = null;
+
+    panel._scenes.forEach((name, idx) => {
+      const row = document.createElement('div');
+      row.className = 'ce-vp-dd-row ce-hier-scene-row' + (name === panel._activeScene ? ' selected' : '');
+
+      const radio = document.createElement('span');
+      radio.className = 'ce-vp-dd-radio' + (name === panel._activeScene ? ' checked' : '');
+
+      const lbl = document.createElement('span');
+      lbl.className = 'ce-hier-scene-name';
+      lbl.textContent = name;
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'ce-hier-scene-del';
+      delBtn.innerHTML = '&times;';
+      delBtn.title = 'Remove scene';
+
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (panel._pendingDelScene === name) {
+          // Confirmed — delete
+          if (panel._scenes.length <= 1) return;
+          panel._scenes.splice(panel._scenes.indexOf(name), 1);
+          if (panel._activeScene === name) {
+            panel._activeScene = panel._scenes[0];
+            labelEl.textContent = panel._activeScene;
+          }
+          rebuildMain();
+        } else {
+          // First click — enter pending state
+          const prev = dd.querySelector('.ce-hier-scene-del.pending');
+          if (prev) { prev.classList.remove('pending'); prev.innerHTML = '&times;'; prev.title = 'Remove scene'; }
+          panel._pendingDelScene = name;
+          delBtn.classList.add('pending');
+          delBtn.innerHTML = '&#10003;';
+          delBtn.title = 'Confirm remove';
+        }
+      });
+
+      row.addEventListener('click', (e) => {
+        if (e.target === delBtn) return;
+        e.stopPropagation();
+        panel._activeScene = name;
+        labelEl.textContent = name;
+        panel._pendingDelScene = null;
+        wrap.classList.remove('open');
+      });
+
+      row.appendChild(radio);
+      row.appendChild(lbl);
+      row.appendChild(delBtn);
+      dd.appendChild(row);
+    });
+
+    const sep = document.createElement('div');
+    sep.className = 'ce-vp-dd-sep';
+    dd.appendChild(sep);
+
+    const addRow = document.createElement('div');
+    addRow.className = 'ce-vp-dd-row ce-vp-dd-action';
+    addRow.innerHTML = '<span>+ Add Scene</span>';
+    addRow.addEventListener('click', (e) => { e.stopPropagation(); buildAddView(); });
+    dd.appendChild(addRow);
+  }
+
+  // ── Add-scene sub-view ──────────────────────────────────────────────────────
+  function buildAddView() {
+    dd.innerHTML = '';
+    let activeForm = null;
+
+    const backRow = document.createElement('div');
+    backRow.className = 'ce-vp-dd-row ce-hier-scene-back';
+    backRow.innerHTML = '<span>‹ Back</span>';
+    backRow.addEventListener('click', (e) => { e.stopPropagation(); rebuildMain(); });
+    dd.appendChild(backRow);
+
+    const sep = document.createElement('div');
+    sep.className = 'ce-vp-dd-sep';
+    dd.appendChild(sep);
+
+    // Helper: build the inline name input form
+    function makeInlineForm(suggested, onCreate) {
+      const form = document.createElement('div');
+      form.className = 'ce-hier-scene-inline';
+
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'ce-hier-scene-input';
+      input.value = suggested;
+      input.spellcheck = false;
+
+      const btnRow = document.createElement('div');
+      btnRow.className = 'ce-hier-scene-inline-btns';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'ce-hier-scene-inline-cancel';
+      cancelBtn.textContent = 'Cancel';
+
+      const okBtn = document.createElement('button');
+      okBtn.className = 'ce-hier-scene-inline-ok';
+      okBtn.textContent = 'OK';
+
+      btnRow.appendChild(cancelBtn);
+      btnRow.appendChild(okBtn);
+      form.appendChild(input);
+      form.appendChild(btnRow);
+
+      okBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const name = input.value.trim();
+        if (!name) return;
+        const final = _uniqueSceneName(panel._scenes, name);
+        panel._scenes.push(final);
+        panel._activeScene = final;
+        labelEl.textContent = final;
+        wrap.classList.remove('open');
+      });
+
+      cancelBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        form.remove();
+        activeForm = null;
+      });
+
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter')  okBtn.click();
+        if (e.key === 'Escape') cancelBtn.click();
+      });
+      input.addEventListener('click', (e) => e.stopPropagation());
+
+      return form;
+    }
+
+    function toggleForm(slot, suggested, onCreate) {
+      if (activeForm && activeForm.parentNode === slot) {
+        activeForm.remove();
+        activeForm = null;
+        return;
+      }
+      if (activeForm) { activeForm.remove(); activeForm = null; }
+      activeForm = makeInlineForm(suggested, onCreate);
+      slot.appendChild(activeForm);
+      activeForm.querySelector('.ce-hier-scene-input').select();
+    }
+
+    // New scene
+    const newRow = document.createElement('div');
+    newRow.className = 'ce-vp-dd-row';
+    newRow.innerHTML = `<span class="ce-hier-add-icon">&#9633;</span><span>New scene</span>`;
+    const newFormSlot = document.createElement('div');
+    newRow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleForm(newFormSlot, `Scene ${panel._scenes.length + 1}`);
+    });
+    dd.appendChild(newRow);
+    dd.appendChild(newFormSlot);
+
+    // Duplicate current
+    const dupRow = document.createElement('div');
+    dupRow.className = 'ce-vp-dd-row';
+    dupRow.innerHTML = `<span class="ce-hier-add-icon">&#10063;</span><span>Duplicate &ldquo;${_esc(panel._activeScene)}&rdquo;</span>`;
+    const dupFormSlot = document.createElement('div');
+    dupRow.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleForm(dupFormSlot, `${panel._activeScene} (copy)`);
+    });
+    dd.appendChild(dupRow);
+    dd.appendChild(dupFormSlot);
+  }
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = wrap.classList.contains('open');
+    wrap.classList.remove('open');
+    if (!wasOpen) { rebuildMain(); wrap.classList.add('open'); }
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) {
+      wrap.classList.remove('open');
+      panel._pendingDelScene = null;
+    }
+  });
+}
+
+function _uniqueSceneName(scenes, name) {
+  if (!scenes.includes(name)) return name;
+  let n = 2;
+  while (scenes.includes(`${name} (${n})`)) n++;
+  return `${name} (${n})`;
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 }
 

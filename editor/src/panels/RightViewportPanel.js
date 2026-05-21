@@ -8,10 +8,8 @@ import { BasePanel } from './BasePanel.js';
 export class RightViewportPanel extends BasePanel {
   constructor() {
     super();
-    this._activeTool  = 'translate';
     this._worldSpace  = true;
     this._snapEnabled = false;
-    this._toolBtns    = {};
     this._worldBtn    = null;
     this._snapBtn     = null;
     this._floatBtn    = null;
@@ -36,22 +34,14 @@ export class RightViewportPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
-    const tools = [
-      { id: 'translate', tip: 'Translate  W' },
-      { id: 'rotate',    tip: 'Rotate  E'    },
-      { id: 'scale',     tip: 'Scale  R'     },
-      { id: 'rect',      tip: 'Rect Transform  T' },
-    ];
-    tools.forEach(t => {
-      const btn = _toolBtn(_toolIcon(t.id), t.tip, () => {
-        this._activeTool = t.id;
-        this._refreshToolBtns();
-        document.dispatchEvent(new CustomEvent('cyco-rvp-tool', { detail: t.id }));
-      });
-      btn.dataset.tool = t.id;
-      this._toolBtns[t.id] = btn;
-      bar.appendChild(btn);
-    });
+    // Main Camera & Global Light quick-select buttons
+    bar.appendChild(_toolBtn(_cameraIcon(), 'Main Camera', () => {
+      document.dispatchEvent(new CustomEvent('cyco-select-node', { detail: 'main-camera' }));
+    }));
+
+    bar.appendChild(_toolBtn(_lightIcon(), 'Global Light', () => {
+      document.dispatchEvent(new CustomEvent('cyco-select-node', { detail: 'env-light' }));
+    }));
 
     bar.appendChild(_toolSep());
 
@@ -81,14 +71,7 @@ export class RightViewportPanel extends BasePanel {
     spacer.style.flex = '1';
     bar.appendChild(spacer);
 
-    this._refreshToolBtns();
     return bar;
-  }
-
-  _refreshToolBtns() {
-    Object.entries(this._toolBtns).forEach(([id, btn]) => {
-      btn.classList.toggle('active', id === this._activeTool);
-    });
   }
 
   _addHeaderActions(api) {
@@ -222,4 +205,12 @@ function _toolIcon(id) {
     case 'focus':     return '<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="10" cy="10" r="3"/><line x1="10" y1="2" x2="10" y2="5"/><line x1="10" y1="15" x2="10" y2="18"/><line x1="2" y1="10" x2="5" y2="10"/><line x1="15" y1="10" x2="18" y2="10"/></svg>';
     default: return '';
   }
+}
+
+function _cameraIcon() {
+  return '<svg viewBox="0 0 14 14" width="15" height="15" xmlns="http://www.w3.org/2000/svg"><rect x="1" y="4" width="9" height="7" rx="1" fill="#4ec9b0"/><polygon points="10,5.5 13,4 13,10 10,8.5" fill="#4ec9b0"/><circle cx="5.5" cy="7.5" r="2" fill="#1c3c38" opacity="0.55"/><circle cx="5.5" cy="7.5" r="0.9" fill="#4ec9b0" opacity="0.5"/></svg>';
+}
+
+function _lightIcon() {
+  return '<svg viewBox="0 0 14 14" width="15" height="15" xmlns="http://www.w3.org/2000/svg"><circle cx="7" cy="5.5" r="2.8" fill="#f0c040"/><rect x="5.5" y="8.8" width="3" height="1" rx="0.5" fill="#f0c040"/><rect x="6" y="10.2" width="2" height="1.2" rx="0.5" fill="#d4a820"/><line x1="7" y1="1" x2="7" y2="2" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/><line x1="10.5" y1="5.5" x2="11.5" y2="5.5" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/><line x1="2.5" y1="5.5" x2="3.5" y2="5.5" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/><line x1="9.5" y1="2.5" x2="10.2" y2="1.8" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/><line x1="4.5" y1="2.5" x2="3.8" y2="1.8" stroke="#f0c040" stroke-width="1.2" stroke-linecap="round"/></svg>';
 }

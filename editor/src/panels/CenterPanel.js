@@ -37,9 +37,6 @@ export class CenterPanel extends BasePanel {
     this._renderMode  = 'standard';
     this._cameraView  = 'perspective';
     this._physicsEdit = false;
-    this._activeScene = 'Scene';
-    this._scenes      = ['Scene'];
-    this._sceneHandle  = null;
     this._renderHandle = null;
     this._cameraHandle = null;
     this._vpSizeBtn    = null;
@@ -84,15 +81,6 @@ export class CenterPanel extends BasePanel {
   _buildTopBar() {
     const bar = document.createElement('div');
     bar.className = 'ce-vp-topbar';
-
-    // Scene button
-    this._sceneHandle = this._makeDropdownBtn(
-      bar, _sceneIcon(),
-      () => this._activeScene,
-      () => this._buildSceneDropdown(),
-    );
-
-    bar.appendChild(_vpSep());
 
     // Render mode button
     this._renderHandle = this._makeDropdownBtn(
@@ -268,24 +256,6 @@ export class CenterPanel extends BasePanel {
     }
   }
 
-  _buildSceneDropdown() {
-    const items = [];
-    this._scenes.forEach(name => {
-      items.push(_ddRadioRow(name, name === this._activeScene, () => {
-        this._activeScene = name;
-        this._sceneHandle.refresh();
-      }));
-    });
-    items.push(_ddSep());
-    items.push(_ddActionRow('+ Add Scene', () => {
-      const name = `Scene ${this._scenes.length + 1}`;
-      this._scenes.push(name);
-      this._activeScene = name;
-      this._sceneHandle.refresh();
-    }));
-    return items;
-  }
-
   _buildRenderDropdown() {
     const items = [];
     RENDER_MODES.forEach((m, i) => {
@@ -448,15 +418,6 @@ function _toolIcon(id) {
     </svg>`;
     default: return '';
   }
-}
-
-function _sceneIcon() {
-  return `<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.3">
-    <rect x="2" y="4" width="12" height="9" rx="1"/>
-    <path d="M5 4V3a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v1" stroke-linecap="round"/>
-    <line x1="5" y1="8" x2="11" y2="8"/>
-    <line x1="5" y1="10.5" x2="9" y2="10.5"/>
-  </svg>`;
 }
 
 function _renderIcon() {

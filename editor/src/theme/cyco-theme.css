@@ -773,6 +773,157 @@ html, body {
   color: var(--ce-text-primary);
 }
 
+/* hierarchy scene selector bar */
+.ce-hier-scene-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--ce-border);
+  background: var(--ce-bg-panel);
+}
+.ce-hier-scene-dd {
+  flex: 1;
+  min-width: 0;
+}
+.ce-hier-scene-dd .ce-vp-dd-btn {
+  width: 100%;
+  padding: 5px 8px;
+}
+.ce-hier-scene-dd .ce-vp-dropdown {
+  left: 0;
+  right: 0;
+  min-width: 160px;
+  width: auto;
+}
+/* truncate long scene name in the button */
+.ce-hier-scene-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* scene row inside dropdown */
+.ce-hier-scene-row {
+  display: flex; align-items: center; gap: 6px;
+  padding-right: 6px;
+}
+.ce-hier-scene-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* delete button: red ×, turns green ✓ when pending */
+.ce-hier-scene-del {
+  flex-shrink: 0;
+  width: 18px; height: 18px;
+  background: transparent;
+  border: none; border-radius: 3px;
+  font-size: 14px; line-height: 1;
+  color: #d44;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  opacity: 0.6;
+  transition: opacity 80ms, color 80ms, background 80ms;
+}
+.ce-hier-scene-row:hover .ce-hier-scene-del { opacity: 1; }
+.ce-hier-scene-del.pending {
+  color: #3c3;
+  opacity: 1;
+  background: rgba(60,200,60,0.12);
+}
+
+/* back row in add sub-view */
+.ce-hier-scene-back { color: var(--ce-text-muted); }
+.ce-hier-scene-back:hover { color: var(--ce-text-primary); }
+
+/* inline name form inside the add-scene sub-view */
+.ce-hier-scene-inline {
+  padding: 4px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ce-hier-scene-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--ce-bg-base);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  color: var(--ce-text-primary);
+  font-family: var(--ce-font-family);
+  font-size: 12px;
+  padding: 4px 7px;
+  outline: none;
+}
+.ce-hier-scene-input:focus { border-color: var(--ce-accent-orange); }
+.ce-hier-scene-inline-btns {
+  display: flex;
+  justify-content: flex-start;
+  gap: 5px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.ce-hier-scene-inline-ok {
+  flex-shrink: 0;
+  background: var(--ce-accent-orange);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 3px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ce-hier-scene-inline-ok:hover { filter: brightness(1.12); }
+.ce-hier-scene-inline-cancel {
+  flex-shrink: 0;
+  background: transparent;
+  color: var(--ce-text-muted);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ce-hier-scene-inline-cancel:hover { color: var(--ce-text-primary); background: var(--ce-bg-raised); }
+
+/* icon prefix in add-view rows */
+.ce-hier-add-icon {
+  font-size: 13px; color: var(--ce-text-muted);
+  width: 16px; text-align: center; flex-shrink: 0;
+}
+
+/* collapsible search bar (above scene row) */
+.ce-hier-search-bar {
+  display: none;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--ce-border);
+  background: var(--ce-bg-panel);
+  flex-shrink: 0;
+}
+.ce-hier-search-bar.open {
+  display: flex;
+}
+
+/* search toggle button in scene bar */
+.ce-hier-search-toggle {
+  flex-shrink: 0;
+  width: 24px; height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--ce-text-muted);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0;
+  transition: background 80ms, color 80ms;
+}
+.ce-hier-search-toggle:hover,
+.ce-hier-search-toggle.active { color: var(--ce-accent-orange); background: var(--ce-bg-raised); }
+
 /* toolbar: search box + plus button */
 .ce-hier-toolbar {
   display: flex; align-items: center; gap: 4px;
