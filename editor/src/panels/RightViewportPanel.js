@@ -34,6 +34,16 @@ export class RightViewportPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
+    // Stats toggle
+    const statsBtn = _toolBtn(
+      '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="2" y="13" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="15" rx="1"/><rect x="18" y="2" width="4" height="20" rx="1"/></svg>',
+      'Toggle Stats',
+      () => { window.dispatchEvent(new CustomEvent('cyco-vp-stats-toggle')); }
+    );
+    bar.appendChild(statsBtn);
+
+    bar.appendChild(_toolSep());
+
     // Main Camera & Global Light quick-select buttons
     bar.appendChild(_toolBtn(_cameraIcon(), 'Main Camera', () => {
       document.dispatchEvent(new CustomEvent('cyco-select-node', { detail: 'main-camera' }));

@@ -13,7 +13,7 @@
  * Events consumed:
  *   cyco-renderer-changed  { renderer, type }  — rebuild IBL + pipeline on renderer swap
  *   cyco-rvp-focus         { object }          — lerp camera target to object
- *   cyco-vp-camera-snap    { view }            — snap to Top/Front/Right/etc.
+ *   cyco-vp-camera         { view }            — snap to Top/Front/Right/etc.
  *   cyco-show-properties   { type:'grid'|... } — (no action here, forwarded to RightPanel)
  */
 
@@ -73,7 +73,7 @@ export class ViewportEngine {
 
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
     window.addEventListener('cyco-rvp-focus',               this._onFocus);
-    window.addEventListener('cyco-vp-camera-snap',          this._onCameraSnap);
+    window.addEventListener('cyco-vp-camera',               this._onCameraSnap);
     window.addEventListener('cyco-viewport-container-ready', this._onContainerReady);
   }
 
@@ -398,7 +398,7 @@ export class ViewportEngine {
 
     window.removeEventListener('cyco-renderer-changed',         this._onRendererChanged);
     window.removeEventListener('cyco-rvp-focus',                this._onFocus);
-    window.removeEventListener('cyco-vp-camera-snap',           this._onCameraSnap);
+    window.removeEventListener('cyco-vp-camera',                this._onCameraSnap);
     window.removeEventListener('cyco-viewport-container-ready', this._onContainerReady);
 
     // Dispose scene objects

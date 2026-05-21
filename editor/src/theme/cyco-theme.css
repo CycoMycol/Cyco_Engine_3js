@@ -2304,6 +2304,10 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   border-color: var(--ce-border);
   color: var(--ce-text-primary);
 }
+.ce-vp-hist-btn:hover {
+  background: rgba(224, 114, 40, 0.22) !important;
+  border-color: rgba(224, 114, 40, 0.45) !important;
+}
 .ce-vp-action-btn.is-floating {
   background: rgba(224, 114, 40, 0.18);
   border-color: rgba(224, 114, 40, 0.4);

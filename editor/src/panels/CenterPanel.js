@@ -1,6 +1,7 @@
 ﻿/** CenterPanel.js — Viewport panel with left tool sidebar and top bar */
 
-import { BasePanel } from './BasePanel.js';
+import { BasePanel }    from './BasePanel.js';
+import LayoutManager    from '../layout-manager.js';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,20 @@ export class CenterPanel extends BasePanel {
     this._vpSizeBtn    = null;
     this._vpFloatBtn   = null;  // float button in the topbar
     this._tabSnapBtn   = null;  // snap-back button injected into the dockview tab
+
+    // ── Phase 7: undo/redo/history/play/stats refs ─────────────────────────
+    this._undoBtn      = null;
+    this._redoBtn      = null;
+    this._histWrap     = null;
+    this._playBtn      = null;
+    this._playing      = false;
+    this._history      = [];
+    this._histIndex    = -1;
+
+    this._onHistoryChange = this._onHistoryChange.bind(this);
+    this._onRuntimeState  = this._onRuntimeState.bind(this);
+    window.addEventListener('cyco-history-change', this._onHistoryChange);
+    window.addEventListener('cyco-runtime-state',  this._onRuntimeState);
   }
 
   _buildContent() {
@@ -105,6 +120,67 @@ export class CenterPanel extends BasePanel {
       () => CAMERA_VIEWS.find(v => v.value === this._cameraView)?.label || 'Perspective',
       () => this._buildCameraDropdown(),
     );
+
+    // ── Play / Stop ───────────────────────────────────────────────────────
+    bar.appendChild(_vpSep());
+
+    this._playBtn = document.createElement('button');
+    this._playBtn.className = 'ce-vp-action-btn ce-vp-hist-btn';
+    this._updatePlayBtn();
+    this._playBtn.addEventListener('click', () => {
+      if (this._playing) {
+        window.dispatchEvent(new CustomEvent('cyco-runtime-stop'));
+      } else {
+        window.dispatchEvent(new CustomEvent('cyco-runtime-play'));
+      }
+    });
+    bar.appendChild(this._playBtn);
+
+    // ── Undo / History / Redo ─────────────────────────────────────────────
+    bar.appendChild(_vpSep());
+
+    this._undoBtn = document.createElement('button');
+    this._undoBtn.className = 'ce-vp-action-btn ce-vp-hist-btn';
+    this._undoBtn.title = 'Undo';
+    this._undoBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 .49-4.91"></path></svg>';
+    this._undoBtn.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('cyco-undo'));
+    });
+    bar.appendChild(this._undoBtn);
+
+    // H — history dropdown
+    this._histWrap = document.createElement('div');
+    this._histWrap.className = 'ce-vp-dd-wrap';
+    const histBtn = document.createElement('button');
+    histBtn.className = 'ce-vp-action-btn ce-vp-hist-btn';
+    histBtn.title = 'History';
+    histBtn.textContent = 'H';
+    histBtn.style.cssText = 'color:var(--ce-accent-orange,#e07228);font-weight:bold;font-size:15px;min-width:22px;padding:0 5px;border-radius:3px;';
+    const histDd = document.createElement('div');
+    histDd.className = 'ce-vp-dropdown';
+    histDd.style.minWidth = '180px';
+    this._histWrap.appendChild(histBtn);
+    this._histWrap.appendChild(histDd);
+    bar.appendChild(this._histWrap);
+    histBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const wasOpen = this._histWrap.classList.contains('open');
+      this._closeAllDropdowns();
+      if (!wasOpen) {
+        histDd.innerHTML = '';
+        this._buildHistoryDropdown().forEach(el => histDd.appendChild(el));
+        this._histWrap.classList.add('open');
+      }
+    });
+
+    this._redoBtn = document.createElement('button');
+    this._redoBtn.className = 'ce-vp-action-btn ce-vp-hist-btn';
+    this._redoBtn.title = 'Redo';
+    this._redoBtn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"></polyline><path d="M20.49 15a9 9 0 1 1-.49-4.91"></path></svg>';
+    this._redoBtn.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('cyco-redo'));
+    });
+    bar.appendChild(this._redoBtn);
 
     // ── Right-side panel actions ──────────────────────────────────────────
     const spacer = document.createElement('div');
@@ -270,6 +346,7 @@ export class CenterPanel extends BasePanel {
       items.push(_ddRadioRow(m.label, m.value === this._renderMode, () => {
         this._renderMode = m.value;
         this._renderHandle.refresh();
+        window.dispatchEvent(new CustomEvent('cyco-vp-rendermode', { detail: { mode: m.value } }));
       }));
       if (i === 0) items.push(_ddSep()); // separator after Wireframe
     });
@@ -286,9 +363,90 @@ export class CenterPanel extends BasePanel {
       items.push(_ddRadioRow(v.label, v.value === this._cameraView, () => {
         this._cameraView = v.value;
         this._cameraHandle.refresh();
+        window.dispatchEvent(new CustomEvent('cyco-vp-camera', { detail: { view: v.value } }));
+        if (v.value === 'camera') this._openCameraViewPanel();
       }));
     });
     return items;
+  }
+
+  /** Open CameraViewPanel as a floating dockview panel (or focus if already open). */
+  _openCameraViewPanel() {
+    const api = LayoutManager.api;
+    if (!api) return;
+    const existing = api.getPanel('camera-view-panel');
+    if (existing) {
+      try { existing.api.setActive(); } catch (_) {}
+      return;
+    }
+    try {
+      api.addPanel({
+        id:        'camera-view-panel',
+        component: 'CameraViewPanel',
+        title:     'Camera View',
+        floating:  { width: 320, height: 240 },
+      });
+    } catch (e) {
+      console.warn('[CenterPanel] Could not open CameraViewPanel:', e);
+    }
+  }
+
+  // ── Phase 7: event handlers ───────────────────────────────────────────────
+
+  _onHistoryChange(e) {
+    const { history, currentIndex } = e.detail;
+    this._history   = history   ?? [];
+    this._histIndex = currentIndex ?? -1;
+    const canUndo = this._histIndex >= 0;
+    const canRedo = this._histIndex < this._history.length - 1;
+    if (this._undoBtn) this._undoBtn.style.opacity = canUndo ? '1' : '0.4';
+    if (this._redoBtn) this._redoBtn.style.opacity = canRedo ? '1' : '0.4';
+  }
+
+  _onRuntimeState(e) {
+    this._playing = !!e.detail?.playing;
+    this._updatePlayBtn();
+  }
+
+  _updatePlayBtn() {
+    if (!this._playBtn) return;
+    if (this._playing) {
+      this._playBtn.innerHTML = '&#x2B21;'; // ⬡ stop
+      this._playBtn.title     = 'Stop';
+      this._playBtn.style.color = '#e84040';
+    } else {
+      this._playBtn.innerHTML = '&#x25B6;'; // ▶ play
+      this._playBtn.title     = 'Play';
+      this._playBtn.style.color = '#40c040';
+    }
+  }
+
+  _buildHistoryDropdown() {
+    if (this._history.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ce-vp-dd-row';
+      empty.style.opacity = '0.4';
+      const lbl = document.createElement('span');
+      lbl.textContent = 'No history';
+      empty.appendChild(lbl);
+      return [empty];
+    }
+    return this._history.map((entry, i) => {
+      const row = document.createElement('div');
+      row.className = 'ce-vp-dd-row' + (i === this._histIndex ? ' selected' : '');
+      const radio = document.createElement('span');
+      radio.className = 'ce-vp-dd-radio' + (i === this._histIndex ? ' checked' : '');
+      const lbl = document.createElement('span');
+      lbl.textContent = entry.name;
+      row.appendChild(radio);
+      row.appendChild(lbl);
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.__cyco?.commandManager?.jumpTo(i);
+        this._histWrap?.classList.remove('open');
+      });
+      return row;
+    });
   }
 }
 
