@@ -38,7 +38,21 @@ export class RightViewportPanel extends BasePanel {
     const statsBtn = _toolBtn(
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="2" y="13" width="4" height="9" rx="1"/><rect x="10" y="7" width="4" height="15" rx="1"/><rect x="18" y="2" width="4" height="20" rx="1"/></svg>',
       'Toggle Stats',
-      () => { window.dispatchEvent(new CustomEvent('cyco-vp-stats-toggle')); }
+      () => {
+        const dvApi = window.__cyco?.dockviewApi;
+        if (!dvApi) return;
+        const existing = dvApi.getPanel('stats-panel');
+        if (existing) {
+          existing.api.close();
+        } else {
+          dvApi.addPanel({
+            id:        'stats-panel',
+            component: 'StatsPanel',
+            title:     'Stats',
+            position:  { referencePanel: 'properties', direction: 'below' },
+          });
+        }
+      }
     );
     bar.appendChild(statsBtn);
 

@@ -13,6 +13,7 @@ import { ToolbarPanel }   from './panels/ToolbarPanel.js';
 import { LeftToolbarPanel }    from './panels/LeftToolbarPanel.js';
 import { RightViewportPanel } from './panels/RightViewportPanel.js';
 import { CameraViewPanel }    from './panels/CameraViewPanel.js';
+import { StatsPanel }         from './panels/StatsPanel.js';
 
 // ── Default layout snapshot ────────────────────────────────────────────────────
 // Captured from the user's preferred arrangement:
@@ -36,6 +37,7 @@ export function initLayout(container) {
         case 'LeftToolbarPanel':    return new LeftToolbarPanel();
         case 'RightViewportPanel': return new RightViewportPanel();
         case 'CameraViewPanel':    return new CameraViewPanel();
+        case 'StatsPanel':         return new StatsPanel();
         default: throw new Error(`Unknown component: ${options.name}`);
       }
     },

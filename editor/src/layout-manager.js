@@ -134,18 +134,20 @@ const LayoutManager = {
       }
       return;
     }
-    // Validate that bar panels are present in the layout.
-    // (Old layouts pre-dating dockable bars are already caught above.)
+    // Validate that bar panels are present AND their sizes are sane.
+    // A corrupted layout (e.g. from a mis-collapsed grid tree) shows menu-bar-panel
+    // with a huge size (e.g. 779) instead of ~30px.  Reject it.
     try {
       const data = JSON.parse(raw);
-      const layoutStr = JSON.stringify((data.layout ?? data)?.grid ?? {});
+      const layout = data.layout ?? data;
+      const layoutStr = JSON.stringify(layout?.grid ?? {});
       const barsPresent =
         layoutStr.includes('"menu-bar-panel"') &&
         layoutStr.includes('"toolbar-panel"') &&
         layoutStr.includes('"left-toolbar"') &&
         layoutStr.includes('"right-viewport"');
-      if (!barsPresent) {
-        console.info('[Cyco] Saved layout is missing bar panels; resetting.');
+      if (!barsPresent || !this._isLayoutSane(layout)) {
+        console.info('[Cyco] Saved layout is invalid or corrupted; resetting to default.');
         localStorage.removeItem(AUTO_SAVE_KEY);
         if (this._defaultLayout) {
           this._setPendingOrientFromLayout(this._defaultLayout);
@@ -430,8 +432,12 @@ const LayoutManager = {
    * in the grid (top-left) rather than floating.
    */
   _stripTransientPanels(layout) {
-    const TRANSIENT = new Set(['camera-view']);
+    const TRANSIENT = new Set(['camera-view', 'stats-panel']);
     if (!layout) return layout;
+
+    // Early exit: if no transient panels exist in this layout, don't touch the grid tree.
+    const hasTransient = [...TRANSIENT].some(id => layout.panels?.[id]);
+    if (!hasTransient) return layout;
 
     // Remove from panels map
     for (const id of TRANSIENT) delete layout.panels?.[id];
@@ -462,12 +468,53 @@ const LayoutManager = {
       return { ...node, data: { ...node.data, views, activeView } };
     }
     if (node.type === 'branch') {
+      const origLen = (node.data ?? []).length;
       const data = (node.data ?? []).map(c => this._stripGridNode(c, transient)).filter(Boolean);
       if (!data.length) return null;
-      if (data.length === 1) return data[0];
+      // Only collapse to the child if something was actually removed from a multi-child branch.
+      // NEVER collapse if the branch already had 1 child — dockview uses a single-child root
+      // wrapper by design, and collapsing it destroys the entire grid structure.
+      if (data.length === 1 && origLen > 1) return data[0];
       return { ...node, data };
     }
     return node;
+  },
+
+  /**
+   * Returns true if the layout looks structurally sane.
+   * Rejects layouts where the menu-bar or toolbar have nonsensical sizes
+   * (a sign that the grid tree was collapsed or corrupted).
+   */
+  _isLayoutSane(layout) {
+    try {
+      // Find the leaf size for a given panel ID by walking the grid tree.
+      const findLeafSize = (node, id) => {
+        if (!node) return null;
+        if (node.type === 'leaf') {
+          return (node.data?.views ?? []).includes(id) ? node.size : null;
+        }
+        for (const child of (node.data ?? [])) {
+          const found = findLeafSize(child, id);
+          if (found !== null) return found;
+        }
+        return null;
+      };
+      const root = layout?.grid?.root;
+      const menuSize = findLeafSize(root, 'menu-bar-panel');
+      const toolbarSize = findLeafSize(root, 'toolbar-panel');
+      // menu-bar should be ~30px, toolbar ~32px — reject if wildly wrong
+      if (menuSize !== null && (menuSize > 80 || menuSize < 10)) return false;
+      if (toolbarSize !== null && (toolbarSize > 80 || toolbarSize < 10)) return false;
+      // Reject if center-viewport is merged into a group with other content panels
+      // (all panels sharing size=100 is dockview's "container was 0" artifact)
+      const centerSize = findLeafSize(root, 'center-viewport');
+      if (centerSize !== null && centerSize <= 100) {
+        const menuSize2 = findLeafSize(root, 'menu-bar-panel');
+        // If menu-bar is also 100, everything is 100 → corrupted
+        if (menuSize2 !== null && menuSize2 <= 100) return false;
+      }
+      return true;
+    } catch(_) { return true; } // be permissive if we can't tell
   },
 
   _scheduleAutoSave() {
