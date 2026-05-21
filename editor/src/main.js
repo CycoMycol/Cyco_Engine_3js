@@ -1,13 +1,33 @@
 /**
  * main.js — app entry point.
  * Bootstraps the editor: dockview layout (includes menu bar + toolbar panels), theme.
+ * Then initialises the Three.js viewport system in the correct dependency order.
  */
+
+// ── Three.js global flags — MUST be set before any other THREE usage ──────────
+import * as THREE from 'three';
+THREE.ColorManagement.enabled = true; // ensure correct sRGB handling
+THREE.Cache.enabled           = true; // asset deduplication across loaders
 
 import ThemeManager      from './theme/theme-manager.js';
 import LayoutManager     from './layout-manager.js';
 import { initLayout, DEFAULT_LAYOUT }    from './layout.js';
 import ProjectManager    from './project/ProjectManager.js';
 import GameManager       from './ui/GameManager.js';
+
+// ── Viewport modules ───────────────────────────────────────────────────────────
+import { RendererManager }        from './viewport/RendererManager.js';
+import { ViewportEngine }         from './viewport/ViewportEngine.js';
+import { SceneManager }           from './viewport/SceneManager.js';
+import { ObjectFactory }          from './viewport/ObjectFactory.js';
+import { SelectionManager }       from './viewport/SelectionManager.js';
+import { TransformGizmo }         from './viewport/TransformGizmo.js';
+import { RenderModeManager }      from './viewport/RenderModeManager.js';
+import { PostProcessingPipeline } from './viewport/PostProcessingPipeline.js';
+import { CommandManager }         from './viewport/CommandManager.js';
+import { GameRuntime }            from './viewport/GameRuntime.js';
+import { InputManager }           from './viewport/InputManager.js';
+import { ViewportStats }          from './viewport/ViewportStats.js';
 
 const app = document.getElementById('app');
 
@@ -47,6 +67,7 @@ requestAnimationFrame(() => {
 
 // ── 4. Restore saved theme (or apply default Dark Coffee preset) ───────────────
 ThemeManager.init();
+
 // ── 5. Migrate any legacy project data (no project is auto-opened) ───────────—
 ProjectManager.init();
 
@@ -54,3 +75,56 @@ ProjectManager.init();
 document.addEventListener('cyco-action', (e) => {
   if (e.detail === 'game-manager') GameManager.open();
 });
+
+// ── 7. Viewport system bootstrap (Section 6 — VIEWPORT_PLAN.md) ───────────────
+// Instantiation order matters — each module registers its own event listeners
+// in its constructor, before the viewport is live, so no events are missed.
+
+// Shared LoadingManager — passed to all loaders
+const loadingManager = new THREE.LoadingManager();
+loadingManager.onProgress = (url, loaded, total) => {
+  window.dispatchEvent(new CustomEvent('cyco-loading-progress', {
+    detail: { url, loaded, total, pct: Math.round((loaded / total) * 100) }
+  }));
+};
+
+// Core renderer + viewport
+const rendererManager       = new RendererManager();
+const viewportEngine        = new ViewportEngine(rendererManager, loadingManager);
+
+// Scene + objects
+const sceneManager          = new SceneManager();
+const objectFactory         = new ObjectFactory(sceneManager, loadingManager);
+
+// Selection + interaction
+const selectionManager      = new SelectionManager(viewportEngine);
+const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager);
+
+// Rendering modes + post-processing
+const renderModeManager     = new RenderModeManager(viewportEngine);   // eslint-disable-line no-unused-vars
+const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
+
+// Undo/redo + play mode
+const commandManager        = new CommandManager();
+const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, selectionManager, transformGizmo); // eslint-disable-line no-unused-vars
+
+// Input + stats
+const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
+const viewportStats         = new ViewportStats(viewportEngine); // eslint-disable-line no-unused-vars
+
+// ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
+// event dispatched by CenterPanel when its canvas div is inserted into the DOM.
+// No manual init() call needed here.
+
+// Export modules to window for debugging
+if (typeof window !== 'undefined') {
+  window.__cyco = {
+    rendererManager,
+    viewportEngine,
+    sceneManager,
+    objectFactory,
+    selectionManager,
+    transformGizmo,
+    commandManager,
+  };
+}

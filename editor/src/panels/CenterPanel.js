@@ -57,11 +57,19 @@ export class CenterPanel extends BasePanel {
     body.className = 'ce-viewport-body';
     const vp = document.createElement('div');
     vp.className = 'ce-viewport-canvas';
+    vp.id = 'cyco-viewport-canvas';
     const lbl = document.createElement('div');
     lbl.className = 'ce-panel-label';
+    lbl.id = 'cyco-viewport-placeholder-label';
     lbl.textContent = 'Viewport';
     vp.appendChild(lbl);
     body.appendChild(vp);
+
+    // Notify ViewportEngine that its container is ready (dispatched after this frame
+    // so the element is attached to the DOM before ViewportEngine.init() runs).
+    requestAnimationFrame(() => {
+      window.dispatchEvent(new CustomEvent('cyco-viewport-container-ready', { detail: { container: vp } }));
+    });
 
     root.appendChild(body);
 
