@@ -14,11 +14,9 @@ export class LeftToolbarPanel extends BasePanel {
   constructor() {
     super();
     this._activeTool  = 'translate';
-    this._worldSpace  = true;
-    this._snapEnabled = false;
+    this._viewMode    = '3d';
     this._toolBtns    = {};
-    this._worldBtn    = null;
-    this._snapBtn     = null;
+    this._viewBtns    = {};
     this._floatBtn    = null;
   }
 
@@ -71,30 +69,21 @@ export class LeftToolbarPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
-    // World / Local toggle
-    this._worldBtn = _toolBtn(_toolIcon('world'), 'World Space', () => {
-      this._worldSpace = !this._worldSpace;
-      this._worldBtn.title     = this._worldSpace ? 'World Space' : 'Local Space';
-      this._worldBtn.innerHTML = _toolIcon(this._worldSpace ? 'world' : 'local');
-      this._worldBtn.classList.toggle('active', !this._worldSpace);
-      document.dispatchEvent(new CustomEvent('cyco-vp-world', { detail: this._worldSpace }));
+    // 2D / 3D / UI view-mode buttons
+    const VIEW_MODES = [
+      { id: '2d', label: '2D', color: '#4ec9b0', title: '2D Mode' },
+      { id: '3d', label: '3D', color: '#e07840', title: '3D Mode' },
+      { id: 'ui', label: 'UI', color: '#9060d0', title: 'UI Mode' },
+    ];
+    VIEW_MODES.forEach(m => {
+      const btn = _modeBtn(m.label, m.color, m.title, () => {
+        this._viewMode = m.id;
+        this._refreshViewBtns();
+        document.dispatchEvent(new CustomEvent('cyco-vp-viewmode', { detail: m.id }));
+      });
+      this._viewBtns[m.id] = btn;
+      bar.appendChild(btn);
     });
-    bar.appendChild(this._worldBtn);
-
-    // Snap toggle
-    this._snapBtn = _toolBtn(_toolIcon('snap'), 'Toggle Grid Snapping', () => {
-      this._snapEnabled = !this._snapEnabled;
-      this._snapBtn.classList.toggle('active', this._snapEnabled);
-      document.dispatchEvent(new CustomEvent('cyco-vp-snap', { detail: this._snapEnabled }));
-    });
-    bar.appendChild(this._snapBtn);
-
-    bar.appendChild(_toolSep());
-
-    // Focus
-    bar.appendChild(_toolBtn(_toolIcon('focus'), 'Focus Selection  F', () => {
-      document.dispatchEvent(new CustomEvent('cyco-vp-focus'));
-    }));
 
     // Spacer — fills remaining space so handle stays at top
     const spacer = document.createElement('div');
@@ -102,6 +91,7 @@ export class LeftToolbarPanel extends BasePanel {
     bar.appendChild(spacer);
 
     this._refreshToolBtns();
+    this._refreshViewBtns();
     return bar;
   }
 
@@ -117,6 +107,12 @@ export class LeftToolbarPanel extends BasePanel {
     }
     const rb = this._toolBtns['rect'];
     if (rb) rb.classList.toggle('active', this._activeTool === 'rect');
+  }
+
+  _refreshViewBtns() {
+    Object.entries(this._viewBtns).forEach(([id, btn]) => {
+      btn.classList.toggle('active', id === this._viewMode);
+    });
   }
 
   // ── Header actions (drag handle) ────────────────────────────────────────────
@@ -306,4 +302,14 @@ function _toolTip(id) {
     case 'rect':      return 'Rect Transform  T';
     default:          return '';
   }
+}
+
+function _modeBtn(label, color, tip, onClick) {
+  const btn = document.createElement('button');
+  btn.className = 'ce-vp-tool-btn ce-vp-mode-btn';
+  btn.title = tip;
+  btn.style.setProperty('--mode-color', color);
+  btn.textContent = label;
+  btn.addEventListener('click', onClick);
+  return btn;
 }
