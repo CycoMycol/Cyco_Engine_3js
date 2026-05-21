@@ -35,6 +35,7 @@
   --ce-accent-text:        #ffffff;   /* auto-set by ThemeManager: contrast text on accent bg */
   --ce-accent-green-text:  #ffffff;
   --ce-border:             #3d3028;
+  --ce-border-width:       1px;
   --ce-sash-hover:    #e07228;
 
   /* Per-surface overrides */
@@ -82,7 +83,7 @@ html, body {
 ::-webkit-scrollbar-track { background: var(--ce-scrollbar-track); }
 ::-webkit-scrollbar-thumb {
   background: var(--ce-scrollbar-thumb);
-  border-radius: 4px;
+  border-radius: 8px;
   border: 2px solid var(--ce-scrollbar-track);
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--ce-accent-orange); }
@@ -106,7 +107,7 @@ html, body {
   height: 30px;
   min-height: 30px;
   background: var(--ce-bg-menubar);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding: 0 8px;
   user-select: none;
   position: relative;
@@ -147,7 +148,7 @@ html, body {
   color: var(--ce-text-primary);
   cursor: pointer;
   white-space: nowrap;
-  border-radius: 3px;
+  border-radius: 6px;
   transition: background 100ms;
 }
 .menu-item:hover,
@@ -165,8 +166,8 @@ html, body {
   left: 0;
   min-width: 200px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   z-index: 2000;
   padding: 4px 0;
@@ -219,8 +220,8 @@ html, body {
   left: 100%;
   min-width: 200px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   z-index: 2001;
   padding: 4px 0;
@@ -238,7 +239,7 @@ html, body {
   height: 32px;
   min-height: 32px;
   background: var(--ce-bg-toolbar);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding: 0 8px;
   gap: 4px;
   user-select: none;
@@ -252,7 +253,7 @@ html, body {
   padding: 0 9px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 9px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-sm);
@@ -283,8 +284,8 @@ html, body {
   z-index: 9000;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--ce-border);
-  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.5);
   overflow: visible; /* allow dropdowns to escape the window */
 }
@@ -293,8 +294,8 @@ html, body {
 .ce-bar-float-grip {
   height: 8px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
-  border-radius: 5px 5px 0 0;
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px 9px 0 0;
   cursor: grab;
   flex-shrink: 0;
   display: flex;
@@ -317,14 +318,14 @@ html, body {
 .ce-bar-float-window #menu-bar,
 .ce-bar-float-window #toolbar {
   border-bottom: none;
-  border-radius: 0 0 5px 5px;
+  border-radius: 0 0 9px 9px;
 }
 
 /* Left toolbar inside float window: no side borders, rounded bottom */
 .ce-bar-float-window .ce-vp-lefttool {
   border-right: none;
   border-left:  none;
-  border-radius: 0 0 5px 5px;
+  border-radius: 0 0 9px 9px;
 }
 
 /* Float window for the left toolbar — keep it narrow */
@@ -336,7 +337,7 @@ html, body {
   z-index: 8999;
   background: rgba(224, 114, 40, 0.18);
   border: 2px solid var(--ce-accent-orange);
-  border-radius: 4px;
+  border-radius: 8px;
   pointer-events: none;
   display: none;
 }
@@ -353,7 +354,7 @@ html, body {
 /* Right-docked: flip border to left side */
 .ce-vp-lefttool.is-right {
   border-right: none;
-  border-left: 1px solid var(--ce-border);
+  border-left: var(--ce-border-width) solid var(--ce-border);
 }
 
 /* Top / Bottom docked: become a horizontal bar */
@@ -368,8 +369,8 @@ html, body {
   padding: 0 6px;
   align-self: auto;
 }
-.ce-vp-lefttool.is-top    { border-bottom: 1px solid var(--ce-border); }
-.ce-vp-lefttool.is-bottom { border-top:    1px solid var(--ce-border); }
+.ce-vp-lefttool.is-top    { border-bottom: var(--ce-border-width) solid var(--ce-border); }
+.ce-vp-lefttool.is-bottom { border-top:    var(--ce-border-width) solid var(--ce-border); }
 
 /* Separators rotate in horizontal mode */
 .ce-vp-lefttool.is-top .ce-vp-tool-sep,
@@ -388,7 +389,7 @@ html, body {
   height: 20px;
   background: transparent;
   border: none;
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ce-text-muted);
   cursor: pointer;
   padding: 0;
@@ -426,7 +427,7 @@ html, body {
   height: 22px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 9px;
   color: var(--ce-text-muted);
   cursor: pointer;
   transition: background 100ms, color 100ms, border-color 100ms;
@@ -453,12 +454,12 @@ html, body {
 
 /* ─── Panel frame borders & roundness ────────────────────────────────────── */
 .cyco-engine-theme .dv-resize-container {
-  border-radius: 6px;
+  border-radius: 10px;
   overflow: hidden;
 }
 .cyco-engine-theme .dv-groupview {
-  border-radius: 6px;
-  border: 1px solid var(--ce-border) !important;
+  border-radius: 10px;
+  border: var(--ce-border-width) solid var(--ce-border) !important;
   overflow: hidden;
 }
 
@@ -489,16 +490,16 @@ html, body {
 .cyco-engine-theme .dv-default-tab {
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-sm);
-  border-radius: 9px 9px 0 0;
+  border-radius: 14px 14px 0 0;
 }
 .cyco-engine-theme .dv-tabs-and-actions-container {
-  border-radius: 8px 8px 0 0;
+  border-radius: 12px 12px 0 0;
   padding: 2px 4px 0;
   gap: 2px;
   /* background driven by --dv-tabs-and-actions-container-background-color */
 }
 .cyco-engine-theme .dv-tab {
-  border-radius: 9px 9px 0 0 !important;
+  border-radius: 14px 14px 0 0 !important;
   margin: 0 1px;
 }
 /* Tab colors driven by dockview's own CSS vars (set in applyTheme).
@@ -513,7 +514,7 @@ html, body {
   height: 20px;
   background: transparent;
   border: none;
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ce-text-muted);
   cursor: pointer;
   font-size: 12px;
@@ -582,7 +583,7 @@ html, body {
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
-  border-left: 1px solid var(--ce-border);
+  border-left: var(--ce-border-width) solid var(--ce-border);
   padding-left: 6px;
   padding-right: 4px;
   /* Absolute position keeps the handle at the visible right edge regardless
@@ -611,7 +612,7 @@ html, body {
   background: transparent;
   color: var(--ce-text-muted);
   cursor: grab;
-  border-radius: 3px;
+  border-radius: 6px;
   flex-shrink: 0;
   transition: background 80ms, color 80ms;
 }
@@ -636,7 +637,7 @@ html, body {
   width: 32px;
   min-width: 32px;
   border-bottom: none;
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   padding: 4px 0;
 }
 .ce-bar-vertical .menu-left,
@@ -662,7 +663,7 @@ html, body {
   flex-direction: column;
   border-left: none;
   border-top: none;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding-left: 0;
   padding-right: 0;
   padding-top: 0;
@@ -680,7 +681,7 @@ html, body {
 .ce-drop-indicator {
   box-sizing: border-box;
   border: 2px solid rgba(255,255,255,0.08);
-  border-radius: 4px;
+  border-radius: 8px;
   background: rgba(255,255,255,0.03);
   transition: background 100ms, border-color 100ms;
 }
@@ -722,7 +723,7 @@ html, body {
   height: 36px !important;
   padding: 0 6px !important;
   border-right: none !important;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   align-self: auto !important;
   background: var(--ce-bg-toolbar) !important;
 }
@@ -780,7 +781,7 @@ html, body {
   gap: 4px;
   padding-right: 4px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-panel);
 }
 .ce-hier-scene-dd {
@@ -818,7 +819,7 @@ html, body {
   flex-shrink: 0;
   width: 18px; height: 18px;
   background: transparent;
-  border: none; border-radius: 3px;
+  border: none; border-radius: 6px;
   font-size: 14px; line-height: 1;
   color: #d44;
   cursor: pointer;
@@ -849,8 +850,8 @@ html, body {
   width: 100%;
   box-sizing: border-box;
   background: var(--ce-bg-base);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: 12px;
@@ -870,7 +871,7 @@ html, body {
   background: var(--ce-accent-orange);
   color: #fff;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   font-size: 11px;
   padding: 3px 12px;
   cursor: pointer;
@@ -881,8 +882,8 @@ html, body {
   flex-shrink: 0;
   background: transparent;
   color: var(--ce-text-muted);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   font-size: 11px;
   padding: 3px 10px;
   cursor: pointer;
@@ -900,7 +901,7 @@ html, body {
 .ce-hier-search-bar {
   display: none;
   padding: 4px 6px;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-panel);
   flex-shrink: 0;
 }
@@ -914,7 +915,7 @@ html, body {
   width: 24px; height: 24px;
   background: transparent;
   border: none;
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--ce-text-muted);
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -928,15 +929,15 @@ html, body {
 .ce-hier-toolbar {
   display: flex; align-items: center; gap: 4px;
   padding: 5px 6px 4px;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-panel);
   flex-shrink: 0;
 }
 .ce-hier-search {
   flex: 1; min-width: 0; box-sizing: border-box;
   background: var(--ce-bg-base);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   padding: 3px 7px;
   color: var(--ce-text-primary);
   font-size: 11px;
@@ -948,7 +949,7 @@ html, body {
   width: 22px; height: 22px;
   background: var(--ce-accent-orange);
   color: #fff;
-  border: none; border-radius: 4px;
+  border: none; border-radius: 8px;
   font-size: 16px; line-height: 1;
   cursor: pointer;
   display: flex; align-items: center; justify-content: center;
@@ -988,7 +989,7 @@ html, body {
   width: 12px; height: 12px; flex-shrink: 0;
   margin: 0 3px 0 4px;
   border: 1px solid var(--ce-text-muted);
-  border-radius: 2px;
+  border-radius: 4px;
   background: transparent;
   cursor: pointer;
   opacity: 0.35;
@@ -1043,7 +1044,7 @@ html, body {
 
 .ce-hier-rename-input {
   flex: 1; background: var(--ce-bg-base); border: 1px solid var(--ce-accent-orange);
-  border-radius: 2px; padding: 0 4px; color: var(--ce-text-primary);
+  border-radius: 4px; padding: 0 4px; color: var(--ce-text-primary);
   font-size: 12px; outline: none; min-width: 0;
 }
 
@@ -1051,8 +1052,8 @@ html, body {
 .ce-ctx-menu {
   position: fixed; z-index: 9999;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 5px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px;
   padding: 4px 0;
   min-width: 170px;
   box-shadow: 0 6px 20px rgba(0,0,0,0.5);
@@ -1073,14 +1074,14 @@ html, body {
 .ce-ctx-arrow { font-size: 9px; color: var(--ce-text-muted); flex-shrink: 0; }
 .ce-ctx-sep {
   margin: 3px 0;
-  border-top: 1px solid var(--ce-border);
+  border-top: var(--ce-border-width) solid var(--ce-border);
 }
 
 /* ─── Theme Dialog ────────────────────────────────────────────────────────── */
 dialog.ce-theme-dialog {
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-base);
@@ -1117,7 +1118,7 @@ dialog.ce-theme-dialog::backdrop {
   appearance: none;
   -webkit-appearance: none;
   height: 4px;
-  border-radius: 2px;
+  border-radius: 4px;
   background: var(--ce-border);
   outline: none;
   cursor: pointer;
@@ -1155,7 +1156,7 @@ dialog.ce-theme-dialog::backdrop {
 .ce-inspect-toggle-btn {
   font-size: 11px;
   padding: 4px 10px;
-  border-radius: 4px;
+  border-radius: 8px;
   opacity: 0.85;
   transition: opacity 100ms, background 100ms;
 }
@@ -1182,7 +1183,7 @@ dialog.ce-theme-dialog::backdrop {
 .ce-swatch-btn {
   width: 44px;
   height: 34px;
-  border-radius: 5px;
+  border-radius: 9px;
   border: 2px solid var(--ce-border);
   cursor: pointer;
   transition: border-color 100ms, transform 80ms;
@@ -1202,8 +1203,8 @@ dialog.ce-theme-dialog::backdrop {
   flex-direction: column;
   gap: 6px;
   margin-bottom: 12px;
-  border: 1px solid var(--ce-border);
-  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 10px;
   padding: 10px;
   background: var(--ce-bg-panel);
 }
@@ -1211,7 +1212,7 @@ dialog.ce-theme-dialog::backdrop {
 .ce-blend-row {
   display: flex;
   gap: 0;
-  border-radius: 4px;
+  border-radius: 8px;
   overflow: hidden;
   cursor: pointer;
   border: 2px solid transparent;
@@ -1244,8 +1245,8 @@ dialog.ce-theme-dialog::backdrop {
 }
 .ce-select {
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-base);
@@ -1260,8 +1261,8 @@ dialog.ce-theme-dialog::backdrop {
   width: 30px;
   height: 26px;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-sm);
@@ -1280,12 +1281,12 @@ dialog.ce-theme-dialog::backdrop {
   gap: 8px;
   margin-top: 4px;
   padding-top: 12px;
-  border-top: 1px solid var(--ce-border);
+  border-top: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-btn {
   padding: 6px 16px;
-  border-radius: 4px;
-  border: 1px solid var(--ce-border);
+  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-panel);
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
@@ -1325,7 +1326,7 @@ dialog.ce-theme-dialog::backdrop {
   flex-shrink: 0;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 3px;
+  border-radius: 6px;
   color: var(--ce-text-muted);
   font-size: 13px;
   line-height: 1;
@@ -1363,8 +1364,8 @@ dialog.ce-theme-dialog::backdrop {
 /* ─── cePrompt mini dialog ────────────────────────────────────────────────── */
 dialog.ce-mini-dialog {
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-base);
@@ -1386,8 +1387,8 @@ dialog.ce-mini-dialog::backdrop {
   width: 100%;
   padding: 7px 10px;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: var(--ce-font-size-base);
@@ -1410,8 +1411,8 @@ dialog.ce-mini-dialog::backdrop {
   z-index: 20002;
   width: 256px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
   padding: 10px;
   box-shadow: 0 8px 32px rgba(0,0,0,0.65);
   user-select: none;
@@ -1425,8 +1426,8 @@ dialog.ce-mini-dialog::backdrop {
   height: 22px;
   margin: -10px -10px 8px -10px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
-  border-radius: 6px 6px 0 0;
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 10px 10px 0 0;
   cursor: grab;
   font-size: 10px;
   color: var(--ce-text-muted);
@@ -1438,7 +1439,7 @@ dialog.ce-mini-dialog::backdrop {
 /* SV canvas area */
 .ce-cp-sv-wrap {
   position: relative;
-  border-radius: 5px;
+  border-radius: 9px;
   overflow: hidden;
   cursor: crosshair;
   margin-bottom: 8px;
@@ -1448,7 +1449,7 @@ dialog.ce-mini-dialog::backdrop {
   display: block;
   width: 100%;
   height: 140px;
-  border-radius: 5px;
+  border-radius: 9px;
 }
 .ce-cp-sv-thumb {
   position: absolute;
@@ -1471,7 +1472,7 @@ dialog.ce-mini-dialog::backdrop {
 .ce-cp-hue-bar {
   position: relative;
   height: 12px;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   background: linear-gradient(to right,
     #f00 0%, #ff0 17%, #0f0 33%, #0ff 50%, #00f 67%, #f0f 83%, #f00 100%);
@@ -1479,7 +1480,7 @@ dialog.ce-mini-dialog::backdrop {
 .ce-cp-alpha-bar {
   position: relative;
   height: 12px;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   overflow: hidden;
   /* checkered transparency pattern */
@@ -1496,12 +1497,12 @@ dialog.ce-mini-dialog::backdrop {
   position: absolute;
   top: 0; left: 0;
   width: 100%; height: 100%;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 .ce-cp-brightness-bar {
   position: relative;
   height: 12px;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   overflow: hidden;
   background: #000;
@@ -1510,7 +1511,7 @@ dialog.ce-mini-dialog::backdrop {
   position: absolute;
   top: 0; left: 0;
   width: 100%; height: 100%;
-  border-radius: 6px;
+  border-radius: 10px;
 }
 .ce-cp-slider-thumb {
   position: absolute;
@@ -1534,8 +1535,8 @@ dialog.ce-mini-dialog::backdrop {
 .ce-cp-preview-new {
   flex: 1;
   height: 22px;
-  border-radius: 4px;
-  border: 1px solid var(--ce-border);
+  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-cp-preview-old {
   cursor: pointer;
@@ -1561,8 +1562,8 @@ dialog.ce-mini-dialog::backdrop {
 .ce-cp-hex-input {
   flex: 1;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: 'JetBrains Mono', 'Courier New', monospace;
   font-size: 11px;
@@ -1574,8 +1575,8 @@ dialog.ce-mini-dialog::backdrop {
 .ce-cp-alpha-input {
   width: 40px;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-size: 11px;
   padding: 3px 4px;
@@ -1592,8 +1593,8 @@ dialog.ce-mini-dialog::backdrop {
   min-width: 24px;
   padding: 0;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-muted);
   cursor: pointer;
   flex-shrink: 0;
@@ -1623,7 +1624,7 @@ dialog.ce-mini-dialog::backdrop {
   height: 36px;
   min-height: 36px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding: 0 6px;
   gap: 3px;
   flex-shrink: 0;
@@ -1646,7 +1647,7 @@ dialog.ce-mini-dialog::backdrop {
   padding: 0;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--ce-text-muted);
   cursor: pointer;
   flex-shrink: 0;
@@ -1683,7 +1684,7 @@ dialog.ce-mini-dialog::backdrop {
   color: var(--ce-text-muted);
   cursor: pointer;
   padding: 1px 3px;
-  border-radius: 3px;
+  border-radius: 6px;
   transition: color 100ms, background 100ms;
   white-space: nowrap;
 }
@@ -1695,8 +1696,8 @@ dialog.ce-mini-dialog::backdrop {
   height: 24px;
   padding: 0 18px 0 7px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: 11px;
@@ -1717,8 +1718,8 @@ dialog.ce-mini-dialog::backdrop {
   display: flex;
   align-items: center;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   padding: 0 7px;
   height: 24px;
   gap: 5px;
@@ -1749,7 +1750,7 @@ dialog.ce-mini-dialog::backdrop {
   min-width: 120px;
   max-width: 400px;
   background: var(--ce-bg-panel);
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   overflow-y: auto;
   overflow-x: hidden;
   flex-shrink: 0;
@@ -1757,7 +1758,7 @@ dialog.ce-mini-dialog::backdrop {
 }
 .ce-ab-tree::-webkit-scrollbar { width: 4px; }
 .ce-ab-tree::-webkit-scrollbar-track { background: var(--ce-scrollbar-track); }
-.ce-ab-tree::-webkit-scrollbar-thumb { background: var(--ce-scrollbar-thumb); border-radius: 2px; }
+.ce-ab-tree::-webkit-scrollbar-thumb { background: var(--ce-scrollbar-thumb); border-radius: 4px; }
 .ce-ab-tree-empty {
   padding: 12px 10px;
   color: var(--ce-text-muted);
@@ -1772,7 +1773,7 @@ dialog.ce-mini-dialog::backdrop {
   padding-right: 6px;
   gap: 3px;
   user-select: none;
-  border-radius: 3px;
+  border-radius: 6px;
   margin: 0 4px 1px;
   transition: background 80ms;
 }
@@ -1812,7 +1813,7 @@ dialog.ce-mini-dialog::backdrop {
 }
 .ce-ab-content::-webkit-scrollbar { width: 6px; height: 6px; }
 .ce-ab-content::-webkit-scrollbar-track { background: var(--ce-scrollbar-track); }
-.ce-ab-content::-webkit-scrollbar-thumb { background: var(--ce-scrollbar-thumb); border-radius: 3px; border: 2px solid var(--ce-scrollbar-track); }
+.ce-ab-content::-webkit-scrollbar-thumb { background: var(--ce-scrollbar-thumb); border-radius: 6px; border: 2px solid var(--ce-scrollbar-track); }
 .ce-ab-content::-webkit-scrollbar-thumb:hover { background: var(--ce-accent-orange); }
 
 .ce-ab-empty {
@@ -1841,7 +1842,7 @@ dialog.ce-mini-dialog::backdrop {
   align-items: center;
   gap: 4px;
   padding: 6px 3px 5px;
-  border-radius: 5px;
+  border-radius: 9px;
   cursor: pointer;
   user-select: none;
   border: 1px solid transparent;
@@ -1877,7 +1878,7 @@ dialog.ce-mini-dialog::backdrop {
   gap: 8px;
   cursor: pointer;
   user-select: none;
-  border-radius: 3px;
+  border-radius: 6px;
   border: 1px solid transparent;
   transition: background 80ms;
 }
@@ -1890,8 +1891,8 @@ dialog.ce-mini-dialog::backdrop {
 /* ─── New Project Dialog ─────────────────────────────────────────────────── */
 dialog.ce-new-project-dialog {
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
   padding: 0;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
@@ -1904,7 +1905,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   font-size: 14px;
   font-weight: 600;
   padding: 16px 20px 12px;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-np-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 14px; }
 .ce-np-row { display: flex; flex-direction: column; gap: 5px; }
@@ -1919,8 +1920,8 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   height: 30px;
   padding: 0 10px;
   background: var(--ce-bg-base);
-  border: 1px solid var(--ce-border);
-  border-radius: 5px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: 13px;
@@ -1953,8 +1954,8 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   gap: 8px;
   padding: 8px 10px;
   background: var(--ce-bg-base);
-  border: 1px solid var(--ce-border);
-  border-radius: 5px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px;
 }
 .ce-np-preview-label { font-size: 11px; color: var(--ce-text-muted); white-space: nowrap; }
 .ce-np-preview-path { font-size: 11px; color: var(--ce-accent-orange); word-break: break-all; }
@@ -1969,8 +1970,8 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   display: inline-flex; align-items: center; gap: 3px;
   padding: 2px 6px 2px 8px;
   background: var(--ce-bg-base);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   font-size: 11px;
   color: var(--ce-text-muted);
 }
@@ -1990,7 +1991,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 20px 16px;
-  border-top: 1px solid var(--ce-border);
+  border-top: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-cp-alpha-input::-webkit-inner-spin-button,
 .ce-cp-alpha-input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -2013,8 +2014,8 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
 .ce-cp-recent-swatch {
   width: 22px;
   height: 22px;
-  border-radius: 4px;
-  border: 1px solid var(--ce-border);
+  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
   cursor: pointer;
   padding: 0;
   transition: transform 80ms, border-color 80ms;
@@ -2043,7 +2044,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px;
-  border-radius: 4px;
+  border-radius: 8px;
   cursor: pointer;
   border: 1px solid transparent;
   transition: background 80ms, border-color 80ms;
@@ -2086,7 +2087,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   height: 30px;
   min-height: 30px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding: 0 6px;
   gap: 2px;
   flex-shrink: 0;
@@ -2108,7 +2109,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   padding: 3px 8px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--ce-text-primary);
   font-family: var(--ce-font-family);
   font-size: 12px;
@@ -2134,8 +2135,8 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   z-index: 500;
   min-width: 168px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 5px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px;
   padding: 4px 0;
   box-shadow: 0 6px 20px rgba(0,0,0,0.5);
 }
@@ -2181,7 +2182,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   width: 13px;
   height: 13px;
   min-width: 13px;
-  border-radius: 3px;
+  border-radius: 6px;
   border: 1.5px solid var(--ce-text-muted);
   box-sizing: border-box;
   flex-shrink: 0;
@@ -2216,7 +2217,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   width: 36px;
   min-width: 36px;
   background: var(--ce-bg-surface);
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   padding: 6px 0;
   gap: 2px;
   flex-shrink: 0;
@@ -2229,7 +2230,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   width: 28px;
   height: 28px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: 9px;
   background: transparent;
   color: var(--ce-text-muted);
   cursor: pointer;
@@ -2273,7 +2274,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
 .ce-vp-lefttool .ce-bar-float-btn {
   width: 28px;
   height: 28px;
-  border-radius: 5px;
+  border-radius: 9px;
 }
 .ce-vp-lefttool.is-top .ce-bar-float-btn,
 .ce-vp-lefttool.is-bottom .ce-bar-float-btn {
@@ -2290,7 +2291,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   height: 22px;
   background: transparent;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 8px;
   color: var(--ce-text-muted);
   cursor: pointer;
   font-size: 14px;
@@ -2357,7 +2358,7 @@ body.ce-inspect-mode .ce-color-picker * {
   display: none;
   border: 2px solid var(--ce-accent-orange);
   outline: 2px solid rgba(0, 0, 0, 0.35);
-  border-radius: 2px;
+  border-radius: 4px;
   box-shadow: 0 0 0 1px var(--ce-accent-orange) inset;
 }
 
@@ -2371,8 +2372,8 @@ body.ce-inspect-mode .ce-color-picker * {
   align-items: center;
   gap: 6px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
   padding: 8px 12px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55);
 }
@@ -2382,7 +2383,7 @@ body.ce-inspect-mode .ce-color-picker * {
   font-weight: 600;
   color: var(--ce-accent-orange);
   padding-right: 10px;
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   margin-right: 4px;
   white-space: nowrap;
 }
@@ -2392,8 +2393,8 @@ body.ce-inspect-mode .ce-color-picker * {
   position: fixed;
   z-index: 20001;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 10px;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.6);
   min-width: 160px;
   overflow: hidden;
@@ -2406,7 +2407,7 @@ body.ce-inspect-mode .ce-color-picker * {
   justify-content: space-between;
   padding: 5px 10px 5px 10px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   gap: 6px;
   cursor: grab;
   user-select: none;
@@ -2455,7 +2456,7 @@ body.ce-inspect-mode .ce-color-picker * {
 .ce-inspect-swatch {
   width: 20px;
   height: 20px;
-  border-radius: 4px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.18);
   flex-shrink: 0;
   display: inline-block;
@@ -2491,8 +2492,8 @@ body.ce-inspect-mode .ce-color-picker * {
   display: flex;
   flex-direction: column;
   background: var(--ce-bg-panel);
-  border: 1px solid var(--ce-border);
-  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 10px;
   overflow: hidden;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
 }
@@ -2504,7 +2505,7 @@ body.ce-inspect-mode .ce-color-picker * {
   height: 40px;
   padding: 0 12px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   flex-shrink: 0;
   gap: 10px;
 }
@@ -2525,7 +2526,7 @@ body.ce-inspect-mode .ce-color-picker * {
   line-height: 1;
   cursor: pointer;
   padding: 4px 6px;
-  border-radius: 3px;
+  border-radius: 6px;
   transition: background 0.15s, color 0.15s;
 }
 .ce-gm-close-btn:hover {
@@ -2539,7 +2540,7 @@ body.ce-inspect-mode .ce-color-picker * {
   align-items: stretch;
   height: 34px;
   background: var(--ce-bg-base);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   flex-shrink: 0;
   gap: 0;
   padding: 0 8px;
@@ -2577,7 +2578,7 @@ body.ce-inspect-mode .ce-color-picker * {
   width: 158px;
   flex-shrink: 0;
   background: var(--ce-bg-base);
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   overflow-y: auto;
   padding: 6px 0;
 }
@@ -2652,7 +2653,7 @@ body.ce-inspect-mode .ce-color-picker * {
   padding: 0 8px;
   gap: 4px;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   flex-shrink: 0;
 }
 .ce-gm-list-toolbar-sep {
@@ -2673,8 +2674,8 @@ body.ce-inspect-mode .ce-color-picker * {
   font-weight: 500;
   background: var(--ce-bg-raised);
   color: var(--ce-text-primary);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   cursor: pointer;
   transition: background 0.12s;
   white-space: nowrap;
@@ -2699,8 +2700,8 @@ body.ce-inspect-mode .ce-color-picker * {
   font-size: 11px;
   background: var(--ce-bg-raised);
   color: var(--ce-text-primary);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   width: 160px;
   outline: none;
 }
@@ -2714,8 +2715,8 @@ body.ce-inspect-mode .ce-color-picker * {
 /* View toggle */
 .ce-gm-view-toggle {
   display: flex;
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   overflow: hidden;
 }
 .ce-gm-view-btn {
@@ -2724,7 +2725,7 @@ body.ce-inspect-mode .ce-color-picker * {
   background: var(--ce-bg-raised);
   color: var(--ce-text-muted);
   border: none;
-  border-right: 1px solid var(--ce-border);
+  border-right: var(--ce-border-width) solid var(--ce-border);
   cursor: pointer;
   transition: background 0.12s, color 0.12s;
 }
@@ -2759,7 +2760,7 @@ body.ce-inspect-mode .ce-color-picker * {
   font-size: 11px;
   font-weight: 600;
   color: var(--ce-text-muted);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
@@ -2788,7 +2789,7 @@ body.ce-inspect-mode .ce-color-picker * {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border-radius: 2px;
+  border-radius: 4px;
   border: 1px solid rgba(255,255,255,0.15);
   vertical-align: middle;
   margin-right: 5px;
@@ -2817,8 +2818,8 @@ body.ce-inspect-mode .ce-color-picker * {
   gap: 6px;
   padding: 10px 8px;
   background: var(--ce-bg-surface);
-  border: 1px solid var(--ce-border);
-  border-radius: 4px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
   text-align: center;
@@ -2829,9 +2830,9 @@ body.ce-inspect-mode .ce-color-picker * {
 .ce-gm-card-icon {
   width: 36px;
   height: 36px;
-  border-radius: 4px;
+  border-radius: 8px;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
+  border: var(--ce-border-width) solid var(--ce-border);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2864,7 +2865,7 @@ body.ce-inspect-mode .ce-color-picker * {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-surface);
   flex-shrink: 0;
   font-size: 11px;
@@ -2919,8 +2920,8 @@ body.ce-inspect-mode .ce-color-picker * {
   font-size: 12px;
   background: var(--ce-bg-raised);
   color: var(--ce-text-primary);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   outline: none;
   font-family: inherit;
   box-sizing: border-box;
@@ -2955,15 +2956,15 @@ select.ce-gm-input {
 
 /* Sub-list mini-table */
 .ce-gm-sublist {
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   overflow: hidden;
   width: 100%;
 }
 .ce-gm-sublist-header {
   display: flex;
   background: var(--ce-bg-surface);
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
   padding: 3px 4px;
   gap: 2px;
 }
@@ -2993,7 +2994,7 @@ select.ce-gm-input {
   background: transparent;
   color: var(--ce-text-primary);
   border: 1px solid transparent;
-  border-radius: 2px;
+  border-radius: 4px;
   outline: none;
   box-sizing: border-box;
 }
@@ -3009,7 +3010,7 @@ select.ce-gm-input {
   padding: 2px 5px;
   font-size: 13px;
   line-height: 1;
-  border-radius: 2px;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 .ce-gm-sublist-remove:hover { color: #e05555; background: rgba(224,85,85,0.12); }
@@ -3021,7 +3022,7 @@ select.ce-gm-input {
   font-size: 11px;
   color: var(--ce-text-muted);
   cursor: pointer;
-  border-top: 1px solid var(--ce-border);
+  border-top: var(--ce-border-width) solid var(--ce-border);
   transition: color 0.12s, background 0.12s;
   background: none;
   border-left: none;
@@ -3054,7 +3055,7 @@ select.ce-gm-input {
 /* Name header */
 .ce-prop-name-header {
   padding: 8px 10px 6px;
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-prop-name-title {
   font-size: 12px;
@@ -3069,7 +3070,7 @@ select.ce-gm-input {
 
 /* Sections */
 .ce-prop-section {
-  border-bottom: 1px solid var(--ce-border);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
 }
 .ce-prop-section-hdr {
   display: flex;
@@ -3152,8 +3153,8 @@ select.ce-gm-input {
   width: 100%;
   min-width: 0;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   color: var(--ce-text-primary);
   font-size: 10px;
   font-family: 'JetBrains Mono', monospace;
@@ -3177,8 +3178,8 @@ select.ce-gm-input {
   height: 14px;
   flex-shrink: 0;
   background: var(--ce-bg-surface);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   cursor: ew-resize;
   user-select: none;
   color: var(--ce-text-muted);
@@ -3204,7 +3205,7 @@ select.ce-gm-input {
   appearance: none;
   height: 3px;
   background: var(--ce-bg-raised);
-  border-radius: 2px;
+  border-radius: 4px;
   outline: none;
   cursor: pointer;
 }
@@ -3235,8 +3236,8 @@ select.ce-gm-input {
   padding: 2px 3px;
   color: var(--ce-text-primary);
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
 }
 
 /* Checkbox */
@@ -3251,8 +3252,8 @@ select.ce-gm-input {
 .ce-prop-color-swatch {
   width: 44px;
   height: 16px;
-  border-radius: 3px;
-  border: 1px solid var(--ce-border);
+  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
   background: var(--sw-color, #888);
   cursor: pointer;
   padding: 0;
@@ -3275,8 +3276,8 @@ select.ce-gm-input {
 .ce-prop-select {
   width: 100%;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 3px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
   color: var(--ce-text-primary);
   font-size: 11px;
   padding: 2px 4px;
@@ -3300,7 +3301,7 @@ select.ce-gm-input {
   align-items: center;
   gap: 4px;
   padding: 3px 6px;
-  border-top: 1px solid var(--ce-border);
+  border-top: var(--ce-border-width) solid var(--ce-border);
   background: var(--ce-bg-surface);
   flex-shrink: 0;
 }
@@ -3312,8 +3313,8 @@ select.ce-gm-input {
   height: 16px;
   flex-shrink: 0;
   background: var(--ce-bg-raised);
-  border: 1px solid var(--ce-border);
-  border-radius: 2px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 4px;
   color: var(--ce-text-muted);
   font-size: 13px;
   line-height: 1;
@@ -3329,7 +3330,7 @@ select.ce-gm-input {
   appearance: none;
   height: 3px;
   background: var(--ce-bg-raised);
-  border-radius: 2px;
+  border-radius: 4px;
   outline: none;
   cursor: pointer;
 }

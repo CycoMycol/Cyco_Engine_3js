@@ -148,6 +148,9 @@ const ThemeManager = {
     const saved = localStorage.getItem(STORAGE_KEY_ACTIVE);
     const name  = saved || 'Dark Coffee';
     this.applyPreset(name);
+    // Restore border thickness
+    const bw = parseInt(localStorage.getItem('cyco-border-width') ?? '1', 10) || 1;
+    document.documentElement.style.setProperty('--ce-border-width', bw + 'px');
   },
 
   /** Apply a named preset (builtin or user-saved) */

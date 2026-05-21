@@ -79,6 +79,7 @@ const ThemeDialog = {
   _bgRaisedPinned: false,
   _borderPinned: false,
   _dialogOpacity: 95,
+  _borderWidth: 1,
   _themeChangeHandler: null,
   // Inspect / interactive mode state
   _interactive:         false,
@@ -98,6 +99,7 @@ const ThemeDialog = {
     this._bgRaisedPinned  = false;
     this._borderPinned    = false;
     this._dialogOpacity   = 95;
+    this._borderWidth     = parseInt(localStorage.getItem('cyco-border-width') ?? '1', 10) || 1;
 
     const dlg = document.createElement('dialog');
     dlg.className = 'ce-theme-dialog';
@@ -132,6 +134,13 @@ const ThemeDialog = {
         <span class="ce-dialog-label">Window Opacity</span>
         <input type="range" class="ce-opacity-slider" id="ce-dialog-opacity" min="10" max="100" value="95" step="1">
         <span class="ce-opacity-value" id="ce-opacity-value">95%</span>
+      </div>
+
+      <!-- Border thickness -->
+      <div class="ce-dialog-opacity-row">
+        <span class="ce-dialog-label">Border Thickness</span>
+        <input type="range" class="ce-opacity-slider" id="ce-border-width-slider" min="0" max="4" value="1" step="1">
+        <span class="ce-opacity-value" id="ce-border-width-value">1px</span>
       </div>
 
       <!-- Base theme selector -->
@@ -399,6 +408,18 @@ const ThemeDialog = {
       this._dialogOpacity = parseInt(e.target.value);
       opacityLabel.textContent = this._dialogOpacity + '%';
       this._applyDialogBg();
+    });
+
+    // Border thickness slider
+    const borderSlider = dlg.querySelector('#ce-border-width-slider');
+    const borderLabel  = dlg.querySelector('#ce-border-width-value');
+    borderSlider.value = String(this._borderWidth);
+    borderLabel.textContent = this._borderWidth + 'px';
+    borderSlider.addEventListener('input', (e) => {
+      this._borderWidth = parseInt(e.target.value);
+      borderLabel.textContent = this._borderWidth + 'px';
+      localStorage.setItem('cyco-border-width', String(this._borderWidth));
+      document.documentElement.style.setProperty('--ce-border-width', this._borderWidth + 'px');
     });
   },
 
