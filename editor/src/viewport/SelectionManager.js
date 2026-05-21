@@ -240,6 +240,7 @@ export class SelectionManager {
   }
 
   _isNonSelectable(obj) {
+    if (obj.userData?._isGizmo) return true;
     if (this.nonSelectableSet.has(obj)) return true;
     // Also walk up the parent chain — if any ancestor is non-selectable, skip
     let p = obj.parent;

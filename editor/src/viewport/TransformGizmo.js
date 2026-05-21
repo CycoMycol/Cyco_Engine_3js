@@ -54,6 +54,10 @@ export class TransformGizmo {
     window.addEventListener('cyco-renderer-changed',  this._onRendererChanged);
     window.addEventListener('cyco-select-node',       this._onSelectNode);
     window.addEventListener('cyco-deselect-all',      this._onDeselectAll);
+    window.addEventListener('cyco-hierarchy-remove',  (e) => {
+      const { objectId } = e.detail ?? {};
+      if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
+    });
     window.addEventListener('cyco-vp-tool',           this._onTool);
     window.addEventListener('cyco-rvp-snap',          this._onSnap);
     window.addEventListener('cyco-rvp-world',         this._onWorld);
@@ -107,8 +111,9 @@ export class TransformGizmo {
       }
     });
 
-    // Make gizmo non-selectable (add the Object3D helper, not the Controls instance)
+    // Make gizmo non-selectable (tag all descendants + add to nonSelectableSet)
     this._helper = this.controls.getHelper();
+    this._helper.traverse(child => { child.userData._isGizmo = true; });
     this.selectionManager.addNonSelectable(this._helper);
     scene.add(this._helper);
   }

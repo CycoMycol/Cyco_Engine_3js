@@ -28,6 +28,9 @@ import { CommandManager }         from './viewport/CommandManager.js';
 import { GameRuntime }            from './viewport/GameRuntime.js';
 import { InputManager }           from './viewport/InputManager.js';
 import { ViewportStats }          from './viewport/ViewportStats.js';
+import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
+import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
+import { loadPrefs }                from './ui/PreferencesWindow.js';
 
 const app = document.getElementById('app');
 
@@ -111,6 +114,7 @@ const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, sele
 // Input + stats
 const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
 const viewportStats         = new ViewportStats(viewportEngine); // eslint-disable-line no-unused-vars
+const viewportContextMenu   = new ViewportContextMenu(); // eslint-disable-line no-unused-vars
 
 // ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
 // event dispatched by CenterPanel when its canvas div is inserted into the DOM.
@@ -126,6 +130,31 @@ if (typeof window !== 'undefined') {
     selectionManager,
     transformGizmo,
     commandManager,
+    viewportContextMenu,
     dockviewApi: dockApi,
   };
 }
+
+// ── 8. Auto-save ───────────────────────────────────────────────────────────────
+let _autoSaveTimer = null;
+
+function _startAutoSave(intervalMinutes) {
+  if (_autoSaveTimer) { clearInterval(_autoSaveTimer); _autoSaveTimer = null; }
+  if (!intervalMinutes || intervalMinutes === 'off') return;
+  const ms = parseInt(intervalMinutes, 10) * 60_000;
+  _autoSaveTimer = setInterval(() => {
+    const json = sceneManager.serializeActiveScene?.();
+    if (json) {
+      localStorage.setItem('cyco-autosave', JSON.stringify(json));
+      console.info('[AutoSave] Scene saved to localStorage');
+    }
+  }, ms);
+}
+
+// Start with saved prefs
+_startAutoSave(loadPrefs().general.autoSaveInterval);
+
+// Restart if preferences change
+window.addEventListener('cyco-preferences-change', ({ detail: { prefs } }) => {
+  _startAutoSave(prefs.general.autoSaveInterval);
+});

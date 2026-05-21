@@ -38,11 +38,20 @@ export class SceneManager {
      */
     this.animationMixers = new Map();
 
-    this._onVpReady = this._onVpReady.bind(this);
-    this._onTick    = this._onTick.bind(this);
+    /** Preview material cache: Map<THREE.Object3D, THREE.Material|THREE.Material[]> */
+    this._previewCache = new Map();
 
-    window.addEventListener('cyco-vp-ready', this._onVpReady);
-    window.addEventListener('cyco-vp-tick',  this._onTick);
+    this._onVpReady          = this._onVpReady.bind(this);
+    this._onTick             = this._onTick.bind(this);
+    this._onApplyMaterial    = this._onApplyMaterial.bind(this);
+    this._onPreviewMaterial  = this._onPreviewMaterial.bind(this);
+    this._onRestoreMaterial  = this._onRestoreMaterial.bind(this);
+
+    window.addEventListener('cyco-vp-ready',          this._onVpReady);
+    window.addEventListener('cyco-vp-tick',           this._onTick);
+    window.addEventListener('cyco-apply-material',    this._onApplyMaterial);
+    window.addEventListener('cyco-preview-material',  this._onPreviewMaterial);
+    window.addEventListener('cyco-restore-material',  this._onRestoreMaterial);
   }
 
   // ─── Scene registry ───────────────────────────────────────────────────────
@@ -146,6 +155,18 @@ export class SceneManager {
   }
 
   /**
+   * Remove an object from the scene WITHOUT disposing its GPU resources.
+   * Used by undo/redo so the object can be re-added later.
+   */
+  removeObjectKeepAlive(cycoId) {
+    const obj = this._findById(cycoId);
+    if (!obj) return;
+    obj.parent?.remove(obj);
+    this._markDirty();
+    window.dispatchEvent(new CustomEvent('cyco-hierarchy-remove', { detail: { objectId: cycoId } }));
+  }
+
+  /**
    * Rename an object and fire the hierarchy event.
    * @param {string} cycoId
    * @param {string} name
@@ -212,6 +233,95 @@ export class SceneManager {
     return new THREE.ObjectLoader().parse(json);
   }
 
+  /**
+   * Replace the active scene with one loaded from JSON.
+   * Fires cyco-hierarchy-add for each root child so the hierarchy panel rebuilds.
+   * @param {object} json
+   */
+  loadSceneFromJSON(json) {
+    const entry = this.sceneRegistry.get(this.activeSceneId);
+    if (!entry) return;
+    // Dispose old objects
+    entry.scene.traverse(child => this._disposeNode(child));
+    entry.scene.clear();
+    // Parse and copy from new scene
+    const loaded = new THREE.ObjectLoader().parse(json);
+    loaded.children.slice().forEach(child => {
+      loaded.remove(child);
+      entry.scene.add(child);
+    });
+    entry.scene.background = loaded.background;
+    entry.scene.fog        = loaded.fog;
+    entry.dirty = false;
+    // Notify hierarchy
+    entry.scene.children.forEach(child => {
+      window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
+        detail: { object: child, parentId: 'scene_root' }
+      }));
+    });
+    window.dispatchEvent(new CustomEvent('cyco-scene-loaded', { detail: { sceneId: this.activeSceneId } }));
+  }
+
+  // ─── Material events ─────────────────────────────────────────────────────
+
+  _onApplyMaterial(event) {
+    const { preset, targetObjects } = event.detail ?? {};
+    if (!preset || !targetObjects?.length) return;
+    const mat = this._createMaterial(preset);
+    for (const obj of targetObjects) {
+      if (obj.material) {
+        Array.isArray(obj.material)
+          ? obj.material.forEach(m => m.dispose?.())
+          : obj.material.dispose?.();
+      }
+      obj.material = mat;
+      this._markDirty();
+    }
+  }
+
+  _onPreviewMaterial(event) {
+    const { preset, targetObjects } = event.detail ?? {};
+    if (!preset || !targetObjects?.length) return;
+    const mat = this._createMaterial(preset);
+    for (const obj of targetObjects) {
+      if (!this._previewCache.has(obj)) {
+        this._previewCache.set(obj, obj.material);
+      }
+      obj.material = mat;
+    }
+  }
+
+  _onRestoreMaterial() {
+    for (const [obj, originalMat] of this._previewCache) {
+      obj.material = originalMat;
+    }
+    this._previewCache.clear();
+  }
+
+  _createMaterial(preset) {
+    const THREE_TYPES = {
+      MeshStandardMaterial: THREE.MeshStandardMaterial,
+      MeshPhysicalMaterial: THREE.MeshPhysicalMaterial,
+      MeshPhongMaterial:    THREE.MeshPhongMaterial,
+      MeshLambertMaterial:  THREE.MeshLambertMaterial,
+      MeshToonMaterial:     THREE.MeshToonMaterial,
+      MeshBasicMaterial:    THREE.MeshBasicMaterial,
+      MeshNormalMaterial:   THREE.MeshNormalMaterial,
+      MeshDepthMaterial:    THREE.MeshDepthMaterial,
+      MeshMatcapMaterial:   THREE.MeshMatcapMaterial,
+      PointsMaterial:       THREE.PointsMaterial,
+      ShaderMaterial:       THREE.ShaderMaterial,
+    };
+    const Ctor = THREE_TYPES[preset.type] ?? THREE.MeshStandardMaterial;
+    const params = { ...preset.params };
+    for (const key of ['color', 'emissive', 'specular', 'sheenColor']) {
+      if (typeof params[key] === 'string' && params[key].startsWith('#')) {
+        params[key] = new THREE.Color(params[key]);
+      }
+    }
+    return new Ctor(params);
+  }
+
   // ─── Internals ────────────────────────────────────────────────────────────
 
   _onVpReady(event) {
@@ -246,6 +356,9 @@ export class SceneManager {
     return found;
   }
 
+  /** Public alias so UI panels can call sceneManager.findById(id) */
+  findById(cycoId) { return this._findById(cycoId); }
+
   /**
    * Dispose geometry, materials, and textures of a single node (non-recursive).
    * For recursive disposal, call on each node via traverse().
@@ -267,7 +380,10 @@ export class SceneManager {
   }
 
   dispose() {
-    window.removeEventListener('cyco-vp-ready', this._onVpReady);
-    window.removeEventListener('cyco-vp-tick',  this._onTick);
+    window.removeEventListener('cyco-vp-ready',          this._onVpReady);
+    window.removeEventListener('cyco-vp-tick',           this._onTick);
+    window.removeEventListener('cyco-apply-material',    this._onApplyMaterial);
+    window.removeEventListener('cyco-preview-material',  this._onPreviewMaterial);
+    window.removeEventListener('cyco-restore-material',  this._onRestoreMaterial);
   }
 }

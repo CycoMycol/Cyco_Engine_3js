@@ -15,6 +15,7 @@
  *   cyco-rvp-focus         { object }          — lerp camera target to object
  *   cyco-vp-camera         { view }            — snap to Top/Front/Right/etc.
  *   cyco-show-properties   { type:'grid'|... } — (no action here, forwarded to RightPanel)
+ *   cyco-scene-switch      { sceneId }         — swap rendered scene to new active scene
  */
 
 import * as THREE from 'three';
@@ -66,15 +67,25 @@ export class ViewportEngine {
     this._container = null;
 
     // ── event bindings ──
-    this._onRendererChanged = this._onRendererChanged.bind(this);
-    this._onFocus           = this._onFocus.bind(this);
-    this._onCameraSnap      = this._onCameraSnap.bind(this);
-    this._onContainerReady  = this._onContainerReady.bind(this);
+    this._onRendererChanged    = this._onRendererChanged.bind(this);
+    this._onFocus               = this._onFocus.bind(this);
+    this._onCameraSnap          = this._onCameraSnap.bind(this);
+    this._onContainerReady      = this._onContainerReady.bind(this);
+    this._onSceneSwitch         = this._onSceneSwitch.bind(this);
+    this._onSkyChange           = this._onSkyChange.bind(this);
+    this._onFogChange           = this._onFogChange.bind(this);
+    this._onEnvMapChange        = this._onEnvMapChange.bind(this);
+    this._onEnvBgToggle         = this._onEnvBgToggle.bind(this);
 
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
     window.addEventListener('cyco-rvp-focus',               this._onFocus);
     window.addEventListener('cyco-vp-camera',               this._onCameraSnap);
     window.addEventListener('cyco-viewport-container-ready', this._onContainerReady);
+    window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
+    window.addEventListener('cyco-sky-change',              this._onSkyChange);
+    window.addEventListener('cyco-fog-change',              this._onFogChange);
+    window.addEventListener('cyco-env-map-change',          this._onEnvMapChange);
+    window.addEventListener('cyco-env-background-toggle',   this._onEnvBgToggle);
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -108,6 +119,9 @@ export class ViewportEngine {
     // Resize observer
     this._buildResizeObserver(container);
 
+    // Right-click context menu
+    this._buildContextMenu(container);
+
     // Start render loop
     this._startLoop();
 
@@ -123,6 +137,94 @@ export class ViewportEngine {
   replaceScene(newScene) {
     this.scene = newScene;
     this._setupIBL();
+  }
+
+  /** Called when SceneManager switches the active scene. */
+  _onSceneSwitch({ detail } = {}) {
+    const sm = window.__cyco?.sceneManager;
+    if (!sm) return;
+    const newScene = sm.getActiveScene?.();
+    if (newScene) this.replaceScene(newScene);
+  }
+
+  /** Apply sky (THREE.Sky) to the active scene. */
+  async _onSkyChange({ detail } = {}) {
+    const { enabled, elevation = 30, azimuth = 180 } = detail ?? {};
+    if (!this.scene) return;
+
+    // Remove existing sky mesh
+    const old = this.scene.getObjectByName('__cyco_sky');
+    if (old) { this.scene.remove(old); old.geometry?.dispose(); }
+
+    if (!enabled) {
+      this.skyEnabled = false;
+      this.scene.background = null;
+      return;
+    }
+
+    const { Sky } = await import('three/addons/objects/Sky.js');
+    const sky = new Sky();
+    sky.name = '__cyco_sky';
+    sky.scale.setScalar(450000);
+    const sun = new THREE.Vector3();
+    const phi   = THREE.MathUtils.degToRad(90 - elevation);
+    const theta = THREE.MathUtils.degToRad(azimuth);
+    sun.setFromSphericalCoords(1, phi, theta);
+    sky.material.uniforms['sunPosition'].value.copy(sun);
+    sky.material.uniforms['turbidity'].value = 10;
+    sky.material.uniforms['rayleigh'].value = 3;
+    sky.material.uniforms['mieCoefficient'].value = 0.005;
+    sky.material.uniforms['mieDirectionalG'].value = 0.7;
+    this.scene.add(sky);
+    this.skyEnabled  = true;
+    this.skyElevation = elevation;
+    this.skyAzimuth   = azimuth;
+  }
+
+  /** Apply fog to the active scene. */
+  _onFogChange({ detail } = {}) {
+    if (!this.scene) return;
+    const { type, color = '#aaaaaa', near = 1, far = 1000, density = 0.002 } = detail ?? {};
+    const c = new THREE.Color(color);
+    if (type === 'linear') {
+      this.scene.fog = new THREE.Fog(c, near, far);
+    } else if (type === 'exp2') {
+      this.scene.fog = new THREE.FogExp2(c, density);
+    } else {
+      this.scene.fog = null;
+    }
+  }
+
+  /** Load and apply an HDR/EXR environment map. */
+  async _onEnvMapChange({ detail } = {}) {
+    const { url, isHDR } = detail ?? {};
+    if (!url || !this.scene) return;
+    const renderer = this.rendererManager.renderer;
+    if (!renderer) return;
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    pmrem.compileEquirectangularShader();
+    try {
+      const { RGBELoader } = await import('three/addons/loaders/RGBELoader.js');
+      const { EXRLoader }  = await import('three/addons/loaders/EXRLoader.js');
+      const loader = isHDR ? new RGBELoader() : new EXRLoader();
+      const texture = await new Promise((resolve, reject) => {
+        loader.load(url, resolve, undefined, reject);
+      });
+      const envMap = pmrem.fromEquirectangular(texture).texture;
+      this.scene.environment = envMap;
+      this._lastEnvMap = envMap;
+      texture.dispose();
+    } catch (e) {
+      console.warn('[ViewportEngine] env map load failed:', e);
+    } finally {
+      pmrem.dispose();
+    }
+  }
+
+  /** Toggle whether the env map is shown as scene background. */
+  _onEnvBgToggle({ detail } = {}) {
+    if (!this.scene) return;
+    this.scene.background = detail?.enabled ? (this._lastEnvMap ?? null) : null;
   }
 
   /**
@@ -222,6 +324,32 @@ export class ViewportEngine {
       }
     });
     this._resizeObserver.observe(container);
+  }
+
+  _buildContextMenu(container) {
+    this._onContextMenu = (e) => {
+      // Only handle right-click on the viewport canvas
+      const canvas = this.rendererManager.renderer?.domElement;
+      if (!canvas || !canvas.contains(e.target) && e.target !== canvas) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left;
+      const py = e.clientY - rect.top;
+      const ndcX = (px / rect.width)  * 2 - 1;
+      const ndcY = -(py / rect.height) * 2 + 1;
+
+      // Raycast to find hovered object
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+      const hits = raycaster.intersectObjects(this.scene.children, true);
+      const hit = hits.find(h => !h.object.userData._isGizmo && h.object.type !== 'GridHelper' && h.object.type !== 'AxesHelper')?.object ?? null;
+
+      window.dispatchEvent(new CustomEvent('cyco-vp-contextmenu', {
+        detail: { x: e.clientX, y: e.clientY, hit }
+      }));
+    };
+    document.addEventListener('contextmenu', this._onContextMenu);
+    this._contextMenuContainer = container;
   }
 
   _handleResize(width, height) {
@@ -395,11 +523,19 @@ export class ViewportEngine {
     if (this._rafId !== null) cancelAnimationFrame(this._rafId);
     this._resizeObserver?.disconnect();
     this.controls?.dispose();
+    if (this._onContextMenu) {
+      document.removeEventListener('contextmenu', this._onContextMenu);
+    }
 
     window.removeEventListener('cyco-renderer-changed',         this._onRendererChanged);
     window.removeEventListener('cyco-rvp-focus',                this._onFocus);
     window.removeEventListener('cyco-vp-camera',                this._onCameraSnap);
     window.removeEventListener('cyco-viewport-container-ready', this._onContainerReady);
+    window.removeEventListener('cyco-scene-switch',             this._onSceneSwitch);
+    window.removeEventListener('cyco-sky-change',               this._onSkyChange);
+    window.removeEventListener('cyco-fog-change',               this._onFogChange);
+    window.removeEventListener('cyco-env-map-change',           this._onEnvMapChange);
+    window.removeEventListener('cyco-env-background-toggle',    this._onEnvBgToggle);
 
     // Dispose scene objects
     this.scene?.traverse(child => {

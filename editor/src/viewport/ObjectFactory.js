@@ -72,14 +72,20 @@ export class ObjectFactory {
     RectAreaLightUniformsLib.init();
     RectAreaLightTexturesLib.init();
 
-    this._onAddObject   = this._onAddObject.bind(this);
-    this._onLoadFile    = this._onLoadFile.bind(this);
-    this._onVpReady     = this._onVpReady.bind(this);
+    this._onAddObject      = this._onAddObject.bind(this);
+    this._onLoadFile       = this._onLoadFile.bind(this);
+    this._onVpReady        = this._onVpReady.bind(this);
+    this._onDuplicate      = this._onDuplicate.bind(this);
+    this._onRemoveObj      = this._onRemoveObj.bind(this);
+    this._onRestoreObj     = this._onRestoreObj.bind(this);
 
-    window.addEventListener('cyco-add-object',       this._onAddObject);
-    window.addEventListener('cyco-load-file',        this._onLoadFile);
-    window.addEventListener('cyco-renderer-changed', this._onVpReady);
-    window.addEventListener('cyco-vp-ready',         this._onVpReady);
+    window.addEventListener('cyco-add-object',            this._onAddObject);
+    window.addEventListener('cyco-load-file',             this._onLoadFile);
+    window.addEventListener('cyco-renderer-changed',      this._onVpReady);
+    window.addEventListener('cyco-vp-ready',              this._onVpReady);
+    window.addEventListener('cyco-duplicate-object',      this._onDuplicate);
+    window.addEventListener('cyco-hierarchy-remove-obj',  this._onRemoveObj);
+    window.addEventListener('cyco-hierarchy-restore-obj', this._onRestoreObj);
   }
 
   // ─── Renderer-dependent init ──────────────────────────────────────────────
@@ -114,7 +120,63 @@ export class ObjectFactory {
   _onAddObject(event) {
     const { objectType, options } = event.detail ?? {};
     const obj = this.create(objectType, options);
-    if (obj) this.sceneManager.addObject(obj);
+    if (!obj) return;
+
+    const sm = this.sceneManager;
+    // Ensure cycoId is assigned before we capture it for undo
+    if (!obj.userData.cycoId) {
+      const uid = () => Math.random().toString(36).slice(2, 9);
+      obj.userData.cycoId = uid();
+    }
+    const cycoId = obj.userData.cycoId;
+
+    window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+      detail: {
+        name: `Add ${obj.name || objectType}`,
+        do:   () => sm.addObject(obj),
+        undo: () => sm.removeObjectKeepAlive(cycoId),
+      }
+    }));
+  }
+
+  _onDuplicate(event) {
+    const { source, command } = event.detail ?? {};
+    if (!source) return;
+    const sm = this.sceneManager;
+
+    const clone = source.clone(true);
+    const uid = () => Math.random().toString(36).slice(2, 9);
+    clone.userData = { ...source.userData };
+    clone.userData.cycoId = uid();
+    clone.name = (source.name || 'Object') + ' (copy)';
+    // Offset clone slightly so it's visible
+    clone.position.x += 0.5;
+    clone.position.z += 0.5;
+
+    const cycoId = clone.userData.cycoId;
+
+    // If called from CommandManager (via _duplicateSelected), store back on the command object
+    if (command) command._clone = clone;
+
+    sm.addObject(clone);
+  }
+
+  _onRemoveObj(event) {
+    const { cycoId } = event.detail ?? {};
+    if (!cycoId) return;
+    this.sceneManager.removeObjectKeepAlive(cycoId);
+  }
+
+  _onRestoreObj(event) {
+    const { object, parent } = event.detail ?? {};
+    if (!object) return;
+    const sm = this.sceneManager;
+    const targetParent = parent ?? sm.scene;
+    targetParent.add(object);
+    sm._markDirty?.();
+    window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
+      detail: { object, parentId: targetParent?.userData?.cycoId ?? null }
+    }));
   }
 
   async _onLoadFile(event) {
@@ -183,6 +245,7 @@ export class ObjectFactory {
       }
 
       // ── Groups / Instancing ────────────────────────────────────────────
+      case 'Empty':         return this._named(new THREE.Object3D(), 'GameObject');
       case 'Group':         return this._named(new THREE.Group(), 'Group');
       case 'LOD':           return this._named(new THREE.LOD(), 'LOD');
       case 'Bone':          return this._named(new THREE.Bone(), 'Bone');
@@ -203,6 +266,18 @@ export class ObjectFactory {
         );
         bm.castShadow = bm.receiveShadow = true;
         return this._named(bm, 'BatchedMesh');
+      }
+
+      // ── Cameras ────────────────────────────────────────────────────────
+      case 'PerspectiveCamera': {
+        const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+        cam.position.set(0, 1, 5);
+        return this._named(cam, 'Camera');
+      }
+      case 'OrthographicCamera': {
+        const cam = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 1000);
+        cam.position.set(0, 1, 5);
+        return this._named(cam, 'OrthoCamera');
       }
 
       // ── Lights ─────────────────────────────────────────────────────────
@@ -475,10 +550,13 @@ export class ObjectFactory {
   // ─── Disposal ─────────────────────────────────────────────────────────────
 
   dispose() {
-    window.removeEventListener('cyco-add-object',       this._onAddObject);
-    window.removeEventListener('cyco-load-file',        this._onLoadFile);
-    window.removeEventListener('cyco-renderer-changed', this._onVpReady);
-    window.removeEventListener('cyco-vp-ready',         this._onVpReady);
+    window.removeEventListener('cyco-add-object',            this._onAddObject);
+    window.removeEventListener('cyco-load-file',             this._onLoadFile);
+    window.removeEventListener('cyco-renderer-changed',      this._onVpReady);
+    window.removeEventListener('cyco-vp-ready',              this._onVpReady);
+    window.removeEventListener('cyco-duplicate-object',      this._onDuplicate);
+    window.removeEventListener('cyco-hierarchy-remove-obj',  this._onRemoveObj);
+    window.removeEventListener('cyco-hierarchy-restore-obj', this._onRestoreObj);
     this._dracoLoader?.dispose();
     this._ktx2Loader?.dispose();
   }

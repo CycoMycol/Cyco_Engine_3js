@@ -425,21 +425,30 @@ function fileMenu() {
     { label: 'Open Project',    action: () => _openProjectDialog() },
     { label: 'Recent Projects', dynamicSubmenu: _recentProjectsSubmenu },
     { separator: true },
-    { label: 'Save',            action: () => {} },
-    { label: 'Save As...',      action: () => {} },
+    { label: 'Save Scene',      action: () => _saveScene() },
+    { label: 'Save Scene As…',  action: () => _saveSceneAs() },
+    { label: 'Load Scene…',     action: () => _loadScene() },
     { separator: true },
-    { label: 'Exit',            action: () => {} },
+    { label: 'Export', submenu: [
+      { label: 'Export GLTF (.glb)',  action: () => _exportGLTF() },
+      { label: 'Export GLTF (.gltf)',action: () => _exportGLTF(false) },
+      { label: 'Export OBJ',         action: () => {} },
+    ]},
+    { separator: true },
+    { label: 'Exit',            action: () => window.close() },
   ];
 }
 
 function editMenu() {
   return [
-    { label: 'Undo',  action: () => {} },
-    { label: 'Redo',  action: () => {} },
+    { label: 'Undo',        action: () => window.dispatchEvent(new CustomEvent('cyco-undo')) },
+    { label: 'Redo',        action: () => window.dispatchEvent(new CustomEvent('cyco-redo')) },
     { separator: true },
-    { label: 'Cut',   action: () => {} },
-    { label: 'Copy',  action: () => {} },
-    { label: 'Paste', action: () => {} },
+    { label: 'Cut',         action: () => {} },
+    { label: 'Copy',        action: () => {} },
+    { label: 'Paste',       action: () => {} },
+    { separator: true },
+    { label: 'Preferences', action: () => window.dispatchEvent(new CustomEvent('cyco-open-preferences')) },
   ];
 }
 
@@ -527,12 +536,13 @@ function _themeSubmenu() {
 }
 
 function environmentMenu() {
+  const show = (type) => window.dispatchEvent(new CustomEvent('cyco-show-properties', { detail: { type } }));
   return [
-    { label: 'Camera',      action: () => {} },
-    { label: 'Viewport',    action: () => {} },
-    { label: 'Environment', action: () => {} },
-    { label: 'Renderer',    action: () => {} },
-    { label: 'Post Processing',      action: () => {} },
+    { label: 'Camera',          action: () => {} },
+    { label: 'Viewport',        action: () => {} },
+    { label: 'Environment',     action: () => show('environment') },
+    { label: 'Renderer',        action: () => show('renderer') },
+    { label: 'Post Processing', action: () => show('post-processing') },
     { separator: true },
     { label: 'Lighting', submenu: [
       { label: 'Global Illumination', action: () => {} },
@@ -628,4 +638,121 @@ function _recentProjectsSubmenu() {
 
 function _esc(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+// ─── Scene save / load ────────────────────────────────────────────────────────
+
+/** Last used file name for Save (vs Save As) */
+let _lastSceneFileName = null;
+
+function _saveScene() {
+  const json = window.__cyco?.sceneManager?.serializeActiveScene?.();
+  if (!json) { alert('No active scene to save.'); return; }
+  const name = _lastSceneFileName ?? (ProjectManager.getCurrent()?.name ?? 'scene');
+  _downloadJSON(json, `${name}.cyco`);
+  _lastSceneFileName = `${name}.cyco`;
+}
+
+async function _saveSceneAs() {
+  const json = window.__cyco?.sceneManager?.serializeActiveScene?.();
+  if (!json) { alert('No active scene to save.'); return; }
+
+  // Try File System Access API first (HTTPS / localhost)
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const fh = await window.showSaveFilePicker({
+        suggestedName: _lastSceneFileName ?? 'scene.cyco',
+        types: [{ description: 'Cyco Scene', accept: { 'application/json': ['.cyco', '.json'] } }],
+      });
+      const writable = await fh.createWritable();
+      await writable.write(JSON.stringify(json, null, 2));
+      await writable.close();
+      _lastSceneFileName = fh.name;
+      return;
+    } catch (e) {
+      if (e.name === 'AbortError') return;
+      console.warn('[MenuBar] showSaveFilePicker failed, falling back to download:', e);
+    }
+  }
+
+  // Fallback: download
+  const name = _lastSceneFileName ?? 'scene.cyco';
+  _downloadJSON(json, name);
+  _lastSceneFileName = name;
+}
+
+function _downloadJSON(data, filename) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function _loadScene() {
+  const input = document.createElement('input');
+  input.type   = 'file';
+  input.accept = '.cyco,.json';
+  input.style.display = 'none';
+  document.body.appendChild(input);
+
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    if (!file) { input.remove(); return; }
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      input.remove();
+      try {
+        const json = JSON.parse(evt.target.result);
+        window.__cyco?.sceneManager?.loadSceneFromJSON?.(json);
+        _lastSceneFileName = file.name;
+      } catch (e) {
+        alert('Failed to load scene: ' + e.message);
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  input.click();
+}
+
+// ─── GLTF export ──────────────────────────────────────────────────────────────
+
+async function _exportGLTF(binary = true) {
+  const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
+  const scene = window.__cyco?.viewportEngine?.scene;
+  if (!scene) return;
+
+  const exporter = new GLTFExporter();
+  const ext = binary ? '.glb' : '.gltf';
+  const name = (ProjectManager.getCurrent()?.name ?? 'scene') + ext;
+
+  exporter.parse(
+    scene,
+    (result) => {
+      if (binary) {
+        const blob = new Blob([result], { type: 'application/octet-stream' });
+        _downloadBlob(blob, name);
+      } else {
+        _downloadJSON(result, name);
+      }
+    },
+    (err) => { console.error('[GLTF Export]', err); alert('GLTF export failed: ' + err); },
+    { binary, trs: true, onlyVisible: true }
+  );
+}
+
+function _downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

@@ -65,7 +65,36 @@ export class InputManager {
 
   // ─── Keybindings ─────────────────────────────────────────────────────────
 
+  // Map from PreferencesWindow action labels → InputManager binding keys
+  static _PREF_MAP = {
+    'Delete Selected':  'deleteSelected',
+    'Undo':             'undo',
+    'Redo':             'redo',
+    'Focus Selected':   'focus',
+    'Deselect':         'deselect',
+    'Duplicate':        'duplicate',
+    'Translate Mode':   'translateMode',
+    'Rotate Mode':      'rotateMode',
+    'Scale Mode':       'scaleMode',
+    'Toggle Grid':      'toggleGrid',
+    'Toggle Stats':     'toggleStats',
+  };
+
   _loadBindings() {
+    // Try reading from cyco-prefs (PreferencesWindow format) first
+    try {
+      const raw = localStorage.getItem('cyco-prefs');
+      if (raw) {
+        const prefs = JSON.parse(raw);
+        const kb    = prefs.keybindings ?? {};
+        const merged = { ...DEFAULT_BINDINGS };
+        for (const [label, internalKey] of Object.entries(InputManager._PREF_MAP)) {
+          if (kb[label]) merged[internalKey] = kb[label].toLowerCase();
+        }
+        return merged;
+      }
+    } catch { /* fall through */ }
+    // Legacy fallback
     try {
       const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
       return { ...DEFAULT_BINDINGS, ...stored };
@@ -74,8 +103,16 @@ export class InputManager {
     }
   }
 
-  _onPrefsChg() {
-    this._bindings = this._loadBindings();
+  _onPrefsChg({ detail: { prefs } = {} } = {}) {
+    if (prefs?.keybindings) {
+      const merged = { ...DEFAULT_BINDINGS };
+      for (const [label, internalKey] of Object.entries(InputManager._PREF_MAP)) {
+        if (prefs.keybindings[label]) merged[internalKey] = prefs.keybindings[label].toLowerCase();
+      }
+      this._bindings = merged;
+    } else {
+      this._bindings = this._loadBindings();
+    }
   }
 
   // ─── Key event handler ───────────────────────────────────────────────────
@@ -165,7 +202,7 @@ export class InputManager {
         name: `Duplicate ${obj.name || obj.userData.cycoId}`,
         _source: obj, _clone: null,
         do() {
-          window.dispatchEvent(new CustomEvent('cyco-duplicate-object', { detail: { source: this._source } }));
+          window.dispatchEvent(new CustomEvent('cyco-duplicate-object', { detail: { source: this._source, command: this } }));
         },
         undo() {
           if (this._clone?.userData?.cycoId) {

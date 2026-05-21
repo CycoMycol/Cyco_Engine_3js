@@ -81,9 +81,12 @@ export class LeftPanel extends BasePanel {
     this._dragIds      = [];          // ids currently being dragged
     this._dropInfo     = null;        // { targetId, mode }
     this._groupCounter = 0;
+    this._pendingAddPid   = null;        // parent id for the next cyco-hierarchy-add
     this._activeScene     = 'Scene';   // currently active scene name
     this._scenes          = ['Scene']; // list of scene names
     this._pendingDelScene = null;      // scene name pending delete confirm
+    // Map from scene name → SceneManager ID (populated when scenes are added via SceneManager)
+    this._sceneIdMap      = new Map([['Scene', null]]); // null = use SceneManager.activeSceneId
 
     // ── root wrapper ──────────────────────────────────────────────────────────
     const wrap = document.createElement('div');
@@ -180,9 +183,121 @@ export class LeftPanel extends BasePanel {
     tree.addEventListener('drop',      (e) => this._onDrop(e));
     tree.addEventListener('dragend',   ()  => this._onDragEnd());
 
+    // ── Sync Three.js scene adds → hierarchy ──────────────────────────────
+    window.addEventListener('cyco-hierarchy-add', (e) => {
+      const { object, parentId } = e.detail ?? {};
+      if (!object?.userData?.cycoId) return;
+
+      const pid = this._pendingAddPid ?? 'root';
+      this._pendingAddPid = null;
+
+      let nodeType = 'object';
+      if (object.isLight)                          nodeType = 'light';
+      else if (object.isCamera)                    nodeType = 'camera';
+      else if (object.isInstancedMesh)             nodeType = 'instanced';
+      else if (object.isLOD)                       nodeType = 'lod';
+      else if (object.isMesh || object.isLine || object.isPoints) nodeType = 'mesh';
+      else if (object.isGroup)                     nodeType = 'group';
+
+      this._nodes.push({
+        id:      object.userData.cycoId,
+        pid,
+        name:    object.name || object.type,
+        type:    nodeType,
+        open:    false,
+        locked:  false,
+        visible: true,
+      });
+
+      // Auto-select the new object
+      this._selectedIds.clear();
+      this._selectedIds.add(object.userData.cycoId);
+      this._lastClickId = object.userData.cycoId;
+      this._renderTree();
+
+      window.dispatchEvent(new CustomEvent('cyco-select-node', {
+        detail: { object, type: nodeType }
+      }));
+    });
+
+    // ── Sync Three.js scene removes → hierarchy ──────────────────────────
+    window.addEventListener('cyco-hierarchy-remove', (e) => {
+      const { objectId } = e.detail ?? {};
+      if (!objectId) return;
+      this._deleteNodeUI(objectId);
+      this._selectedIds.delete(objectId);
+      this._renderTree();
+    });
+
+    // ── Sync viewport selection → hierarchy highlight ─────────────────────
+    window.addEventListener('cyco-select-node', (e) => {
+      const cycoId = e.detail?.object?.userData?.cycoId;
+      if (!cycoId) return;
+      // Only sync if this object is in our nodes (i.e., not from our own dispatch)
+      if (!this._nodes.some(n => n.id === cycoId)) return;
+      this._selectedIds.clear();
+      this._selectedIds.add(cycoId);
+      this._lastClickId = cycoId;
+      this._renderTree();
+    });
+
+    window.addEventListener('cyco-deselect-all', () => {
+      this._selectedIds.clear();
+      this._renderTree();
+    });
+
+    // ── Sync external scene changes → hierarchy scene label ───────────────
+    window.addEventListener('cyco-scene-switch', (e) => {
+      const { sceneId } = e.detail ?? {};
+      if (!sceneId) return;
+      // Find scene name by ID in our map
+      for (const [name, id] of this._sceneIdMap) {
+        if (id === sceneId) {
+          this._activeScene = name;
+          // Update the scene label if visible — find it in DOM
+          const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
+          if (lbl) lbl.textContent = name;
+          break;
+        }
+      }
+    });
+
+    // ── Seed initial scene ID from SceneManager on viewport ready ────────
+    const _syncSceneLabel = () => {
+      const sm = window.__cyco?.sceneManager;
+      if (!sm) return;
+      const activeId = sm.activeSceneId;
+      const activeName = sm.sceneRegistry.get(activeId)?.name ?? 'Scene';
+      this._activeScene = activeName;
+      this._scenes = [activeName];
+      this._sceneIdMap = new Map([[activeName, activeId]]);
+      const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
+      if (lbl) lbl.textContent = activeName;
+    };
+    window.addEventListener('cyco-vp-ready', _syncSceneLabel);
+    // Also try on next frame in case cyco-vp-ready already fired
+    requestAnimationFrame(_syncSceneLabel);
+
     this._renderTree();
     return wrap;
   }
+
+  // ── Action → ObjectFactory type mapping ──────────────────────────────────
+  static _ACTION_FACTORY_MAP = {
+    'empty':        'Empty',
+    '3d-cube':      'Box',
+    '3d-sphere':    'Sphere',
+    '3d-plane':     'Plane',
+    '3d-cylinder':  'Cylinder',
+    '3d-capsule':   'Capsule',
+    '3d-torus':     'Torus',
+    'light-dir':    'DirectionalLight',
+    'light-point':  'PointLight',
+    'light-spot':   'SpotLight',
+    'light-area':   'RectAreaLight',
+    'camera':       'PerspectiveCamera',
+    '2d-sprite':    'Sprite',
+  };
 
   // ── Action handler ────────────────────────────────────────────────────────
   _handleAction(action) {
@@ -194,20 +309,17 @@ export class LeftPanel extends BasePanel {
     const def = OBJECT_DEFAULTS[action];
     if (!def) return;
 
-    const pid    = this._lastClickId ?? 'root';
-    const parent = this._nodes.find(n => n.id === pid);
-    if (parent) parent.open = true;
-
-    this._nodes.push({
-      id:      Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-      pid,
-      name:    def.name,
-      type:    def.type,
-      open:    false,
-      locked:  false,
-      visible: true,
-    });
-    this._renderTree();
+    const factoryType = LeftPanel._ACTION_FACTORY_MAP[action];
+    if (factoryType) {
+      // Dispatch to ObjectFactory — cyco-hierarchy-add will sync back the node
+      const pid = this._lastClickId ?? 'root';
+      const parent = this._nodes.find(n => n.id === pid);
+      if (parent) parent.open = true;
+      this._pendingAddPid = pid;
+      window.dispatchEvent(new CustomEvent('cyco-add-object', {
+        detail: { objectType: factoryType, options: {} }
+      }));
+    }
   }
 
   _duplicate() {
@@ -235,6 +347,28 @@ export class LeftPanel extends BasePanel {
   }
 
   _deleteNode(id) {
+    if (!id || PROTECTED.has(id)) return;
+    const toDelete = new Set();
+    const collect  = (nodeId) => {
+      toDelete.add(nodeId);
+      this._nodes.filter(n => n.pid === nodeId).forEach(n => collect(n.id));
+    };
+    collect(id);
+    this._nodes = this._nodes.filter(n => !toDelete.has(n.id));
+    toDelete.forEach(d => this._selectedIds.delete(d));
+
+    // Deselect if deleted item was selected
+    window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+
+    // Remove objects from Three.js scene
+    const sm = window.__cyco?.sceneManager;
+    if (sm) {
+      toDelete.forEach(cycoId => sm.removeObject(cycoId));
+    }
+  }
+
+  // UI-only delete (called from cyco-hierarchy-remove to avoid re-entry)
+  _deleteNodeUI(id) {
     if (!id || PROTECTED.has(id)) return;
     const toDelete = new Set();
     const collect  = (nodeId) => {
@@ -542,6 +676,9 @@ export class LeftPanel extends BasePanel {
       eye.addEventListener('click', (e) => {
         e.stopPropagation();
         node.visible = !node.visible;
+        // Sync with Three.js scene object
+        const sceneObj = window.__cyco?.sceneManager?.findById?.(node.id);
+        if (sceneObj) sceneObj.visible = node.visible;
         this._renderTree();
       });
       row.appendChild(eye);
@@ -555,6 +692,15 @@ export class LeftPanel extends BasePanel {
         lock.addEventListener('click', (e) => {
           e.stopPropagation();
           node.locked = !node.locked;
+          // Sync with Three.js scene object
+          const sceneObj = window.__cyco?.sceneManager?.findById?.(node.id);
+          if (sceneObj) {
+            sceneObj.userData.cycoLocked = node.locked;
+            // If locking a currently selected/gizmo-attached object, detach gizmo
+            if (node.locked) {
+              window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+            }
+          }
           this._renderTree();
         });
         row.appendChild(lock);
@@ -601,6 +747,23 @@ export class LeftPanel extends BasePanel {
         }
         this._lastClickId = node.id;
         this._renderTree();
+
+        // Dispatch selection to engine + right panel
+        const sm = window.__cyco?.sceneManager;
+        if (sm && node.id !== 'root') {
+          const obj = sm._findById(node.id);
+          if (obj) {
+            let selType = node.type;
+            if (obj.isLight)                          selType = 'light';
+            else if (obj.isCamera)                    selType = 'camera';
+            else if (obj.isMesh || obj.isLine || obj.isPoints) selType = 'mesh';
+            window.dispatchEvent(new CustomEvent('cyco-select-node', {
+              detail: { object: obj, type: selType }
+            }));
+          }
+        } else if (node.id === 'root') {
+          window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+        }
       });
 
       container.appendChild(row);
@@ -672,11 +835,16 @@ function _hierSceneDd(container, panel) {
         if (panel._pendingDelScene === name) {
           // Confirmed — delete
           if (panel._scenes.length <= 1) return;
+          const sid = panel._sceneIdMap.get(name);
           panel._scenes.splice(panel._scenes.indexOf(name), 1);
+          panel._sceneIdMap.delete(name);
           if (panel._activeScene === name) {
             panel._activeScene = panel._scenes[0];
             labelEl.textContent = panel._activeScene;
           }
+          // Dispose in SceneManager
+          const sm = window.__cyco?.sceneManager;
+          if (sm && sid) sm.disposeScene(sid);
           rebuildMain();
         } else {
           // First click — enter pending state
@@ -696,6 +864,10 @@ function _hierSceneDd(container, panel) {
         labelEl.textContent = name;
         panel._pendingDelScene = null;
         wrap.classList.remove('open');
+        // Switch in SceneManager
+        const sm = window.__cyco?.sceneManager;
+        const sid = panel._sceneIdMap.get(name);
+        if (sm && sid) sm.switchScene(sid);
       });
 
       row.appendChild(radio);
@@ -765,6 +937,13 @@ function _hierSceneDd(container, panel) {
         panel._scenes.push(final);
         panel._activeScene = final;
         labelEl.textContent = final;
+        // Add scene in SceneManager and switch to it (onCreate overrides for duplicate)
+        const sm = window.__cyco?.sceneManager;
+        if (sm) {
+          const newId = onCreate ? onCreate(sm, final) : sm.addScene(final);
+          panel._sceneIdMap.set(final, newId);
+          sm.switchScene(newId);
+        }
         wrap.classList.remove('open');
       });
 
@@ -815,7 +994,11 @@ function _hierSceneDd(container, panel) {
     const dupFormSlot = document.createElement('div');
     dupRow.addEventListener('click', (e) => {
       e.stopPropagation();
-      toggleForm(dupFormSlot, `${panel._activeScene} (copy)`);
+      const srcId = panel._sceneIdMap.get(panel._activeScene);
+      toggleForm(dupFormSlot, `${panel._activeScene} (copy)`, srcId
+        ? (sm, finalName) => { const newId = sm.duplicateScene(srcId); if (newId) sm.renameScene(newId, finalName); return newId; }
+        : null
+      );
     });
     dd.appendChild(dupRow);
     dd.appendChild(dupFormSlot);

@@ -9,10 +9,15 @@
  */
 
 import { BasePanel } from './BasePanel.js';
-import { ObjectProperties }   from '../properties/ObjectProperties.js';
-import { LightingProperties } from '../properties/LightingProperties.js';
-import { CameraProperties }   from '../properties/CameraProperties.js';
-import { GridProperties }     from '../properties/GridProperties.js';
+import { ObjectProperties }         from '../properties/ObjectProperties.js';
+import { LODProperties }            from '../properties/LODProperties.js';
+import { InstancedMeshProperties }  from '../properties/InstancedMeshProperties.js';
+import { LightingProperties }       from '../properties/LightingProperties.js';
+import { CameraProperties }         from '../properties/CameraProperties.js';
+import { GridProperties }           from '../properties/GridProperties.js';
+import { RendererProperties }       from '../properties/RendererProperties.js';
+import { EnvironmentProperties }    from '../properties/EnvironmentProperties.js';
+import { PostProcessingProperties } from '../properties/PostProcessingProperties.js';
 
 export class RightPanel extends BasePanel {
   constructor() {
@@ -122,9 +127,13 @@ export class RightPanel extends BasePanel {
       case 'mesh':
       case 'group':
       case 'object':
-      case 'lod':
-      case 'instanced':
         comp = new ObjectProperties(object);
+        break;
+      case 'lod':
+        comp = new LODProperties(object);
+        break;
+      case 'instanced':
+        comp = new InstancedMeshProperties(object);
         break;
       case 'light':
         comp = new LightingProperties(object);
@@ -134,6 +143,15 @@ export class RightPanel extends BasePanel {
         break;
       case 'grid':
         comp = new GridProperties();
+        break;
+      case 'renderer':
+        comp = new RendererProperties();
+        break;
+      case 'environment':
+        comp = new EnvironmentProperties();
+        break;
+      case 'post-processing':
+        comp = new PostProcessingProperties();
         break;
       default:
         if (object) {
