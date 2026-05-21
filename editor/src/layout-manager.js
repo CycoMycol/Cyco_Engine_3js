@@ -89,7 +89,7 @@ const LayoutManager = {
    */
   _setPendingOrientFromLayout(layout) {
     this._pendingOrient = this._pendingOrient ?? {};
-    for (const barId of ['toolbar-panel', 'menu-bar-panel', 'left-toolbar']) {
+    for (const barId of ['toolbar-panel', 'menu-bar-panel', 'left-toolbar', 'right-viewport']) {
       const p = layout.panels?.[barId];
       if (!p) continue;
       if (p.minimumWidth != null || p.maximumWidth != null) {
@@ -121,9 +121,9 @@ const LayoutManager = {
       return;
     }
 
-    // If the saved layout pre-dates dockable menu/toolbar panels, discard it so
-    // the fresh default layout (with those panels) is used instead.
-    if (!raw.includes('"menu-bar-panel"') || !raw.includes('"toolbar-panel"') || !raw.includes('"left-toolbar"')) {
+    // If the saved layout pre-dates dockable menu/toolbar panels OR is missing the
+    // right-viewport panel, discard it so the fresh default layout is used instead.
+    if (!raw.includes('"menu-bar-panel"') || !raw.includes('"toolbar-panel"') || !raw.includes('"left-toolbar"') || !raw.includes('"right-viewport"')) {
       console.info('[Cyco] Saved layout is from an older version; resetting to default layout.');
       localStorage.removeItem(AUTO_SAVE_KEY);
       if (this._defaultLayout) {
@@ -142,7 +142,8 @@ const LayoutManager = {
       const barsPresent =
         layoutStr.includes('"menu-bar-panel"') &&
         layoutStr.includes('"toolbar-panel"') &&
-        layoutStr.includes('"left-toolbar"');
+        layoutStr.includes('"left-toolbar"') &&
+        layoutStr.includes('"right-viewport"');
       if (!barsPresent) {
         console.info('[Cyco] Saved layout is missing bar panels; resetting.');
         localStorage.removeItem(AUTO_SAVE_KEY);
