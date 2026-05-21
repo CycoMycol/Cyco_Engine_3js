@@ -342,13 +342,40 @@ export class ViewportEngine {
   // ─── Renderer swap ───────────────────────────────────────────────────────
 
   _onContainerReady(event) {
-    // Auto-init when CenterPanel's viewport div is inserted into the DOM
-    if (this._container) return; // already initialised
     const { container } = event.detail;
     if (!container) return;
-    // Remove the placeholder label
+    if (this._container === container) return; // same element, nothing to do
+
+    // Remove placeholder label in the new container
     const lbl = container.querySelector('#cyco-viewport-placeholder-label');
     if (lbl) lbl.remove();
+
+    if (this._container && this.rendererManager?.renderer) {
+      // Layout was restored — just move the existing canvas to the new container.
+      // Full re-init would be wasteful and would reset camera/scene state.
+      const canvas = this.rendererManager.renderer.domElement;
+      if (canvas) container.appendChild(canvas);
+
+      // Repoint resize observer
+      if (this._resizeObserver) {
+        this._resizeObserver.unobserve(this._container);
+        this._resizeObserver.observe(container);
+      }
+      this._container = container;
+
+      // Sync renderer size to new (possibly resized) container
+      const { width, height } = container.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(width));
+      const h = Math.max(1, Math.floor(height));
+      this.rendererManager.resize(w, h);
+      if (this.camera) {
+        this.camera.aspect = w / h;
+        this.camera.updateProjectionMatrix();
+      }
+      return;
+    }
+
+    // First-time initialisation
     this.init(container);
   }
 

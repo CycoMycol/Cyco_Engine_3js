@@ -34,7 +34,7 @@ import { RectAreaLightTexturesLib } from 'three/addons/lights/RectAreaLightTextu
 // Addon objects
 import { Sky }          from 'three/addons/objects/Sky.js';
 import { Water }        from 'three/addons/objects/Water.js';
-import { Water2 }       from 'three/addons/objects/Water2.js';
+import { Water as Water2 } from 'three/addons/objects/Water2.js'; // r184: Water2.js exports as 'Water'
 import { Reflector }    from 'three/addons/objects/Reflector.js';
 import { Refractor }    from 'three/addons/objects/Refractor.js';
 import { GroundedSkybox } from 'three/addons/objects/GroundedSkybox.js';

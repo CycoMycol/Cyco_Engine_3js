@@ -68,7 +68,7 @@ export class TransformGizmo {
     if (!camera || !scene || !renderer?.domElement) return;
 
     if (this.controls) {
-      scene.remove(this.controls);
+      scene.remove(this.controls.getHelper());
       this.controls.dispose();
     }
 
@@ -107,9 +107,10 @@ export class TransformGizmo {
       }
     });
 
-    // Make gizmo non-selectable
-    this.selectionManager.addNonSelectable(this.controls);
-    scene.add(this.controls);
+    // Make gizmo non-selectable (add the Object3D helper, not the Controls instance)
+    this._helper = this.controls.getHelper();
+    this.selectionManager.addNonSelectable(this._helper);
+    scene.add(this._helper);
   }
 
   // ─── Event handlers ───────────────────────────────────────────────────────
@@ -173,9 +174,9 @@ export class TransformGizmo {
   }
 
   /** Called by GameRuntime.play() — hides gizmo during play mode. */
-  suspend() { this.detach(); if (this.controls) this.controls.visible = false; }
+  suspend() { this.detach(); if (this._helper) this._helper.visible = false; }
   /** Called by GameRuntime.stop() — restores gizmo after play mode. */
-  restore()  { if (this.controls) this.controls.visible = true; }
+  restore()  { if (this._helper) this._helper.visible = true; }
 
   // ─── Disposal ─────────────────────────────────────────────────────────────
 
