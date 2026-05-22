@@ -57,7 +57,7 @@ export class RendererManager {
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.5;   // 0.5 prevents sky overexposure
+    renderer.toneMappingExposure = 1.0;   // Default 1.0 — matches camera view; controlled by sky exposure slider
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     return renderer;
   }

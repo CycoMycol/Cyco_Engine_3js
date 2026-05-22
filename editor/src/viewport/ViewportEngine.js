@@ -184,7 +184,9 @@ export class ViewportEngine {
       elevation = 30, azimuth = 180,
       colorStops, opacityStops,
       showSun = true, sunColor, sunGlowStrength,
-      showMoon = true, moonColor,
+      showMoon = true, moonColor, moonGlowStrength,
+      exposure,
+      lensflareEnabled, lensflareSize, lensflareOpacity,
     } = detail ?? {};
     if (!this.scene) return;
 
@@ -198,14 +200,25 @@ export class ViewportEngine {
     }
 
     const params = { elevation, azimuth, showSun, showMoon };
-    if (colorStops)       params.colorStops       = colorStops;
-    if (opacityStops)     params.opacityStops      = opacityStops;
-    if (sunColor)         params.sunColor          = sunColor;
+    if (colorStops)               params.colorStops       = colorStops;
+    if (opacityStops)             params.opacityStops     = opacityStops;
+    if (sunColor)                 params.sunColor         = sunColor;
     if (sunGlowStrength !== undefined) params.sunGlowStrength = sunGlowStrength;
-    if (moonColor)        params.moonColor         = moonColor;
+    if (moonColor)                params.moonColor        = moonColor;
+    if (moonGlowStrength !== undefined) params.moonGlowStrength = moonGlowStrength;
+    if (exposure !== undefined)   params.exposure         = exposure;
+    if (lensflareEnabled !== undefined) params.lensflareEnabled = lensflareEnabled;
+    if (lensflareSize !== undefined)    params.lensflareSize    = lensflareSize;
+    if (lensflareOpacity !== undefined) params.lensflareOpacity = lensflareOpacity;
 
     this.gradientSky.setEnabled(true);
     this.gradientSky.setParams(params);
+
+    // Update renderer exposure from sky exposure slider
+    const renderer = this.rendererManager?.renderer;
+    if (renderer && exposure !== undefined) {
+      renderer.toneMappingExposure = exposure;
+    }
 
     // Sky mesh handles the background — clear any solid/colour background
     this.scene.background = null;
@@ -367,7 +380,7 @@ export class ViewportEngine {
   }
 
   _makeGrid(size, divisions) {
-    const g = new THREE.GridHelper(size, divisions, 0x555555, 0x333333);
+    const g = new THREE.GridHelper(size, divisions, 0x888888, 0x555555);
     g.raycast = () => {}; // non-selectable
     return g;
   }
