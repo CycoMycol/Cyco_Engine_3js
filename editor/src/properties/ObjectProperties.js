@@ -57,7 +57,7 @@ export class ObjectProperties {
       const mats = Array.isArray(mat) ? mat : [mat];
       mats.forEach((m, idx) => {
         const title = mats.length > 1 ? `Material [${idx}]` : 'Material';
-        this._buildMaterial(m, title);
+        this._buildMaterial(m, title, obj);
       });
     }
   }
@@ -106,7 +106,7 @@ export class ObjectProperties {
     this._el.appendChild(sec);
   }
 
-  _buildMaterial(m, title) {
+  _buildMaterial(m, title, obj) {
     const { el: sec, body } = section(title);
     body.appendChild(row('Type', readOnly(m.type ?? m.constructor?.name ?? 'Material')));
 
@@ -124,6 +124,12 @@ export class ObjectProperties {
         onChange: (hex) => { m.emissive.set(hex); m.needsUpdate = true; },
       });
       body.appendChild(row('Emissive', sw.el));
+    }
+
+    if (m.emissiveIntensity !== undefined) {
+      const s = slider({ value: m.emissiveIntensity, min: 0, max: 20, step: 0.1,
+        onChange: (v) => { m.emissiveIntensity = v; m.needsUpdate = true; } });
+      body.appendChild(row('Emissive Intensity', s.el));
     }
 
     if (m.roughness !== undefined) {
@@ -151,6 +157,51 @@ export class ObjectProperties {
       cb.className = 'ce-prop-checkbox';
       cb.addEventListener('change', () => { m.wireframe = cb.checked; });
       body.appendChild(row('Wireframe', cb));
+    }
+
+    // Side selector — controls which faces are rendered
+    {
+      const sideEl = document.createElement('select');
+      sideEl.className = 'ce-prop-select';
+      sideEl.style.cssText = 'width:100%;background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;';
+      [
+        ['Front Side',  THREE.FrontSide],
+        ['Back Side',   THREE.BackSide],
+        ['Double Side', THREE.DoubleSide],
+      ].forEach(([label, val]) => {
+        const opt = document.createElement('option');
+        opt.value       = val;
+        opt.textContent = label;
+        opt.selected    = (m.side ?? THREE.FrontSide) === val;
+        sideEl.appendChild(opt);
+      });
+      sideEl.addEventListener('change', () => {
+        m.side = parseInt(sideEl.value, 10);
+        m.needsUpdate = true;
+      });
+      body.appendChild(row('Side', sideEl));
+    }
+
+    // Flip normals — reverses every vertex normal so inside-out meshes render correctly
+    if (obj.isMesh || obj.isSkinnedMesh) {
+      const flipBtn = document.createElement('button');
+      flipBtn.textContent = 'Flip Normals';
+      flipBtn.className   = 'ce-prop-btn';
+      flipBtn.style.cssText = 'width:100%;padding:3px 6px;background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;font-size:11px;cursor:pointer;';
+      flipBtn.addEventListener('click', () => {
+        const nAttr = obj.geometry?.attributes?.normal;
+        if (nAttr) {
+          for (let i = 0; i < nAttr.count; i++) {
+            nAttr.setXYZ(i, -nAttr.getX(i), -nAttr.getY(i), -nAttr.getZ(i));
+          }
+          nAttr.needsUpdate = true;
+        }
+        m.side = m.side === THREE.FrontSide ? THREE.BackSide
+               : m.side === THREE.BackSide  ? THREE.FrontSide
+               : THREE.DoubleSide;
+        m.needsUpdate = true;
+      });
+      body.appendChild(row('Normals', flipBtn));
     }
 
     this._el.appendChild(sec);

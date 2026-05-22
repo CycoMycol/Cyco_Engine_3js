@@ -220,6 +220,12 @@ export class ViewportEngine {
       renderer.toneMappingExposure = exposure;
     }
 
+    // Build a sky-gradient env map so metals/glass reflect the sky colours.
+    // Only regenerate when the gradient colours actually change (not on every elevation tick).
+    if (colorStops && renderer) {
+      this._buildSkyEnvMap(colorStops, renderer);
+    }
+
     // Sky mesh handles the background — clear any solid/colour background
     this.scene.background = null;
     this.skyEnabled   = true;
@@ -357,6 +363,46 @@ export class ViewportEngine {
   }
 
   // ─── Build helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Build a simple equirectangular env map from the sky gradient colour stops
+   * and apply it to scene.environment so metallic/glass materials reflect the sky.
+   * @param {Array<{pos:number,color:string}>} colorStops
+   * @param {THREE.WebGLRenderer} renderer
+   */
+  _buildSkyEnvMap(colorStops, renderer) {
+    try {
+      const w = 512, h = 256;
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+
+      // Equirectangular: top row = zenith (pos=1), bottom = nadir (pos=0)
+      const sorted = [...colorStops].sort((a, b) => a.pos - b.pos);
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      for (const s of sorted) {
+        grad.addColorStop(1.0 - s.pos, s.color);
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.mapping    = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+
+      const pmrem  = new THREE.PMREMGenerator(renderer);
+      pmrem.compileEquirectangularShader();
+      const envTex = pmrem.fromEquirectangular(tex).texture;
+      pmrem.dispose();
+      tex.dispose();
+
+      if (this._skyEnvTex) this._skyEnvTex.dispose();
+      this._skyEnvTex    = envTex;
+      this.scene.environment = envTex;
+    } catch (e) {
+      console.warn('[ViewportEngine] Sky env map build failed:', e);
+    }
+  }
 
   _buildScene(w, h) {
     this.scene = new THREE.Scene();

@@ -56,7 +56,7 @@ export class PostProcessingProperties {
     const bloomPass = pp?.bloomPass;
 
     const enabledCb = checkbox({
-      checked: bloomPass ? !bloomPass.enabled === false : false,
+      checked: bloomPass ? bloomPass.enabled !== false : true,
       onChange: (v) => {
         if (bloomPass) bloomPass.enabled = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: v, ...this._bloomState() });
@@ -65,7 +65,7 @@ export class PostProcessingProperties {
     body.appendChild(row('Enabled', enabledCb));
 
     const threshSlider = slider({
-      value: bloomPass?.threshold ?? 0.85, min: 0, max: 2, step: 0.01,
+      value: bloomPass?.threshold ?? 0.85, min: 0, max: 3, step: 0.01,
       onChange: (v) => {
         if (bloomPass) bloomPass.threshold = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: enabledCb.checked, ...this._bloomState() });
@@ -74,7 +74,7 @@ export class PostProcessingProperties {
     body.appendChild(row('Threshold', threshSlider.el));
 
     const strengthSlider = slider({
-      value: bloomPass?.strength ?? 0.3, min: 0, max: 3, step: 0.01,
+      value: bloomPass?.strength ?? 0.8, min: 0, max: 5, step: 0.01,
       onChange: (v) => {
         if (bloomPass) bloomPass.strength = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: enabledCb.checked, ...this._bloomState() });
@@ -96,7 +96,7 @@ export class PostProcessingProperties {
 
   _bloomState() {
     const pass = window.__cyco?.viewportEngine?.postProcessing?.bloomPass;
-    return { threshold: pass?.threshold ?? 0.85, strength: pass?.strength ?? 0.3, radius: pass?.radius ?? 0.4 };
+    return { threshold: pass?.threshold ?? 0.85, strength: pass?.strength ?? 0.8, radius: pass?.radius ?? 0.4 };
   }
 
   // ── Outline ───────────────────────────────────────────────────────────────

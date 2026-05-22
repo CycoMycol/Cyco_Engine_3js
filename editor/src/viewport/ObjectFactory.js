@@ -527,7 +527,7 @@ export class ObjectFactory {
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   _defaultMaterial() {
-    return new THREE.MeshStandardMaterial({ color: 0x8888aa, roughness: 0.7, metalness: 0.1 });
+    return new THREE.MeshStandardMaterial({ color: 0x8888aa, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
   }
 
   _mesh(geometry, name) {

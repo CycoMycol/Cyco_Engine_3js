@@ -24,6 +24,7 @@
 
 import * as THREE from 'three';
 import { BasePanel } from './BasePanel.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ── CSS (injected once) ───────────────────────────────────────────────────────
 const _STYLE_ID = 'cyco-cvp-styles';
@@ -101,6 +102,8 @@ export class CameraViewPanel extends BasePanel {
     this._showGizmo = false;
     /** Whether to show grid in camera view (off by default). */
     this._showGrid  = false;
+    /** Local IBL env map generated with THIS renderer's WebGL context. */
+    this._localEnvTex = null;
   }
 
   // ── dockview lifecycle ────────────────────────────────────────────────────
@@ -320,7 +323,20 @@ export class CameraViewPanel extends BasePanel {
     this._cameraRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this._cameraRenderer.outputColorSpace = THREE.SRGBColorSpace;
     this._cameraRenderer.toneMapping      = THREE.ACESFilmicToneMapping;
+    this._cameraRenderer.toneMappingExposure = 1.0;
     this._cameraRenderer.setClearColor(0x1a1a1a, 1);
+
+    // Generate IBL env map using THIS renderer's own WebGL context.
+    // PMREM textures are context-specific — the main renderer's env texture cannot
+    // be used here (different WebGL context = black scene).
+    try {
+      const pmrem = new THREE.PMREMGenerator(this._cameraRenderer);
+      pmrem.compileEquirectangularShader();
+      this._localEnvTex = pmrem.fromScene(new RoomEnvironment(this._cameraRenderer)).texture;
+      pmrem.dispose();
+    } catch (e) {
+      console.warn('[CameraViewPanel] Could not generate local env map:', e);
+    }
 
     const c = this._cameraRenderer.domElement;
     c.style.cssText = 'display:block;width:100%;height:100%;';
@@ -348,6 +364,7 @@ export class CameraViewPanel extends BasePanel {
   _teardown() {
     if (this._rafId !== null) { cancelAnimationFrame(this._rafId); this._rafId = null; }
     if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
+    if (this._localEnvTex) { this._localEnvTex.dispose(); this._localEnvTex = null; }
     if (this._cameraRenderer) { this._cameraRenderer.dispose(); this._cameraRenderer = null; }
     this._canvasWrap  = null;
     this._placeholder = null;
@@ -418,7 +435,18 @@ export class CameraViewPanel extends BasePanel {
       cam.updateProjectionMatrix();
     }
 
+    // ── Sync exposure with main renderer ─────────────────────────────────
+    const mainExposure = window.__cyco?.rendererManager?.renderer?.toneMappingExposure ?? 1.0;
+    this._cameraRenderer.toneMappingExposure = mainExposure;
+
+    // ── Use local IBL env map (PMREM textures are context-specific) ───────
+    const prevEnv = scene.environment;
+    if (this._localEnvTex) scene.environment = this._localEnvTex;
+
     this._cameraRenderer.render(scene, cam);
+
+    // Restore scene env so main renderer keeps its context-correct texture
+    scene.environment = prevEnv;
 
     // ── Restore ───────────────────────────────────────────────────────────
     if (savedAspect !== undefined) {

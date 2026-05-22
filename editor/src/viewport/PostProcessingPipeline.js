@@ -85,9 +85,9 @@ export class PostProcessingPipeline {
     this.outlinePass.hiddenEdgeColor.set(0x333333);
     this._composer.addPass(this.outlinePass);
 
-    // 3. Bloom — threshold=4.8: the sky output is clamped to 4.5 (see ViewportEngine._onSkyChange),
-    //    so only emissive objects brighter than 4.8 linear produce a bloom halo.
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.4, 4.8);
+    // 3. Bloom — threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
+    //    Strength 0.8, radius 0.4. Sun disc is SDR + lens flare handles sun glow.
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
     this._composer.addPass(this.bloomPass);
 
     // 4. OutputPass — MUST be last — applies tone mapping + sRGB output conversion

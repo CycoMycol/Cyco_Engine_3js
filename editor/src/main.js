@@ -117,6 +117,8 @@ const transformGizmo        = new TransformGizmo(viewportEngine, selectionManage
 // Rendering modes + post-processing
 const renderModeManager     = new RenderModeManager(viewportEngine);   // eslint-disable-line no-unused-vars
 const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
+// Expose postPipeline on viewportEngine so PostProcessingProperties can find it
+viewportEngine.postProcessing = postPipeline;
 
 // Undo/redo + play mode
 const commandManager        = new CommandManager();
