@@ -13,10 +13,11 @@ import ProjectManager   from '../project/ProjectManager.js';
 import { makeFloatable } from './FloatBar.js';
 
 const PANEL_IDS = [
-  { id: 'scene-hierarchy', label: 'Left',   icon: '▐▌' },
-  { id: 'center-viewport', label: 'Center', icon: '▌▐' },
-  { id: 'properties',      label: 'Right',  icon: '▌▐' },
-  { id: 'assets-browser',  label: 'Bottom', icon: '▄'  },
+  { id: 'scene-hierarchy', label: 'Left',      icon: '▐▌' },
+  { id: 'center-viewport', label: 'Center',    icon: '▌▐' },
+  { id: 'properties',      label: 'Right',     icon: '▌▐' },
+  { id: 'assets-browser',  label: 'Bottom',    icon: '▄'  },
+  { id: 'material-browser',label: 'Materials', icon: '▦'  },
 ];
 
 export function createMenuBar(options = {}) {
@@ -490,6 +491,7 @@ function _toggleSubmenu() {
     { label: 'Center Panel', action: () => LayoutManager.togglePanel('center-viewport'),  checked: LayoutManager.isPanelVisible('center-viewport')  },
     { label: 'Right Panel',  action: () => LayoutManager.togglePanel('properties'),      checked: LayoutManager.isPanelVisible('properties')        },
     { label: 'Bottom Panel', action: () => LayoutManager.togglePanel('assets-browser'),  checked: LayoutManager.isPanelVisible('assets-browser')    },
+    { label: 'Materials',    action: () => LayoutManager.togglePanel('material-browser'), checked: LayoutManager.isPanelVisible('material-browser')  },
   ];
 }
 

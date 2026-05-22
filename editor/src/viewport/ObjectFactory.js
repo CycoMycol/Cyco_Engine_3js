@@ -203,7 +203,11 @@ export class ObjectFactory {
       case 'Cylinder':      return this._mesh(new THREE.CylinderGeometry(0.5, 0.5, 1, 32), type);
       case 'Cone':          return this._mesh(new THREE.ConeGeometry(0.5, 1, 32), type);
       case 'Capsule':       return this._mesh(new THREE.CapsuleGeometry(0.5, 1, 4, 8), type);
-      case 'Plane':         return this._mesh(new THREE.PlaneGeometry(1, 1), type);
+      case 'Plane': {
+        const planeMesh = this._mesh(new THREE.PlaneGeometry(1, 1), type);
+        planeMesh.rotation.x = -Math.PI / 2; // lay flat (XZ plane, facing up)
+        return planeMesh;
+      }
       case 'Circle':        return this._mesh(new THREE.CircleGeometry(0.5, 32), type);
       case 'Ring':          return this._mesh(new THREE.RingGeometry(0.1, 0.5, 32), type);
       case 'Torus':         return this._mesh(new THREE.TorusGeometry(0.5, 0.2, 16, 100), type);

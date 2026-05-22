@@ -22,6 +22,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { VolumetricClouds } from './VolumetricClouds.js';
 
 /** Sentinel value: no active focus animation. */
 const NO_FOCUS = null;
@@ -83,6 +84,8 @@ export class ViewportEngine {
     this._onFogChange           = this._onFogChange.bind(this);
     this._onEnvMapChange        = this._onEnvMapChange.bind(this);
     this._onEnvBgToggle         = this._onEnvBgToggle.bind(this);
+    this._onBackgroundChange    = this._onBackgroundChange.bind(this);
+    this._onEnvPreset           = this._onEnvPreset.bind(this);
     this._onLoadingStart        = this._onLoadingStart.bind(this);
     this._onLoadingProgress     = this._onLoadingProgress.bind(this);
     this._onLoadingDone         = this._onLoadingDone.bind(this);
@@ -97,6 +100,8 @@ export class ViewportEngine {
     window.addEventListener('cyco-fog-change',              this._onFogChange);
     window.addEventListener('cyco-env-map-change',          this._onEnvMapChange);
     window.addEventListener('cyco-env-background-toggle',   this._onEnvBgToggle);
+    window.addEventListener('cyco-background-change',       this._onBackgroundChange);
+    window.addEventListener('cyco-env-preset',              this._onEnvPreset);
     window.addEventListener('cyco-loading-start',           this._onLoadingStart);
     window.addEventListener('cyco-loading-progress',        this._onLoadingProgress);
     window.addEventListener('cyco-loading-done',            this._onLoadingDone);
@@ -124,6 +129,9 @@ export class ViewportEngine {
 
     // IBL — must be called after renderer + scene exist
     this._setupIBL();
+
+    // Volumetric cloud system (WebGL ray marching)
+    this.cloudSystem = new VolumetricClouds(this);
 
     // OrbitControls
     this._buildControls();
@@ -167,7 +175,12 @@ export class ViewportEngine {
 
   /** Apply sky (THREE.Sky) to the active scene. */
   async _onSkyChange({ detail } = {}) {
-    const { enabled, elevation = 30, azimuth = 180 } = detail ?? {};
+    const {
+      enabled, elevation = 30, azimuth = 180,
+      turbidity = 10, rayleigh = 3,
+      mieCoefficient = 0.005, mieDirectionalG = 0.7,
+      showSunDisc = true,
+    } = detail ?? {};
     if (!this.scene) return;
 
     // Remove existing sky mesh
@@ -176,7 +189,10 @@ export class ViewportEngine {
 
     if (!enabled) {
       this.skyEnabled = false;
-      this.scene.background = null;
+      // Preserve solid background color instead of going null
+      if (!(this.scene.background instanceof THREE.Color)) {
+        this.scene.background = new THREE.Color(0x1a1a1a);
+      }
       return;
     }
 
@@ -184,19 +200,35 @@ export class ViewportEngine {
     const sky = new Sky();
     sky.name = '__cyco_sky';
     sky.scale.setScalar(450000);
+    sky.raycast = () => {};   // non-selectable
+    sky.userData._isHelper = true;
+
+    // Clamp sky luminance so the sun disc never exceeds the bloom threshold.
+    // Without this, horizontal views cause the entire screen to bloom white.
+    sky.material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'gl_FragColor = vec4( texColor, 1.0 );',
+        'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );'
+      );
+    };
     const sun = new THREE.Vector3();
     const phi   = THREE.MathUtils.degToRad(90 - elevation);
     const theta = THREE.MathUtils.degToRad(azimuth);
     sun.setFromSphericalCoords(1, phi, theta);
-    sky.material.uniforms['sunPosition'].value.copy(sun);
-    sky.material.uniforms['turbidity'].value = 10;
-    sky.material.uniforms['rayleigh'].value = 3;
-    sky.material.uniforms['mieCoefficient'].value = 0.005;
-    sky.material.uniforms['mieDirectionalG'].value = 0.7;
+    const u = sky.material.uniforms;
+    u['sunPosition'].value.copy(sun);
+    u['turbidity'].value       = turbidity;
+    u['rayleigh'].value        = rayleigh;
+    u['mieCoefficient'].value  = mieCoefficient;
+    u['mieDirectionalG'].value = mieDirectionalG;
+    // showSunDisc not available in WebGL Sky (only SkyMesh/WebGPU); safe to skip
     this.scene.add(sky);
-    this.skyEnabled  = true;
+    this.skyEnabled   = true;
     this.skyElevation = elevation;
     this.skyAzimuth   = azimuth;
+
+    // Sync cloud sun direction to match sky
+    this.cloudSystem?.updateSunFromSky(elevation, azimuth);
   }
 
   /** Apply fog to the active scene. */
@@ -243,6 +275,64 @@ export class ViewportEngine {
   _onEnvBgToggle({ detail } = {}) {
     if (!this.scene) return;
     this.scene.background = detail?.enabled ? (this._lastEnvMap ?? null) : null;
+  }
+
+  /**
+   * Handle background type change from EnvironmentProperties.
+   * Types: 'solid' | 'gradient' | 'sky' | 'hdri'
+   */
+  _onBackgroundChange({ detail } = {}) {
+    if (!this.scene) return;
+    const { type, color, topColor, horizonColor, bottomColor } = detail ?? {};
+
+    // Remove sky if switching away from it
+    if (type !== 'sky') {
+      const sky = this.scene.getObjectByName('__cyco_sky');
+      if (sky) { this.scene.remove(sky); sky.geometry?.dispose(); }
+      this.skyEnabled = false;
+    }
+
+    if (type === 'solid') {
+      this.scene.background = new THREE.Color(color ?? '#1a1a1a');
+    } else if (type === 'gradient') {
+      this.scene.background = this._makeGradientTexture(
+        topColor    ?? '#87ceeb',
+        horizonColor ?? '#d4a56a',
+        bottomColor ?? '#4a3b2a'
+      );
+    } else if (type === 'hdri') {
+      // Show last loaded env map as background, or fallback to solid
+      this.scene.background = this._lastEnvMap ?? new THREE.Color(0x1a1a1a);
+    } else if (type === 'sky') {
+      // Sky background handled by _onSkyChange; just ensure background is null
+      // so the sky shader is composited correctly
+      this.scene.background = null;
+    }
+  }
+
+  /** Build a 2-stop gradient canvas texture (top → horizon → bottom). */
+  _makeGradientTexture(topColor, horizonColor, bottomColor) {
+    const w = 2, h = 256;
+    const canvas = document.createElement('canvas');
+    canvas.width  = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0.0,  topColor);
+    grad.addColorStop(0.5,  horizonColor);
+    grad.addColorStop(1.0,  bottomColor);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /** Restore the built-in RoomEnvironment IBL preset. */
+  _onEnvPreset({ detail } = {}) {
+    if (detail?.preset === 'room') {
+      this._setupIBL();
+    }
   }
 
   /**
@@ -318,9 +408,9 @@ export class ViewportEngine {
     this.controls.enableDamping   = true;
     this.controls.dampingFactor   = 0.05;
     this.controls.mouseButtons    = {
-      LEFT:   THREE.MOUSE.ROTATE,
+      LEFT:   null,                  // left-click/drag handled by SelectionManager
       MIDDLE: THREE.MOUSE.PAN,
-      RIGHT:  null,   // right-click reserved for context menu
+      RIGHT:  THREE.MOUSE.ROTATE,   // right-drag to orbit
     };
     this.controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
@@ -486,11 +576,23 @@ export class ViewportEngine {
   }
 
   _buildContextMenu(container) {
+    // Track right-mousedown position so we can distinguish a click from a drag.
+    // If the mouse moved > 4 px between mousedown and contextmenu, it was an orbit
+    // drag and we should NOT show the context menu.
+    let _rdX = 0, _rdY = 0;
+    this._onRightMousedown = (e) => {
+      if (e.button === 2) { _rdX = e.clientX; _rdY = e.clientY; }
+    };
+    document.addEventListener('mousedown', this._onRightMousedown);
+
     this._onContextMenu = (e) => {
       // Only handle right-click on the viewport canvas
       const canvas = this.rendererManager.renderer?.domElement;
       if (!canvas || !canvas.contains(e.target) && e.target !== canvas) return;
       e.preventDefault();
+
+      // If mouse dragged more than 4 px this was an orbit drag — skip menu
+      if (Math.hypot(e.clientX - _rdX, e.clientY - _rdY) > 4) return;
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
@@ -547,6 +649,9 @@ export class ViewportEngine {
 
     const renderer = this.rendererManager.renderer;
     if (!renderer || !this.scene || !this.camera) return;
+
+    // Volumetric clouds update (time + camera follow)
+    this.cloudSystem?.update();
 
     // Dispatch tick event for PostProcessingPipeline, ViewportStats, etc.
     window.dispatchEvent(new CustomEvent('cyco-vp-tick', { detail: { delta } }));

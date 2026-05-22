@@ -32,9 +32,13 @@ const PANEL_CONFIGS = {
     position: { direction: 'below', referencePanel: 'center-viewport' },
     initialHeight: 220,
   },
+  'material-browser': {
+    id: 'material-browser', component: 'MaterialBrowserPanel', title: 'Materials',
+    position: { direction: 'within', referencePanel: 'assets-browser' },
+  },
 };
 
-const ALL_IDS = ['scene-hierarchy', 'center-viewport', 'properties', 'assets-browser'];
+const ALL_IDS = ['scene-hierarchy', 'center-viewport', 'properties', 'assets-browser', 'material-browser'];
 const AUTO_SAVE_KEY = 'cyco-layout-current';
 
 const LayoutManager = {

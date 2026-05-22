@@ -97,6 +97,10 @@ export class CameraViewPanel extends BasePanel {
     this._ddWrap          = null;
     this._snapWrap        = null;
     this._outsideHandler  = null;
+    /** Whether to show transform gizmo in camera view (off by default). */
+    this._showGizmo = false;
+    /** Whether to show grid in camera view (off by default). */
+    this._showGrid  = false;
   }
 
   // ── dockview lifecycle ────────────────────────────────────────────────────
@@ -193,6 +197,34 @@ export class CameraViewPanel extends BasePanel {
     const spacer = document.createElement('div');
     spacer.style.flex = '1';
     bar.appendChild(spacer);
+
+    // Grid toggle button
+    const gridBtn = document.createElement('button');
+    gridBtn.className = 'cvp-btn';
+    gridBtn.title = 'Toggle Grid';
+    gridBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18M3 9h18M3 15h18M3 21h18M9 3v18M15 3v18M3 3v18M21 3v18"/></svg>';
+    gridBtn.style.opacity = this._showGrid ? '1' : '0.4';
+    gridBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showGrid = !this._showGrid;
+      gridBtn.style.opacity = this._showGrid ? '1' : '0.4';
+      gridBtn.style.borderColor = this._showGrid ? 'rgba(224,114,40,.5)' : 'transparent';
+    });
+    bar.appendChild(gridBtn);
+
+    // Gizmo toggle button
+    const gizmoBtn = document.createElement('button');
+    gizmoBtn.className = 'cvp-btn';
+    gizmoBtn.title = 'Toggle Transform Gizmo';
+    gizmoBtn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="2" x2="12" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="3"/></svg>';
+    gizmoBtn.style.opacity = this._showGizmo ? '1' : '0.4';
+    gizmoBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showGizmo = !this._showGizmo;
+      gizmoBtn.style.opacity = this._showGizmo ? '1' : '0.4';
+      gizmoBtn.style.borderColor = this._showGizmo ? 'rgba(224,114,40,.5)' : 'transparent';
+    });
+    bar.appendChild(gizmoBtn);
 
     // Snapshot / Save button
     this._snapWrap = document.createElement('div');
@@ -363,8 +395,13 @@ export class CameraViewPanel extends BasePanel {
     const axes    = ve.axesHelper;
     const gridWas = grid?.visible ?? false;
     const axesWas = axes?.visible ?? false;
-    if (grid) grid.visible = false;
-    if (axes) axes.visible = false;
+    if (grid) grid.visible = this._showGrid;
+    if (axes) axes.visible = false; // axes helper always hidden in camera view
+
+    // ── Temporarily hide transform gizmo ──────────────────────────────────
+    const gizmoHelper = window.__cyco?.transformGizmo?._helper;
+    const gizmoWas    = gizmoHelper?.visible ?? false;
+    if (gizmoHelper) gizmoHelper.visible = this._showGizmo && gizmoWas;
 
     // ── Temporarily correct aspect for this preview window ────────────────
     // Save and restore the camera projection matrix so the shared main camera
@@ -390,6 +427,7 @@ export class CameraViewPanel extends BasePanel {
     }
     if (grid) grid.visible = gridWas;
     if (axes) axes.visible = axesWas;
+    if (gizmoHelper) gizmoHelper.visible = gizmoWas;
   }
 
   // ── Snapshot ──────────────────────────────────────────────────────────────

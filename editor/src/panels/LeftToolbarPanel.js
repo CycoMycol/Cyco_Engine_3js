@@ -51,7 +51,7 @@ export class LeftToolbarPanel extends BasePanel {
       const next = CYCLE[(CYCLE.indexOf(cur) + 1) % CYCLE.length];
       this._activeTool = next;
       this._refreshToolBtns();
-      document.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: next }));
+      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: next } }));
     });
     transformBtn.dataset.tool = 'transform';
     this._toolBtns['transform'] = transformBtn;
@@ -61,7 +61,7 @@ export class LeftToolbarPanel extends BasePanel {
     const rectBtn = _toolBtn(_toolIcon('rect'), 'Rect Transform  T', () => {
       this._activeTool = 'rect';
       this._refreshToolBtns();
-      document.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: 'rect' }));
+      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'rect' } }));
     });
     rectBtn.dataset.tool = 'rect';
     this._toolBtns['rect'] = rectBtn;
@@ -79,7 +79,7 @@ export class LeftToolbarPanel extends BasePanel {
       const btn = _modeBtn(m.label, m.color, m.title, () => {
         this._viewMode = m.id;
         this._refreshViewBtns();
-        document.dispatchEvent(new CustomEvent('cyco-vp-viewmode', { detail: m.id }));
+        window.dispatchEvent(new CustomEvent('cyco-vp-viewmode', { detail: m.id }));
       });
       this._viewBtns[m.id] = btn;
       bar.appendChild(btn);

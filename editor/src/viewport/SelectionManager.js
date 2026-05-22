@@ -194,7 +194,11 @@ export class SelectionManager {
       }
       this._selectObject(hits[0].object);
     } else {
-      if (!event.shiftKey && !event.ctrlKey) this.clearSelection();
+      if (!event.shiftKey && !event.ctrlKey) {
+        this.clearSelection();
+        // Clicking empty space opens environment properties
+        window.dispatchEvent(new CustomEvent('cyco-show-properties', { detail: { type: 'environment' } }));
+      }
     }
   }
 
@@ -240,7 +244,8 @@ export class SelectionManager {
   }
 
   _isNonSelectable(obj) {
-    if (obj.userData?._isGizmo) return true;
+    if (obj.userData?._isGizmo)  return true;
+    if (obj.userData?._isHelper) return true;
     if (this.nonSelectableSet.has(obj)) return true;
     // Also walk up the parent chain — if any ancestor is non-selectable, skip
     let p = obj.parent;

@@ -65,7 +65,13 @@ export class PostProcessingPipeline {
   _buildWebGLPipeline(renderer, scene, camera, w, h) {
     this._disposeWebGLPipeline();
 
-    this._composer = new EffectComposer(renderer);
+    // Use a half-float HDR render target so that physical-sky luminance values > 1.0
+    // are preserved through the pipeline and correctly tone-mapped by OutputPass.
+    const hdrTarget = new THREE.WebGLRenderTarget(w, h, {
+      type: THREE.HalfFloatType,
+      format: THREE.RGBAFormat,
+    });
+    this._composer = new EffectComposer(renderer, hdrTarget);
 
     // 1. Render scene
     this._composer.addPass(new RenderPass(scene, camera));
@@ -79,9 +85,9 @@ export class PostProcessingPipeline {
     this.outlinePass.hiddenEdgeColor.set(0x333333);
     this._composer.addPass(this.outlinePass);
 
-    // 3. Bloom (GTAOPass removed — requires G-buffer/depth pre-pass not supported
-    //    in a plain EffectComposer setup; re-add with MRT/depth buffer in Phase 15)
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.5, 0.4, 0.85);
+    // 3. Bloom — threshold=4.8: the sky output is clamped to 4.5 (see ViewportEngine._onSkyChange),
+    //    so only emissive objects brighter than 4.8 linear produce a bloom halo.
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.3, 0.4, 4.8);
     this._composer.addPass(this.bloomPass);
 
     // 4. OutputPass — MUST be last — applies tone mapping + sRGB output conversion
