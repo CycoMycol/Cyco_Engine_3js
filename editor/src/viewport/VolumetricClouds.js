@@ -218,6 +218,8 @@ export class VolumetricClouds {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
+  get enabled() { return !!this._p.enabled; }
+
   setEnabled(enabled) {
     this._p.enabled = enabled;
     if (enabled) this._createMesh();

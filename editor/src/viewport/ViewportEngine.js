@@ -23,6 +23,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { VolumetricClouds } from './VolumetricClouds.js';
+import { GradientSky }     from './GradientSky.js';
 
 /** Sentinel value: no active focus animation. */
 const NO_FOCUS = null;
@@ -133,6 +134,9 @@ export class ViewportEngine {
     // Volumetric cloud system (WebGL ray marching)
     this.cloudSystem = new VolumetricClouds(this);
 
+    // Gradient sky + sun/moon system
+    this.gradientSky = new GradientSky(this);
+
     // OrbitControls
     this._buildControls();
 
@@ -173,61 +177,43 @@ export class ViewportEngine {
     if (newScene) this.replaceScene(newScene);
   }
 
-  /** Apply sky (THREE.Sky) to the active scene. */
-  async _onSkyChange({ detail } = {}) {
+  /** Apply gradient sky + sun/moon to the active scene. */
+  _onSkyChange({ detail } = {}) {
     const {
-      enabled, elevation = 30, azimuth = 180,
-      turbidity = 10, rayleigh = 3,
-      mieCoefficient = 0.005, mieDirectionalG = 0.7,
-      showSunDisc = true,
+      enabled,
+      elevation = 30, azimuth = 180,
+      colorStops, opacityStops,
+      showSun = true, sunColor, sunGlowStrength,
+      showMoon = true, moonColor,
     } = detail ?? {};
     if (!this.scene) return;
 
-    // Remove existing sky mesh
-    const old = this.scene.getObjectByName('__cyco_sky');
-    if (old) { this.scene.remove(old); old.geometry?.dispose(); }
-
     if (!enabled) {
+      this.gradientSky?.setEnabled(false);
       this.skyEnabled = false;
-      // Preserve solid background color instead of going null
       if (!(this.scene.background instanceof THREE.Color)) {
         this.scene.background = new THREE.Color(0x1a1a1a);
       }
       return;
     }
 
-    const { Sky } = await import('three/addons/objects/Sky.js');
-    const sky = new Sky();
-    sky.name = '__cyco_sky';
-    sky.scale.setScalar(450000);
-    sky.raycast = () => {};   // non-selectable
-    sky.userData._isHelper = true;
+    const params = { elevation, azimuth, showSun, showMoon };
+    if (colorStops)       params.colorStops       = colorStops;
+    if (opacityStops)     params.opacityStops      = opacityStops;
+    if (sunColor)         params.sunColor          = sunColor;
+    if (sunGlowStrength !== undefined) params.sunGlowStrength = sunGlowStrength;
+    if (moonColor)        params.moonColor         = moonColor;
 
-    // Clamp sky luminance so the sun disc never exceeds the bloom threshold.
-    // Without this, horizontal views cause the entire screen to bloom white.
-    sky.material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        'gl_FragColor = vec4( texColor, 1.0 );',
-        'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );'
-      );
-    };
-    const sun = new THREE.Vector3();
-    const phi   = THREE.MathUtils.degToRad(90 - elevation);
-    const theta = THREE.MathUtils.degToRad(azimuth);
-    sun.setFromSphericalCoords(1, phi, theta);
-    const u = sky.material.uniforms;
-    u['sunPosition'].value.copy(sun);
-    u['turbidity'].value       = turbidity;
-    u['rayleigh'].value        = rayleigh;
-    u['mieCoefficient'].value  = mieCoefficient;
-    u['mieDirectionalG'].value = mieDirectionalG;
-    // showSunDisc not available in WebGL Sky (only SkyMesh/WebGPU); safe to skip
-    this.scene.add(sky);
+    this.gradientSky.setEnabled(true);
+    this.gradientSky.setParams(params);
+
+    // Sky mesh handles the background — clear any solid/colour background
+    this.scene.background = null;
     this.skyEnabled   = true;
     this.skyElevation = elevation;
     this.skyAzimuth   = azimuth;
 
-    // Sync cloud sun direction to match sky
+    // Sync cloud sun direction
     this.cloudSystem?.updateSunFromSky(elevation, azimuth);
   }
 
@@ -652,6 +638,9 @@ export class ViewportEngine {
 
     // Volumetric clouds update (time + camera follow)
     this.cloudSystem?.update();
+
+    // Gradient sky follows camera
+    this.gradientSky?.update();
 
     // Dispatch tick event for PostProcessingPipeline, ViewportStats, etc.
     window.dispatchEvent(new CustomEvent('cyco-vp-tick', { detail: { delta } }));

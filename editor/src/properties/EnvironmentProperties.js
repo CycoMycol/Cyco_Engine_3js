@@ -5,14 +5,15 @@
  * Events dispatched:
  *   cyco-background-change  { type, color?, topColor?, horizonColor?, bottomColor? }
  *   cyco-fog-change         { type, color, near, far, density }
- *   cyco-sky-change         { enabled, elevation, azimuth, turbidity, rayleigh,
- *                             mieCoefficient, mieDirectionalG, showSunDisc }
+ *   cyco-sky-change         { enabled, elevation, azimuth, colorStops, opacityStops,
+ *                             showSun, sunColor, sunGlowStrength, showMoon, moonColor }
  *   cyco-env-map-change     { url, isHDR }
  *   cyco-env-preset         { preset }
  */
 
 import * as THREE from 'three';
 import { section, row, select, slider, checkbox, colorSwatch } from './propUtils.js';
+import { GradientEditor } from '../ui/GradientEditor.js';
 
 export class EnvironmentProperties {
   constructor() {
@@ -151,7 +152,6 @@ export class EnvironmentProperties {
     const ve = window.__cyco?.viewportEngine;
 
     const _fire = (autoEnable = false) => {
-      // Moving a sky slider auto-enables sky so controls "just work"
       if (autoEnable && enabledCb && !enabledCb.checked) {
         enabledCb.checked = true;
       }
@@ -159,17 +159,14 @@ export class EnvironmentProperties {
     };
 
     const enabledCb = checkbox({ checked: !!ve?.skyEnabled, onChange: () => _fire() });
-    this._skyEnabledCb = enabledCb; // shared with background section
+    this._skyEnabledCb = enabledCb;
     body.appendChild(row('Show Sky', enabledCb));
 
-    const sunDiscCb = checkbox({ checked: true, onChange: () => _fire() });
-    body.appendChild(row('Show Sun Disc', sunDiscCb));
-
-    // Day/Night slider: 0 = night (elevation ~-5), 1 = midday (elevation 70)
+    // Day/Night slider: 0 = night (elevation -5), 1 = midday (elevation 70)
     const dayNightSlider = slider({
-      value: 0.4, min: 0, max: 1, step: 0.01,
+      value: 0.47, min: 0, max: 1, step: 0.01,
       onChange: (v) => {
-        const elev = Math.round((v * 75 - 5) * 10) / 10;
+        const elev = +(v * 75 - 5).toFixed(1);
         elevationSlider.input.value = elev;
         elevationSlider.input.dispatchEvent(new Event('input'));
         _fire(true);
@@ -189,38 +186,72 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Azimuth', azimuthSlider.el));
 
-    const turbiditySlider = slider({ value: 2, min: 1, max: 20, step: 0.1, onChange: () => _fire(true) });
-    body.appendChild(row('Turbidity', turbiditySlider.el));
+    // ── Sky gradient ────────────────────────────────────────────────────────
+    const gradLabel = document.createElement('div');
+    gradLabel.style.cssText =
+      'font-size:11px;color:var(--text-secondary,#999);padding:4px 4px 2px;' +
+      'font-style:italic;';
+    gradLabel.textContent = 'Sky Colours  (left = nadir → right = zenith)';
+    body.appendChild(gradLabel);
 
-    const rayleighSlider = slider({ value: 0.5, min: 0, max: 4, step: 0.05, onChange: () => _fire(true) });
-    body.appendChild(row('Rayleigh', rayleighSlider.el));
+    // Read back current gradient if sky is already active
+    const initGrad = ve?.gradientSky?.getGradient();
+    const gradEditor = new GradientEditor({
+      ...(initGrad ?? {}),
+      onChange: () => _fire(true),
+    });
+    gradEditor.element.style.padding = '0 4px 4px';
+    body.appendChild(gradEditor.element);
 
-    const mieCoefSlider = slider({ value: 0.003, min: 0, max: 0.1, step: 0.001, onChange: () => _fire(true) });
-    body.appendChild(row('Mie Coefficient', mieCoefSlider.el));
+    // ── Sun controls ────────────────────────────────────────────────────────
+    const showSunCb = checkbox({ checked: true, onChange: () => _fire() });
+    body.appendChild(row('Show Sun', showSunCb));
 
-    const mieDirGSlider = slider({ value: 0.9, min: 0, max: 1, step: 0.01, onChange: () => _fire(true) });
-    body.appendChild(row('Mie Dir G', mieDirGSlider.el));
+    const sunColorSw = colorSwatch({ color: '#fff8e7', onChange: () => _fire() });
+    body.appendChild(row('Sun Color', sunColorSw.el));
 
-    // Store references so _fireSkyChange can read current values
-    this._skyControls = { enabledCb, sunDiscCb, elevationSlider, azimuthSlider,
-                          turbiditySlider, rayleighSlider, mieCoefSlider, mieDirGSlider };
+    const sunGlowSlider = slider({
+      value: 0.5, min: 0, max: 2, step: 0.05,
+      onChange: () => _fire(),
+    });
+    body.appendChild(row('Sun Glow', sunGlowSlider.el));
+
+    // ── Moon controls ───────────────────────────────────────────────────────
+    const showMoonCb = checkbox({ checked: true, onChange: () => _fire() });
+    body.appendChild(row('Show Moon', showMoonCb));
+
+    const moonColorSw = colorSwatch({ color: '#c0d4ff', onChange: () => _fire() });
+    body.appendChild(row('Moon Color', moonColorSw.el));
+
+    // Store all references
+    this._skyControls = {
+      enabledCb, elevationSlider, azimuthSlider,
+      gradEditor,
+      showSunCb, sunColorSw, sunGlowSlider,
+      showMoonCb, moonColorSw,
+    };
   }
 
-  /** Fire cyco-sky-change using the current slider/checkbox state. */
+  /** Fire cyco-sky-change using current control state. */
   _fireSkyChange(enabledOverride) {
     const s = this._skyControls;
     if (!s) return;
     const enabled = (enabledOverride !== undefined) ? !!enabledOverride : s.enabledCb.checked;
+    const { colorStops, opacityStops } = s.gradEditor.data;
+    const sunColor  = s.sunColorSw.el.style.getPropertyValue('--sw-color')  || '#fff8e7';
+    const moonColor = s.moonColorSw.el.style.getPropertyValue('--sw-color') || '#c0d4ff';
     window.dispatchEvent(new CustomEvent('cyco-sky-change', {
       detail: {
         enabled,
         elevation:       parseFloat(s.elevationSlider.input.value),
         azimuth:         parseFloat(s.azimuthSlider.input.value),
-        turbidity:       parseFloat(s.turbiditySlider.input.value),
-        rayleigh:        parseFloat(s.rayleighSlider.input.value),
-        mieCoefficient:  parseFloat(s.mieCoefSlider.input.value),
-        mieDirectionalG: parseFloat(s.mieDirGSlider.input.value),
-        showSunDisc:     s.sunDiscCb.checked,
+        colorStops,
+        opacityStops,
+        showSun:         s.showSunCb.checked,
+        sunColor,
+        sunGlowStrength: parseFloat(s.sunGlowSlider.input.value),
+        showMoon:        s.showMoonCb.checked,
+        moonColor,
       }
     }));
   }
@@ -233,44 +264,45 @@ export class EnvironmentProperties {
 
     const cs = () => window.__cyco?.cloudSystem;
 
+    // Read current cloud enabled state so checkbox persists across panel rebuilds
     const enableCb = checkbox({
-      checked: false,
+      checked: !!window.__cyco?.cloudSystem?.enabled,
       onChange: (v) => cs()?.setEnabled(v),
     });
     body.appendChild(row('Enable Clouds', enableCb));
 
     const coverageSlider = slider({
-      value: 0.45, min: 0, max: 1, step: 0.01,
+      value: cs()?._p?.coverage ?? 0.45, min: 0, max: 1, step: 0.01,
       onChange: (v) => cs()?.setParam('coverage', v),
     });
     body.appendChild(row('Coverage', coverageSlider.el));
 
     const densitySlider = slider({
-      value: 0.7, min: 0, max: 1, step: 0.01,
+      value: cs()?._p?.density ?? 0.7, min: 0, max: 1, step: 0.01,
       onChange: (v) => cs()?.setParam('density', v),
     });
     body.appendChild(row('Density', densitySlider.el));
 
     const scaleSlider = slider({
-      value: 55, min: 5, max: 250, step: 1,
+      value: cs()?._p?.scale ?? 55, min: 5, max: 250, step: 1,
       onChange: (v) => cs()?.setParam('scale', v),
     });
     body.appendChild(row('Scale', scaleSlider.el));
 
     const speedSlider = slider({
-      value: 0.4, min: 0, max: 3, step: 0.05,
+      value: cs()?._p?.windSpeed ?? 0.4, min: 0, max: 3, step: 0.05,
       onChange: (v) => cs()?.setParam('windSpeed', v),
     });
     body.appendChild(row('Wind Speed', speedSlider.el));
 
     const baseSlider = slider({
-      value: 5, min: 1, max: 300, step: 1,
+      value: cs()?._p?.cloudBase ?? 5, min: 1, max: 300, step: 1,
       onChange: (v) => cs()?.setParam('cloudBase', v),
     });
     body.appendChild(row('Cloud Base Y', baseSlider.el));
 
     const topSlider = slider({
-      value: 25, min: 10, max: 600, step: 1,
+      value: cs()?._p?.cloudTop ?? 25, min: 10, max: 600, step: 1,
       onChange: (v) => cs()?.setParam('cloudTop', v),
     });
     body.appendChild(row('Cloud Top Y', topSlider.el));

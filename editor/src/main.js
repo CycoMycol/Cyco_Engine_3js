@@ -143,8 +143,8 @@ if (typeof window !== 'undefined') {
     commandManager,
     viewportContextMenu,
     dockviewApi: dockApi,
-    // cloudSystem is set on viewportEngine.cloudSystem after init()
-    get cloudSystem() { return viewportEngine.cloudSystem; },
+    get cloudSystem()  { return viewportEngine.cloudSystem; },
+    get gradientSky()  { return viewportEngine.gradientSky; },
     get postPipeline() { return postPipeline; },
   };
 }
