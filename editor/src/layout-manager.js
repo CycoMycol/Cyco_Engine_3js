@@ -105,6 +105,47 @@ const LayoutManager = {
   },
 
   /**
+   * Walk a saved Dockview grid tree and push exact sizes to every panel group
+   * using groupApi.setSize().  Called ~150 ms after api.fromJSON() to correct
+   * the layout, because fromJSON temporarily collapses the container to the CSS
+   * min-width (~100 px) while rebuilding panels, which causes Dockview to
+   * normalise all sizes against that collapsed width instead of the true width.
+   *
+   * Orientation rule (Dockview convention):
+   *   A branch's children are laid out along the PERPENDICULAR axis:
+   *     HORIZONTAL branch → children are side-by-side → child .size = WIDTH
+   *     VERTICAL   branch → children are stacked      → child .size = HEIGHT
+   *
+   * @param {object} node        - a node from layout.grid.root
+   * @param {string} parentOrient - 'HORIZONTAL' | 'VERTICAL' — the orientation
+   *   of this node's parent branch, which determines what .size means for this node.
+   *   Pass 'VERTICAL' for the root node (root is always HORIZONTAL, meaning its
+   *   own .size is the container height — we don't need to set that).
+   */
+  _applyGridSizes(node, parentOrient) {
+    if (!node) return;
+    if (node.type === 'leaf') {
+      const panelId = node.data?.views?.[0];
+      if (!panelId) return;
+      const panel = this.api.getPanel(panelId);
+      const groupApi = panel?.api?.group?.api;
+      if (!groupApi) return;
+      if (parentOrient === 'HORIZONTAL') {
+        groupApi.setSize({ width: node.size });
+      } else {
+        groupApi.setSize({ height: node.size });
+      }
+    } else if (node.type === 'branch') {
+      // A branch's own orientation is perpendicular to the parent orientation.
+      // Its children's sizes are interpreted relative to the branch's own axis.
+      const ownOrient = parentOrient === 'HORIZONTAL' ? 'VERTICAL' : 'HORIZONTAL';
+      for (const child of (node.data ?? [])) {
+        this._applyGridSizes(child, ownOrient);
+      }
+    }
+  },
+
+  /**
    * Restore the last auto-saved layout from localStorage, or apply the default
    * layout if no save exists.  This is the ONE AND ONLY place that calls
    * api.fromJSON() during startup, preventing the double-fromJSON size bug.
@@ -176,39 +217,26 @@ const LayoutManager = {
       this.api.fromJSON(layout);
       this._snapshots = snapshots;
       this._resyncVisibility();
-      this._restoringLayout = false;
       document.dispatchEvent(new CustomEvent('cyco-layout-change'));
 
-      // After fromJSON, dockview's internal width/height mismatch causes a ResizeObserver
-      // RAF at ~T+16ms to re-normalize all panel sizes. Wait 50ms (after that RAF), then
-      // force the correct sizes from the saved layout.
+      // Dockview's fromJSON can produce wrong panel sizes because the dv-shell
+      // temporarily collapses (to CSS min-width ~100 px) while panels are being
+      // reconstructed.  Dockview uses that collapsed width as its normalisation
+      // reference, so sizes end up proportionally wrong after the DOM reflows.
+      //
+      // Fix: after Dockview's ResizeObserver has fired (~16 ms) and the first
+      // reflow is complete (~150 ms), walk the saved grid tree and push exact
+      // sizes to each panel group via setSize().  Keep _restoringLayout=true
+      // throughout so none of these intermediate changes trigger an auto-save.
+      const _savedRoot = layout.grid?.root;
       setTimeout(() => {
-        try {
-          const root = layout.grid?.root;
-          const vStack = (root?.data?.length === 1 && root.data[0]?.type === 'branch') ? root.data[0] : root;
-          const contentBranch = vStack?.data?.find(n => n.type === 'branch');
-          if (!contentBranch?.data) return;
-
-          // Fix column widths (horizontal content branch — hierarchy, mid, properties)
-          for (const col of contentBranch.data) {
-            if (col.type !== 'leaf') continue;
-            const panelId = col.data?.views?.[0];
-            const grpApi = panelId && this.api.getPanel(panelId)?.api?.group?.api;
-            if (grpApi) grpApi.setSize({ width: col.size });
-          }
-
-          // Fix row heights inside the center (mid) column — assets-browser height etc.
-          const midBranch = contentBranch.data.find(n => n.type === 'branch');
-          if (midBranch?.data) {
-            for (const row of midBranch.data) {
-              if (row.type !== 'leaf') continue;
-              const panelId = row.data?.views?.[0];
-              const grpApi = panelId && this.api.getPanel(panelId)?.api?.group?.api;
-              if (grpApi) grpApi.setSize({ height: row.size });
-            }
-          }
-        } catch(_) {}
-      }, 50);
+        try { this._applyGridSizes(_savedRoot, 'VERTICAL'); } catch(e) {
+          console.warn('[Cyco] restoreAutoSaved: size re-apply failed', e);
+        }
+        setTimeout(() => {
+          this._restoringLayout = false;
+        }, 200);
+      }, 150);
 
 
     } catch(e) {

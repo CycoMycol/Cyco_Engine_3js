@@ -245,6 +245,16 @@ export class PostProcessingPipeline {
     if (this.lutPass) this.lutPass.enabled = this._lutEnabled;
   }
 
+  /** Clear the loaded LUT texture and disable the pass. */
+  clearLut() {
+    this._lutTexture = null;
+    if (this.lutPass) {
+      this.lutPass.lut     = null;
+      this.lutPass.enabled = false;
+    }
+    this._lutEnabled = false;
+  }
+
   /** Set the LUT blend intensity (0 = original, 1 = full LUT). */
   setLutIntensity(v) {
     this._lutIntensity = v;

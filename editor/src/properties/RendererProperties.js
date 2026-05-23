@@ -182,7 +182,22 @@ export class RendererProperties {
         if (pipeline) pipeline.setLutEnabled(v);
       },
     });
-    lutBody.appendChild(row('Enable LUT', lutCb));
+    const lutClearBtn = document.createElement('button');
+    lutClearBtn.textContent = 'Clear';
+    lutClearBtn.className   = 'ce-btn-small';
+    lutClearBtn.title       = 'Remove the loaded LUT and disable color grading';
+    lutClearBtn.addEventListener('click', () => {
+      const pipeline = window.__cyco?.viewportEngine?.postProcessing;
+      if (pipeline) {
+        pipeline.clearLut();
+        lutCb.checked = false;
+      }
+    });
+    const lutEnableRow = document.createElement('div');
+    lutEnableRow.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    lutEnableRow.appendChild(lutCb);
+    lutEnableRow.appendChild(lutClearBtn);
+    lutBody.appendChild(row('Enable LUT', lutEnableRow));
 
     const lutIntensity = pp?._lutIntensity ?? 1.0;
     const lutIntSlider = slider({
