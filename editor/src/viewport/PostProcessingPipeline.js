@@ -27,7 +27,10 @@ import { OutlinePass }     from 'three/addons/postprocessing/OutlinePass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
+import { SMAAPass }        from 'three/addons/postprocessing/SMAAPass.js';
+import { LUTPass }         from 'three/addons/postprocessing/LUTPass.js';
 import { FXAAShader }      from 'three/addons/shaders/FXAAShader.js';
+import { LUTCubeLoader }   from 'three/addons/loaders/LUTCubeLoader.js';
 
 export class PostProcessingPipeline {
   /**
@@ -48,11 +51,29 @@ export class PostProcessingPipeline {
     /** @type {ShaderPass|null} — FXAA anti-aliasing, added after OutputPass */
     this.fxaaPass = null;
 
+    /** @type {SMAAPass|null} — SMAA anti-aliasing, added before OutputPass */
+    this.smaaPass = null;
+
+    /** @type {LUTPass|null} — LUT color grading, added after OutputPass */
+    this.lutPass = null;
+
     /** Whether the EffectComposer pipeline is active (vs. direct renderer.render) */
     this._pipelineEnabled = true;
 
-    /** Persists FXAA enabled state across pipeline rebuilds */
+    /** Current AA mode — 'none' | 'fxaa' | 'smaa' | 'msaa2' | 'msaa4' */
+    this._aaMode = 'none';
+
+    /** @deprecated kept for back-compat; use _aaMode instead */
     this._fxaaEnabled = false;
+
+    /** LUT pass enabled state */
+    this._lutEnabled = false;
+
+    /** LUT blend intensity (0–1) */
+    this._lutIntensity = 1.0;
+
+    /** Loaded 3D LUT texture */
+    this._lutTexture = null;
 
     this._onVpReady         = this._onVpReady.bind(this);
     this._onRendererChanged = this._onRendererChanged.bind(this);
@@ -78,9 +99,13 @@ export class PostProcessingPipeline {
 
     // Use a half-float HDR render target so that physical-sky luminance values > 1.0
     // are preserved through the pipeline and correctly tone-mapped by OutputPass.
+    // MSAA: set samples > 0 on the HDR render target for WebGL2 hardware anti-aliasing.
+    // FXAA / SMAA are post-process passes and don't need a multisampled target.
+    const msaaSamples = this._aaMode === 'msaa4' ? 4 : this._aaMode === 'msaa2' ? 2 : 0;
     const hdrTarget = new THREE.WebGLRenderTarget(w, h, {
       type: THREE.HalfFloatType,
       format: THREE.RGBAFormat,
+      samples: msaaSamples,
     });
     this._composer = new EffectComposer(renderer, hdrTarget);
 
@@ -101,16 +126,27 @@ export class PostProcessingPipeline {
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
     this._composer.addPass(this.bloomPass);
 
-    // 4. OutputPass — applies tone mapping + sRGB output conversion
+    // 4. SMAA — must come BEFORE OutputPass (operates on linear-sRGB HDR data).
+    const dpr = renderer.getPixelRatio();
+    this.smaaPass = new SMAAPass(w * dpr, h * dpr);
+    this.smaaPass.enabled = (this._aaMode === 'smaa');
+    this._composer.addPass(this.smaaPass);
+
+    // 5. OutputPass — applies tone mapping + sRGB output conversion
     this._composer.addPass(new OutputPass());
 
-    // 5. FXAA — optional anti-aliasing pass (disabled by default, enabled via UI)
-    //    Must come after OutputPass so it operates on the final LDR/sRGB image.
-    const dpr = renderer.getPixelRatio();
+    // 6. FXAA — must come AFTER OutputPass (operates on final LDR/sRGB image).
     this.fxaaPass = new ShaderPass(FXAAShader);
     this.fxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
-    this.fxaaPass.enabled = this._fxaaEnabled; // restore across rebuilds
+    this.fxaaPass.enabled = (this._aaMode === 'fxaa');
     this._composer.addPass(this.fxaaPass);
+
+    // 7. LUT color grading — applied after tone-mapping on the LDR image.
+    this.lutPass = new LUTPass();
+    this.lutPass.enabled   = this._lutEnabled;
+    this.lutPass.intensity = this._lutIntensity;
+    if (this._lutTexture) this.lutPass.lut = this._lutTexture;
+    this._composer.addPass(this.lutPass);
 
     // Tell ViewportEngine whether the pipeline is active (respects user toggle)
     this.engine.setPipelineActive(this._pipelineEnabled);
@@ -124,6 +160,8 @@ export class PostProcessingPipeline {
     this.outlinePass = null;
     this.bloomPass   = null;
     this.fxaaPass    = null;
+    this.smaaPass    = null;
+    this.lutPass     = null;
     this.engine.setPipelineActive(false);
   }
 
@@ -171,7 +209,7 @@ export class PostProcessingPipeline {
     }
   }
 
-  // ─── Pipeline enabled / FXAA API ──────────────────────────────────────────
+  // ─── Pipeline enabled / AA / LUT API ────────────────────────────────────────
 
   /** Enable or disable the entire EffectComposer pipeline. */
   get pipelineEnabled() { return this._pipelineEnabled; }
@@ -180,10 +218,70 @@ export class PostProcessingPipeline {
     this.engine.setPipelineActive(!!v && !!this._composer);
   }
 
-  /** Enable or disable the FXAA anti-aliasing pass. Persists across pipeline rebuilds. */
+  /**
+   * Set the anti-aliasing mode.
+   * @param {'none'|'fxaa'|'smaa'|'msaa2'|'msaa4'} mode
+   */
+  setAntiAliasMode(mode) {
+    const prev = this._aaMode;
+    this._aaMode = mode;
+    this._fxaaEnabled = (mode === 'fxaa'); // keep legacy flag in sync
+
+    // MSAA is a render-target property — any change to/from MSAA requires a full rebuild.
+    const prevWasMsaa = (prev === 'msaa2' || prev === 'msaa4');
+    const nowIsMsaa   = (mode === 'msaa2' || mode === 'msaa4');
+    if (prevWasMsaa || nowIsMsaa) {
+      this._rebuildForCurrentType();
+    } else {
+      // For FXAA / SMAA / none we can toggle passes in-place (no render-target change).
+      if (this.fxaaPass) this.fxaaPass.enabled = (mode === 'fxaa');
+      if (this.smaaPass) this.smaaPass.enabled = (mode === 'smaa');
+    }
+  }
+
+  /** Enable or disable LUT color grading. */
+  setLutEnabled(enabled) {
+    this._lutEnabled = !!enabled;
+    if (this.lutPass) this.lutPass.enabled = this._lutEnabled;
+  }
+
+  /** Set the LUT blend intensity (0 = original, 1 = full LUT). */
+  setLutIntensity(v) {
+    this._lutIntensity = v;
+    if (this.lutPass) this.lutPass.intensity = v;
+  }
+
+  /**
+   * Load a .cube LUT file and apply it to the LUT pass.
+   * @param {File} file - A .cube file from an <input type="file"> element.
+   */
+  loadLutFromFile(file) {
+    const url = URL.createObjectURL(file);
+    new LUTCubeLoader().load(
+      url,
+      (result) => {
+        this._lutTexture = result.texture3D;
+        if (this.lutPass) this.lutPass.lut = this._lutTexture;
+        URL.revokeObjectURL(url);
+      },
+      undefined,
+      (err) => {
+        console.error('[PostProcessingPipeline] Failed to load LUT file:', err);
+        URL.revokeObjectURL(url);
+      }
+    );
+  }
+
+  /** @deprecated Use setAntiAliasMode('fxaa') / setAntiAliasMode('none') */
   setFxaaEnabled(v) {
-    this._fxaaEnabled = !!v;
-    if (this.fxaaPass) this.fxaaPass.enabled = this._fxaaEnabled;
+    this.setAntiAliasMode(v ? 'fxaa' : 'none');
+  }
+
+  /** Rebuild the pipeline for the current renderer type. */
+  _rebuildForCurrentType() {
+    const renderer = this.engine.rendererManager?.renderer;
+    const type     = this.engine.rendererManager?.activeType ?? 'webgl';
+    if (renderer) this._rebuildForType(renderer, type);
   }
 
   // ─── Event handlers ───────────────────────────────────────────────────────
@@ -213,9 +311,14 @@ export class PostProcessingPipeline {
     this._composer.setSize(w, h);
 
     // ShaderPass (FXAA) stores resolution in a uniform; setSize() doesn't update it.
+    const dpr = renderer.getPixelRatio();
     if (this.fxaaPass) {
-      const dpr = renderer.getPixelRatio();
       this.fxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
+    }
+    // SMAAPass.setSize() is forwarded by EffectComposer, but it expects physical pixels.
+    // The composer calls setSize with CSS pixels, so we override with the DPR-scaled values.
+    if (this.smaaPass) {
+      this.smaaPass.setSize(w * dpr, h * dpr);
     }
   }
 

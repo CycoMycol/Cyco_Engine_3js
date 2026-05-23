@@ -153,19 +153,63 @@ export class RendererProperties {
     root.appendChild(aaSec);
 
     const pp = window.__cyco?.viewportEngine?.postProcessing;
-    const curAA = pp?._fxaaEnabled ? 'fxaa' : 'none';
+    const curAA = pp?._aaMode ?? 'none';
     const aaSelect = select({
       options: [
-        ['none', 'None'],
-        ['fxaa', 'FXAA (Fast Approximate)'],
+        ['none',  'None'],
+        ['fxaa',  'FXAA  (fast, all platforms)'],
+        ['smaa',  'SMAA  (better quality)'],
+        ['msaa2', 'MSAA ×2  (hardware, WebGL2)'],
+        ['msaa4', 'MSAA ×4  (hardware, WebGL2)'],
       ],
       value: curAA,
       onChange: (v) => {
         const pipeline = window.__cyco?.viewportEngine?.postProcessing;
-        if (pipeline) pipeline.setFxaaEnabled(v === 'fxaa');
+        if (pipeline) pipeline.setAntiAliasMode(v);
       },
     });
     aaBody.appendChild(row('Mode', aaSelect));
+
+    // ── Color Grading (LUT) ──
+    const { el: lutSec, body: lutBody } = section('Color Grading');
+    root.appendChild(lutSec);
+
+    const lutEnabled = pp?._lutEnabled ?? false;
+    const lutCb = checkbox({
+      checked: lutEnabled,
+      onChange: (v) => {
+        const pipeline = window.__cyco?.viewportEngine?.postProcessing;
+        if (pipeline) pipeline.setLutEnabled(v);
+      },
+    });
+    lutBody.appendChild(row('Enable LUT', lutCb));
+
+    const lutIntensity = pp?._lutIntensity ?? 1.0;
+    const lutIntSlider = slider({
+      value: lutIntensity, min: 0, max: 1, step: 0.01,
+      onChange: (v) => {
+        const pipeline = window.__cyco?.viewportEngine?.postProcessing;
+        if (pipeline) pipeline.setLutIntensity(v);
+      },
+    });
+    lutBody.appendChild(row('Intensity', lutIntSlider.el));
+
+    const lutFileBtn = document.createElement('button');
+    lutFileBtn.textContent = 'Load .cube File…';
+    lutFileBtn.className = 'ce-btn-small';
+    lutFileBtn.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.cube,.CUBE';
+      input.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const pipeline = window.__cyco?.viewportEngine?.postProcessing;
+        if (pipeline) pipeline.loadLutFromFile(file);
+      });
+      input.click();
+    });
+    lutBody.appendChild(row('LUT File', lutFileBtn));
 
     return root;
   }
