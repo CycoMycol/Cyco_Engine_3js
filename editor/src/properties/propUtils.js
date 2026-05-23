@@ -54,9 +54,28 @@ function _attachScrub(trigger, inp, speed, decimals) {
   });
 }
 
+// ── Section collapse state persistence ───────────────────────────────────────
+
+const _SECTION_STATE_KEY = 'cyco-prop-sections';
+
+/** Load state map from localStorage. { [title]: boolean (true = open) } */
+function _loadSectionState() {
+  try { return JSON.parse(localStorage.getItem(_SECTION_STATE_KEY) || '{}'); }
+  catch { return {}; }
+}
+
+/** Save the full state map to localStorage. */
+function _saveSectionState(map) {
+  try { localStorage.setItem(_SECTION_STATE_KEY, JSON.stringify(map)); }
+  catch {}
+}
+
 // ── Section ───────────────────────────────────────────────────────────────────
 
-/** Build a collapsible section container. Returns { el, body } */
+/** Build a collapsible section container. Returns { el, body }
+ *  The open/closed state is persisted per-title in localStorage so it survives
+ *  object deselect / reselect.
+ */
 export function section(title) {
   const el  = document.createElement('div');
   el.className = 'ce-prop-section';
@@ -74,10 +93,21 @@ export function section(title) {
   const body = document.createElement('div');
   body.className = 'ce-prop-section-body';
 
+  // Restore saved state (default: open)
+  const saved = _loadSectionState();
+  if (saved[title] === false) {
+    body.style.display = 'none';
+    arrow.textContent  = '▸';
+  }
+
   hdr.addEventListener('click', () => {
     const open = body.style.display !== 'none';
-    body.style.display   = open ? 'none' : '';
-    arrow.textContent    = open ? '▸' : '▾';
+    body.style.display = open ? 'none' : '';
+    arrow.textContent  = open ? '▸' : '▾';
+    // Persist the new state
+    const map = _loadSectionState();
+    map[title] = !open;
+    _saveSectionState(map);
   });
 
   el.appendChild(hdr);
