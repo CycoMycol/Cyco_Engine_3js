@@ -24,7 +24,13 @@
 
 import * as THREE from 'three';
 import { BasePanel } from './BasePanel.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+import { EffectComposer }   from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass }       from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass }  from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass }       from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass }       from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader }       from 'three/addons/shaders/FXAAShader.js';
 
 // ── CSS (injected once) ───────────────────────────────────────────────────────
 const _STYLE_ID = 'cyco-cvp-styles';
@@ -102,8 +108,15 @@ export class CameraViewPanel extends BasePanel {
     this._showGizmo = false;
     /** Whether to show grid in camera view (off by default). */
     this._showGrid  = false;
-    /** Local IBL env map generated with THIS renderer's WebGL context. */
+    /** Local IBL env map generated with THIS renderer's WebGL context (mirrors sky gradient). */
     this._localEnvTex = null;
+    /** Bound sky change handler — stored so it can be removed on teardown. */
+    this._onSkyChangeBound = this._onSkyChange.bind(this);
+    /** EffectComposer that mirrors the main viewport's post-processing pipeline. */
+    this._cameraComposer   = null;
+    this._cameraRenderPass = null;
+    this._cameraBloomPass  = null;
+    this._cameraFxaaPass   = null;
   }
 
   // ── dockview lifecycle ────────────────────────────────────────────────────
@@ -326,17 +339,16 @@ export class CameraViewPanel extends BasePanel {
     this._cameraRenderer.toneMappingExposure = 1.0;
     this._cameraRenderer.setClearColor(0x1a1a1a, 1);
 
-    // Generate IBL env map using THIS renderer's own WebGL context.
-    // PMREM textures are context-specific — the main renderer's env texture cannot
-    // be used here (different WebGL context = black scene).
-    try {
-      const pmrem = new THREE.PMREMGenerator(this._cameraRenderer);
-      pmrem.compileEquirectangularShader();
-      this._localEnvTex = pmrem.fromScene(new RoomEnvironment(this._cameraRenderer)).texture;
-      pmrem.dispose();
-    } catch (e) {
-      console.warn('[CameraViewPanel] Could not generate local env map:', e);
+    // Generate a sky-gradient IBL env map using THIS renderer's own WebGL context.
+    // PMREM textures are context-specific — we must regenerate the gradient from the
+    // same color stops that the main viewport uses.
+    const initColorStops = window.__cyco?.viewportEngine?._lastSkyColorStops ?? null;
+    if (initColorStops) {
+      this._rebuildLocalSkyEnv(initColorStops);
     }
+
+    // Keep env in sync when sky gradient changes
+    window.addEventListener('cyco-sky-change', this._onSkyChangeBound);
 
     const c = this._cameraRenderer.domElement;
     c.style.cssText = 'display:block;width:100%;height:100%;';
@@ -350,9 +362,13 @@ export class CameraViewPanel extends BasePanel {
         const ph = Math.max(1, Math.floor(entry.contentRect.height));
         if (!this._cameraRenderer) return;
         this._cameraRenderer.setSize(pw, ph);
+        this._rebuildComposer(pw, ph);
       }
     });
     this._resizeObserver.observe(this._canvasWrap);
+
+    // Build initial EffectComposer so camera view matches viewport post-processing
+    this._rebuildComposer(width, height);
 
     const loop = () => {
       this._rafId = requestAnimationFrame(loop);
@@ -361,13 +377,110 @@ export class CameraViewPanel extends BasePanel {
     loop();
   }
 
+  _rebuildComposer(w, h) {
+    // Dispose previous composer passes and buffers
+    if (this._cameraComposer) {
+      this._cameraComposer.passes.forEach(p => p.dispose?.());
+      this._cameraComposer.dispose?.();
+      this._cameraComposer   = null;
+      this._cameraRenderPass = null;
+      this._cameraBloomPass  = null;
+      this._cameraFxaaPass   = null;
+    }
+    if (!this._cameraRenderer) return;
+
+    // Match the main viewport's HDR pipeline: HalfFloat RT → RenderPass → Bloom → OutputPass → FXAA
+    const hdrTarget = new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType });
+    this._cameraComposer = new EffectComposer(this._cameraRenderer, hdrTarget);
+
+    // Placeholder scene/camera — updated each frame in _renderFrame()
+    this._cameraRenderPass = new RenderPass(new THREE.Scene(), new THREE.PerspectiveCamera());
+    this._cameraComposer.addPass(this._cameraRenderPass);
+
+    // Read bloom settings from main viewport pipeline if available, else use defaults
+    const mainBloom = window.__cyco?.postPipeline?.bloomPass;
+    const bStrength = mainBloom?.strength  ?? 0.8;
+    const bRadius   = mainBloom?.radius    ?? 0.4;
+    const bThresh   = mainBloom?.threshold ?? 0.85;
+    this._cameraBloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), bStrength, bRadius, bThresh);
+    this._cameraComposer.addPass(this._cameraBloomPass);
+
+    // OutputPass — applies ACESFilmic tone mapping + sRGB colour-space conversion
+    this._cameraComposer.addPass(new OutputPass());
+
+    // FXAA — must come after OutputPass; state synced from main pipeline each frame
+    const dpr = this._cameraRenderer.getPixelRatio();
+    this._cameraFxaaPass = new ShaderPass(FXAAShader);
+    this._cameraFxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
+    this._cameraFxaaPass.enabled = window.__cyco?.postPipeline?._fxaaEnabled ?? false;
+    this._cameraComposer.addPass(this._cameraFxaaPass);
+  }
+
   _teardown() {
     if (this._rafId !== null) { cancelAnimationFrame(this._rafId); this._rafId = null; }
     if (this._resizeObserver) { this._resizeObserver.disconnect(); this._resizeObserver = null; }
+    if (this._cameraComposer) {
+      this._cameraComposer.passes.forEach(p => p.dispose?.());
+      this._cameraComposer.dispose?.();
+      this._cameraComposer   = null;
+      this._cameraRenderPass = null;
+      this._cameraBloomPass  = null;
+      this._cameraFxaaPass   = null;
+    }
+    window.removeEventListener('cyco-sky-change', this._onSkyChangeBound);
     if (this._localEnvTex) { this._localEnvTex.dispose(); this._localEnvTex = null; }
     if (this._cameraRenderer) { this._cameraRenderer.dispose(); this._cameraRenderer = null; }
     this._canvasWrap  = null;
     this._placeholder = null;
+  }
+
+  // ── Sky env mirroring ─────────────────────────────────────────────────────
+
+  /** Called when the main viewport sky gradient changes; rebuilds the local env map. */
+  _onSkyChange({ detail } = {}) {
+    const { colorStops } = detail ?? {};
+    if (colorStops && this._cameraRenderer) {
+      this._rebuildLocalSkyEnv(colorStops);
+    }
+  }
+
+  /**
+   * Regenerate the sky-gradient PMREM env map using the camera renderer's own
+   * WebGL context (PMREM textures cannot be shared across WebGL contexts).
+   * Mirrors ViewportEngine._buildSkyEnvMap() exactly.
+   * @param {Array<{pos:number,color:string}>} colorStops
+   */
+  _rebuildLocalSkyEnv(colorStops) {
+    if (!this._cameraRenderer || !colorStops?.length) return;
+    try {
+      const w = 512, h = 256;
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+
+      const sorted = [...colorStops].sort((a, b) => a.pos - b.pos);
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      for (const s of sorted) {
+        grad.addColorStop(1.0 - s.pos, s.color);
+      }
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.mapping    = THREE.EquirectangularReflectionMapping;
+      tex.colorSpace = THREE.SRGBColorSpace;
+
+      const pmrem = new THREE.PMREMGenerator(this._cameraRenderer);
+      pmrem.compileEquirectangularShader();
+      const envTex = pmrem.fromEquirectangular(tex).texture;
+      pmrem.dispose();
+      tex.dispose();
+
+      if (this._localEnvTex) this._localEnvTex.dispose();
+      this._localEnvTex = envTex;
+    } catch (e) {
+      console.warn('[CameraViewPanel] Could not build local sky env map:', e);
+    }
   }
 
   // ── Camera resolution ─────────────────────────────────────────────────────
@@ -439,11 +552,32 @@ export class CameraViewPanel extends BasePanel {
     const mainExposure = window.__cyco?.rendererManager?.renderer?.toneMappingExposure ?? 1.0;
     this._cameraRenderer.toneMappingExposure = mainExposure;
 
+    // ── Sync post-processing state from main viewport pipeline ─────────────
+    const pp         = window.__cyco?.postPipeline;
+    const ppEnabled  = pp?._pipelineEnabled !== false;
+    const mainBloom  = pp?.bloomPass;
+    if (mainBloom && this._cameraBloomPass) {
+      this._cameraBloomPass.strength  = mainBloom.strength;
+      this._cameraBloomPass.radius    = mainBloom.radius;
+      this._cameraBloomPass.threshold = mainBloom.threshold;
+      this._cameraBloomPass.enabled   = mainBloom.enabled !== false;
+    }
+    if (this._cameraFxaaPass) {
+      this._cameraFxaaPass.enabled = pp?._fxaaEnabled ?? false;
+    }
+
     // ── Use local IBL env map (PMREM textures are context-specific) ───────
     const prevEnv = scene.environment;
     if (this._localEnvTex) scene.environment = this._localEnvTex;
 
-    this._cameraRenderer.render(scene, cam);
+    // ── Render: use EffectComposer only when main pipeline is enabled ──────
+    if (this._cameraComposer && this._cameraRenderPass && ppEnabled) {
+      this._cameraRenderPass.scene  = scene;
+      this._cameraRenderPass.camera = cam;
+      this._cameraComposer.render();
+    } else {
+      this._cameraRenderer.render(scene, cam);
+    }
 
     // Restore scene env so main renderer keeps its context-correct texture
     scene.environment = prevEnv;

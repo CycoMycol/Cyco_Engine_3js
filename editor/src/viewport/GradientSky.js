@@ -40,6 +40,8 @@ precision highp float;
 uniform sampler2D uGradientTex;
 uniform float     uSkyBrightness;
 uniform float     uExposure;
+uniform float     uSaturation;  // 0=greyscale, 1=unchanged, >1=vivid
+uniform float     uContrast;    // 1=unchanged, >1=more contrast
 
 // Sun — all SDR (max 1.0); lens flare handled separately in JS
 uniform vec3  uSunDir;
@@ -92,6 +94,13 @@ void main() {
     float disc = smoothstep(uMoonOuter, uMoonInner, moonDot);
     skyColor = mix(skyColor, uMoonColor, disc * uMoonVisible);
   }
+
+  // ── Contrast (pivot at 0.5) ──────────────────────────────────────────
+  skyColor = clamp((skyColor - 0.5) * uContrast + 0.5, 0.0, 2.0);
+
+  // ── Saturation ───────────────────────────────────────────────────────
+  float lum = dot(skyColor, vec3(0.299, 0.587, 0.114));
+  skyColor = max(mix(vec3(lum), skyColor, uSaturation), vec3(0.0));
 
   gl_FragColor = vec4(skyColor * uExposure, 1.0);
 }
@@ -187,6 +196,8 @@ export class GradientSky {
       moonColor:          new THREE.Color(0.75, 0.80, 0.92),
       moonGlowStrength:   0.3,
       exposure:           1.0,
+      saturation:         1.0,
+      contrast:           1.0,
       lensflareEnabled:   true,
       lensflareSize:      300,
       lensflareOpacity:   0.7,
@@ -239,6 +250,8 @@ export class GradientSky {
     if (opts.showMoon           !== undefined) p.showMoon           = opts.showMoon;
     if (opts.moonGlowStrength   !== undefined) p.moonGlowStrength   = opts.moonGlowStrength;
     if (opts.exposure           !== undefined) p.exposure           = opts.exposure;
+    if (opts.saturation         !== undefined) p.saturation         = opts.saturation;
+    if (opts.contrast           !== undefined) p.contrast           = opts.contrast;
     if (opts.lensflareEnabled   !== undefined) p.lensflareEnabled   = opts.lensflareEnabled;
     if (opts.lensflareSize      !== undefined) p.lensflareSize      = opts.lensflareSize;
     if (opts.lensflareOpacity   !== undefined) p.lensflareOpacity   = opts.lensflareOpacity;
@@ -314,6 +327,8 @@ export class GradientSky {
 
     u.uSkyBrightness.value    = this._skyBrightness();
     u.uExposure.value         = this._p.exposure;
+    u.uSaturation.value       = this._p.saturation;
+    u.uContrast.value         = this._p.contrast;
     u.uSunDir.value.copy(this._p.sunDir);
     u.uSunColor.value.copy(this._p.sunColor);
     u.uSunVisible.value       = this._sunVisible();
@@ -348,6 +363,8 @@ export class GradientSky {
         uGradientTex:       { value: this._gradientTex },
         uSkyBrightness:     { value: this._skyBrightness() },
         uExposure:          { value: this._p.exposure },
+        uSaturation:        { value: this._p.saturation },
+        uContrast:          { value: this._p.contrast },
         uSunDir:            { value: this._p.sunDir.clone() },
         uSunInner:          { value: SUN_INNER },
         uSunOuter:          { value: SUN_OUTER },

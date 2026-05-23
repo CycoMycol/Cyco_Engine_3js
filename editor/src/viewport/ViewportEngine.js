@@ -185,7 +185,7 @@ export class ViewportEngine {
       colorStops, opacityStops,
       showSun = true, sunColor, sunGlowStrength,
       showMoon = true, moonColor, moonGlowStrength,
-      exposure,
+      exposure, saturation, contrast,
       lensflareEnabled, lensflareSize, lensflareOpacity,
     } = detail ?? {};
     if (!this.scene) return;
@@ -207,6 +207,8 @@ export class ViewportEngine {
     if (moonColor)                params.moonColor        = moonColor;
     if (moonGlowStrength !== undefined) params.moonGlowStrength = moonGlowStrength;
     if (exposure !== undefined)   params.exposure         = exposure;
+    if (saturation !== undefined) params.saturation       = saturation;
+    if (contrast !== undefined)   params.contrast         = contrast;
     if (lensflareEnabled !== undefined) params.lensflareEnabled = lensflareEnabled;
     if (lensflareSize !== undefined)    params.lensflareSize    = lensflareSize;
     if (lensflareOpacity !== undefined) params.lensflareOpacity = lensflareOpacity;
@@ -223,6 +225,7 @@ export class ViewportEngine {
     // Build a sky-gradient env map so metals/glass reflect the sky colours.
     // Only regenerate when the gradient colours actually change (not on every elevation tick).
     if (colorStops && renderer) {
+      this._lastSkyColorStops = colorStops;
       this._buildSkyEnvMap(colorStops, renderer);
     }
 

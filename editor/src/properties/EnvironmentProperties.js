@@ -186,6 +186,26 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Azimuth', azimuthSlider.el));
 
+    // ── Exposure / Saturation / Contrast ────────────────────────────────────────
+    const exposureSlider = slider({
+      value: ve?.rendererManager?.renderer?.toneMappingExposure ?? 1.0,
+      min: 0.1, max: 4.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    body.appendChild(row('Exposure', exposureSlider.el));
+
+    const saturationSlider = slider({
+      value: 1.0, min: 0.0, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    body.appendChild(row('Saturation', saturationSlider.el));
+
+    const contrastSlider = slider({
+      value: 1.0, min: 0.5, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    body.appendChild(row('Contrast', contrastSlider.el));
+
     // ── Sky gradient ────────────────────────────────────────────────────────
     const gradLabel = document.createElement('div');
     gradLabel.style.cssText =
@@ -229,14 +249,6 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Moon Glow', moonGlowSlider.el));
 
-    // ── Exposure ────────────────────────────────────────────────────────────
-    const exposureSlider = slider({
-      value: ve?.rendererManager?.renderer?.toneMappingExposure ?? 1.0,
-      min: 0.1, max: 4.0, step: 0.05,
-      onChange: () => _fire(),
-    });
-    body.appendChild(row('Exposure', exposureSlider.el));
-
     // ── Lens Flare ──────────────────────────────────────────────────────────
     const lensflareEnabledCb = checkbox({ checked: true, onChange: () => _fire() });
     body.appendChild(row('Lens Flare', lensflareEnabledCb));
@@ -256,10 +268,10 @@ export class EnvironmentProperties {
     // Store all references
     this._skyControls = {
       enabledCb, elevationSlider, azimuthSlider,
+      exposureSlider, saturationSlider, contrastSlider,
       gradEditor,
       showSunCb, sunColorSw, sunGlowSlider,
       showMoonCb, moonColorSw, moonGlowSlider,
-      exposureSlider,
       lensflareEnabledCb, lensflareSizeSlider, lensflareOpacitySlider,
     };
   }
@@ -277,6 +289,9 @@ export class EnvironmentProperties {
         enabled,
         elevation:         parseFloat(s.elevationSlider.input.value),
         azimuth:           parseFloat(s.azimuthSlider.input.value),
+        exposure:          parseFloat(s.exposureSlider.input.value),
+        saturation:        parseFloat(s.saturationSlider.input.value),
+        contrast:          parseFloat(s.contrastSlider.input.value),
         colorStops,
         opacityStops,
         showSun:           s.showSunCb.checked,
@@ -285,7 +300,6 @@ export class EnvironmentProperties {
         showMoon:          s.showMoonCb.checked,
         moonColor,
         moonGlowStrength:  parseFloat(s.moonGlowSlider.input.value),
-        exposure:          parseFloat(s.exposureSlider.input.value),
         lensflareEnabled:  s.lensflareEnabledCb.checked,
         lensflareSize:     parseFloat(s.lensflareSizeSlider.input.value),
         lensflareOpacity:  parseFloat(s.lensflareOpacitySlider.input.value),

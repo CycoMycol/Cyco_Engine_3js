@@ -26,6 +26,8 @@ import { RenderPass }      from 'three/addons/postprocessing/RenderPass.js';
 import { OutlinePass }     from 'three/addons/postprocessing/OutlinePass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
+import { FXAAShader }      from 'three/addons/shaders/FXAAShader.js';
 
 export class PostProcessingPipeline {
   /**
@@ -42,6 +44,15 @@ export class PostProcessingPipeline {
 
     /** @type {UnrealBloomPass|null} */
     this.bloomPass = null;
+
+    /** @type {ShaderPass|null} — FXAA anti-aliasing, added after OutputPass */
+    this.fxaaPass = null;
+
+    /** Whether the EffectComposer pipeline is active (vs. direct renderer.render) */
+    this._pipelineEnabled = true;
+
+    /** Persists FXAA enabled state across pipeline rebuilds */
+    this._fxaaEnabled = false;
 
     this._onVpReady         = this._onVpReady.bind(this);
     this._onRendererChanged = this._onRendererChanged.bind(this);
@@ -90,11 +101,19 @@ export class PostProcessingPipeline {
     this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
     this._composer.addPass(this.bloomPass);
 
-    // 4. OutputPass — MUST be last — applies tone mapping + sRGB output conversion
+    // 4. OutputPass — applies tone mapping + sRGB output conversion
     this._composer.addPass(new OutputPass());
 
-    // Tell ViewportEngine that the pipeline is active (it will skip direct renderer.render())
-    this.engine.setPipelineActive(true);
+    // 5. FXAA — optional anti-aliasing pass (disabled by default, enabled via UI)
+    //    Must come after OutputPass so it operates on the final LDR/sRGB image.
+    const dpr = renderer.getPixelRatio();
+    this.fxaaPass = new ShaderPass(FXAAShader);
+    this.fxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
+    this.fxaaPass.enabled = this._fxaaEnabled; // restore across rebuilds
+    this._composer.addPass(this.fxaaPass);
+
+    // Tell ViewportEngine whether the pipeline is active (respects user toggle)
+    this.engine.setPipelineActive(this._pipelineEnabled);
   }
 
   _disposeWebGLPipeline() {
@@ -104,6 +123,7 @@ export class PostProcessingPipeline {
     this._composer   = null;
     this.outlinePass = null;
     this.bloomPass   = null;
+    this.fxaaPass    = null;
     this.engine.setPipelineActive(false);
   }
 
@@ -151,8 +171,25 @@ export class PostProcessingPipeline {
     }
   }
 
+  // ─── Pipeline enabled / FXAA API ──────────────────────────────────────────
+
+  /** Enable or disable the entire EffectComposer pipeline. */
+  get pipelineEnabled() { return this._pipelineEnabled; }
+  set pipelineEnabled(v) {
+    this._pipelineEnabled = !!v;
+    this.engine.setPipelineActive(!!v && !!this._composer);
+  }
+
+  /** Enable or disable the FXAA anti-aliasing pass. Persists across pipeline rebuilds. */
+  setFxaaEnabled(v) {
+    this._fxaaEnabled = !!v;
+    if (this.fxaaPass) this.fxaaPass.enabled = this._fxaaEnabled;
+  }
+
+  // ─── Event handlers ───────────────────────────────────────────────────────
+
   _onTick() {
-    if (!this._composer) return;
+    if (!this._composer || !this._pipelineEnabled) return;
     try {
       this._composer.render();
     } catch (err) {

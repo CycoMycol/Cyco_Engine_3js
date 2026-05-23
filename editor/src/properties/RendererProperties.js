@@ -148,6 +148,25 @@ export class RendererProperties {
     });
     outBody.appendChild(row('Pixel Ratio', prSelect));
 
+    // ── Anti-Aliasing ──
+    const { el: aaSec, body: aaBody } = section('Anti-Aliasing');
+    root.appendChild(aaSec);
+
+    const pp = window.__cyco?.viewportEngine?.postProcessing;
+    const curAA = pp?._fxaaEnabled ? 'fxaa' : 'none';
+    const aaSelect = select({
+      options: [
+        ['none', 'None'],
+        ['fxaa', 'FXAA (Fast Approximate)'],
+      ],
+      value: curAA,
+      onChange: (v) => {
+        const pipeline = window.__cyco?.viewportEngine?.postProcessing;
+        if (pipeline) pipeline.setFxaaEnabled(v === 'fxaa');
+      },
+    });
+    aaBody.appendChild(row('Mode', aaSelect));
+
     return root;
   }
 

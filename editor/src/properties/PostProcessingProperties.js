@@ -38,6 +38,7 @@ export class PostProcessingProperties {
       return root;
     }
 
+    this._buildEffectComposerSection(root);
     this._buildBloomSection(root);
     this._buildOutlineSection(root);
     this._buildGTAOSection(root);
@@ -45,7 +46,23 @@ export class PostProcessingProperties {
 
     return root;
   }
+  // ── Effect Composer ────────────────────────────────────────────────────────────
 
+  _buildEffectComposerSection(root) {
+    const { el, body } = section('Effect Composer');
+    root.appendChild(el);
+
+    const pp = window.__cyco?.viewportEngine?.postProcessing;
+
+    // Enable / disable the entire EffectComposer pipeline
+    const enabledCb = checkbox({
+      checked: pp?._pipelineEnabled !== false,
+      onChange: (v) => {
+        if (pp) pp.pipelineEnabled = v;
+      },
+    });
+    body.appendChild(row('Enabled', enabledCb));
+  }
   // ── Bloom ─────────────────────────────────────────────────────────────────
 
   _buildBloomSection(root) {
