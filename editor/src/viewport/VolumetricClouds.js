@@ -207,8 +207,12 @@ export class VolumetricClouds {
       density:    0.7,
       scale:      55.0,
       windSpeed:  0.4,
-      cloudBase:  5.0,
-      cloudTop:   25.0,
+      // Sky Mode defaults: cloud slab sits high in the world so the camera always
+      // looks UP to see clouds and ground objects are never occluded.
+      cloudBase:  300.0,
+      cloudTop:   600.0,
+      skyMode:    true,   // true = sky layer (depth-tested, fixed altitude)
+                          // false = legacy surround (no depth test, follows camera)
       sunDir:     new THREE.Vector3(0.45, 0.87, 0.22),
       sunColor:   new THREE.Color(1.0, 0.97, 0.88),
       skyHorizon: new THREE.Color(0.55, 0.70, 0.90),
@@ -249,15 +253,36 @@ export class VolumetricClouds {
     }
   }
 
+  /**
+   * Toggle between Sky Layer mode (clouds fixed high in the sky, depth-tested)
+   * and Legacy Surround mode (original: clouds wrap around the camera, no depth test).
+   * Rebuilds the mesh so the material depthTest setting takes effect immediately.
+   */
+  setSkyMode(enabled) {
+    this._p.skyMode = enabled;
+    if (this._p.enabled) {
+      this._destroyMesh();
+      this._createMesh();
+    }
+  }
+
   /** Call once per frame from ViewportEngine._tick(). */
   update() {
     if (!this._mesh) return;
     const t = (performance.now() - this._t0) * 0.001;
     this._mesh.material.uniforms.uTime.value = t;
 
-    // The cloud dome always follows the camera so the camera stays inside the box.
     const cam = this._vpe?.camera;
-    if (cam) this._mesh.position.copy(cam.position);
+    if (cam) {
+      if (this._p.skyMode) {
+        // Sky Layer mode: dome follows camera XZ only so the cloud slab stays at a
+        // fixed world altitude regardless of where the camera flies vertically.
+        this._mesh.position.set(cam.position.x, 0, cam.position.z);
+      } else {
+        // Legacy Surround mode: dome follows camera in all 3 axes.
+        this._mesh.position.copy(cam.position);
+      }
+    }
   }
 
   dispose() {
@@ -289,7 +314,12 @@ export class VolumetricClouds {
       },
       transparent:    true,
       depthWrite:     false,
-      depthTest:      false,   // render over everything, depth handled by alpha
+      // Sky Layer mode: depthTest=true means opaque scene objects (which write depth
+      // before transparent meshes) correctly occlude clouds — the cloud fragment depth
+      // is clamped to the far plane (gl_Position.z = gl_Position.w) so any real geometry
+      // at depth < 1.0 passes in front.  Legacy Surround mode keeps the original
+      // depthTest:false behaviour so clouds wrap around the camera at any altitude.
+      depthTest:      !!this._p.skyMode,
       side:           THREE.BackSide,
     });
 

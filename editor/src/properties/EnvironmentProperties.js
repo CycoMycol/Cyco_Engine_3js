@@ -322,6 +322,17 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Enable Clouds', enableCb));
 
+    // ── Sky Mode toggle ──────────────────────────────────────────────────────
+    // Sky Layer (ON): clouds sit at a fixed high altitude, depth-tested so
+    // scene objects are always visible in front of the cloud layer.
+    // Legacy Surround (OFF): original behaviour — clouds wrap around the camera
+    // at a low altitude with no depth testing (objects may appear inside clouds).
+    const skyModeCb = checkbox({
+      checked: cs()?._p?.skyMode ?? true,
+      onChange: (v) => cs()?.setSkyMode(v),
+    });
+    body.appendChild(row('Sky Layer Mode', skyModeCb));
+
     const coverageSlider = slider({
       value: cs()?._p?.coverage ?? 0.45, min: 0, max: 1, step: 0.01,
       onChange: (v) => cs()?.setParam('coverage', v),
@@ -347,13 +358,13 @@ export class EnvironmentProperties {
     body.appendChild(row('Wind Speed', speedSlider.el));
 
     const baseSlider = slider({
-      value: cs()?._p?.cloudBase ?? 5, min: 1, max: 300, step: 1,
+      value: cs()?._p?.cloudBase ?? 300, min: 1, max: 2000, step: 1,
       onChange: (v) => cs()?.setParam('cloudBase', v),
     });
     body.appendChild(row('Cloud Base Y', baseSlider.el));
 
     const topSlider = slider({
-      value: cs()?._p?.cloudTop ?? 25, min: 10, max: 600, step: 1,
+      value: cs()?._p?.cloudTop ?? 600, min: 10, max: 2000, step: 1,
       onChange: (v) => cs()?.setParam('cloudTop', v),
     });
     body.appendChild(row('Cloud Top Y', topSlider.el));
