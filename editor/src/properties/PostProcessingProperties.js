@@ -52,13 +52,15 @@ export class PostProcessingProperties {
     const { el, body } = section('Effect Composer');
     root.appendChild(el);
 
-    const pp = window.__cyco?.viewportEngine?.postProcessing;
+    // Always look up the pipeline fresh so changes made after a resize/rebuild
+    // still reach the live EffectComposer instance.
+    const getPP = () => window.__cyco?.viewportEngine?.postProcessing;
 
     // Enable / disable the entire EffectComposer pipeline
     const enabledCb = checkbox({
-      checked: pp?._pipelineEnabled !== false,
+      checked: getPP()?._pipelineEnabled !== false,
       onChange: (v) => {
-        if (pp) pp.pipelineEnabled = v;
+        const pp = getPP(); if (pp) pp.pipelineEnabled = v;
       },
     });
     body.appendChild(row('Enabled', enabledCb));
@@ -69,40 +71,41 @@ export class PostProcessingProperties {
     const { el, body } = section('Bloom (Unreal)');
     root.appendChild(el);
 
-    const pp = window.__cyco?.viewportEngine?.postProcessing;
-    const bloomPass = pp?.bloomPass;
+    // Fresh lookup every time so closures always hit the live pass after any rebuild.
+    const getBloom = () => window.__cyco?.viewportEngine?.postProcessing?.bloomPass;
+    const bloom = getBloom();
 
     const enabledCb = checkbox({
-      checked: bloomPass ? bloomPass.enabled !== false : true,
+      checked: bloom ? bloom.enabled !== false : true,
       onChange: (v) => {
-        if (bloomPass) bloomPass.enabled = v;
+        const p = getBloom(); if (p) p.enabled = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: v, ...this._bloomState() });
       },
     });
     body.appendChild(row('Enabled', enabledCb));
 
     const threshSlider = slider({
-      value: bloomPass?.threshold ?? 0.85, min: 0, max: 3, step: 0.01,
+      value: bloom?.threshold ?? 0.85, min: 0, max: 3, step: 0.01,
       onChange: (v) => {
-        if (bloomPass) bloomPass.threshold = v;
+        const p = getBloom(); if (p) p.threshold = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: enabledCb.checked, ...this._bloomState() });
       },
     });
     body.appendChild(row('Threshold', threshSlider.el));
 
     const strengthSlider = slider({
-      value: bloomPass?.strength ?? 0.8, min: 0, max: 5, step: 0.01,
+      value: bloom?.strength ?? 0.8, min: 0, max: 5, step: 0.01,
       onChange: (v) => {
-        if (bloomPass) bloomPass.strength = v;
+        const p = getBloom(); if (p) p.strength = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: enabledCb.checked, ...this._bloomState() });
       },
     });
     body.appendChild(row('Strength', strengthSlider.el));
 
     const radiusSlider = slider({
-      value: bloomPass?.radius ?? 0.4, min: 0, max: 1, step: 0.01,
+      value: bloom?.radius ?? 0.4, min: 0, max: 1, step: 0.01,
       onChange: (v) => {
-        if (bloomPass) bloomPass.radius = v;
+        const p = getBloom(); if (p) p.radius = v;
         this._dispatch('cyco-pp-bloom-change', { enabled: enabledCb.checked, ...this._bloomState() });
       },
     });
@@ -122,39 +125,31 @@ export class PostProcessingProperties {
     const { el, body } = section('Outline');
     root.appendChild(el);
 
-    const pp = window.__cyco?.viewportEngine?.postProcessing;
-    const outlinePass = pp?.outlinePass;
+    const getOutline = () => window.__cyco?.viewportEngine?.postProcessing?.outlinePass;
+    const outlinePass = getOutline();
 
     const enabledCb = checkbox({
       checked: outlinePass?.enabled ?? true,
-      onChange: (v) => {
-        if (outlinePass) outlinePass.enabled = v;
-      },
+      onChange: (v) => { const p = getOutline(); if (p) p.enabled = v; },
     });
     body.appendChild(row('Enabled', enabledCb));
 
     const curColor = '#' + (outlinePass?.visibleEdgeColor?.getHexString() ?? 'ff6600');
     const colorSw = colorSwatch({
       color: curColor,
-      onChange: (c) => {
-        if (outlinePass) outlinePass.visibleEdgeColor.set(c);
-      },
+      onChange: (c) => { const p = getOutline(); if (p) p.visibleEdgeColor.set(c); },
     });
     body.appendChild(row('Color', colorSw.el));
 
     const thickSlider = slider({
       value: outlinePass?.edgeThickness ?? 1, min: 0.1, max: 5, step: 0.1,
-      onChange: (v) => {
-        if (outlinePass) outlinePass.edgeThickness = v;
-      },
+      onChange: (v) => { const p = getOutline(); if (p) p.edgeThickness = v; },
     });
     body.appendChild(row('Thickness', thickSlider.el));
 
     const strengthSlider = slider({
       value: outlinePass?.edgeStrength ?? 3, min: 0, max: 10, step: 0.1,
-      onChange: (v) => {
-        if (outlinePass) outlinePass.edgeStrength = v;
-      },
+      onChange: (v) => { const p = getOutline(); if (p) p.edgeStrength = v; },
     });
     body.appendChild(row('Strength', strengthSlider.el));
   }
@@ -165,14 +160,12 @@ export class PostProcessingProperties {
     const { el, body } = section('Ambient Occlusion (GTAO)');
     root.appendChild(el);
 
-    const pp = window.__cyco?.viewportEngine?.postProcessing;
-    const gtaoPass = pp?.gtaoPass;
+    const getGtao = () => window.__cyco?.viewportEngine?.postProcessing?.gtaoPass;
+    const gtaoPass = getGtao();
 
     const enabledCb = checkbox({
       checked: gtaoPass?.enabled ?? false,
-      onChange: (v) => {
-        if (gtaoPass) gtaoPass.enabled = v;
-      },
+      onChange: (v) => { const p = getGtao(); if (p) p.enabled = v; },
     });
     body.appendChild(row('Enabled', enabledCb));
 
@@ -183,19 +176,19 @@ export class PostProcessingProperties {
 
     const radiusSlider = slider({
       value: gtaoPass?.radius ?? 0.25, min: 0.01, max: 1, step: 0.01,
-      onChange: (v) => { if (gtaoPass) gtaoPass.radius = v; },
+      onChange: (v) => { const p = getGtao(); if (p) p.radius = v; },
     });
     body.appendChild(row('Radius', radiusSlider.el));
 
     const intensitySlider = slider({
       value: gtaoPass?.intensity ?? 1, min: 0, max: 5, step: 0.05,
-      onChange: (v) => { if (gtaoPass) gtaoPass.intensity = v; },
+      onChange: (v) => { const p = getGtao(); if (p) p.intensity = v; },
     });
     body.appendChild(row('Intensity', intensitySlider.el));
 
     const distExpSlider = slider({
       value: gtaoPass?.distanceExponent ?? 1, min: 0.1, max: 3, step: 0.1,
-      onChange: (v) => { if (gtaoPass) gtaoPass.distanceExponent = v; },
+      onChange: (v) => { const p = getGtao(); if (p) p.distanceExponent = v; },
     });
     body.appendChild(row('Dist. Exponent', distExpSlider.el));
   }
@@ -206,12 +199,10 @@ export class PostProcessingProperties {
     const { el, body } = section('Output');
     root.appendChild(el);
 
-    const r = window.__cyco?.rendererManager?.renderer;
+    const getR = () => window.__cyco?.rendererManager?.renderer;
     const expSlider = slider({
-      value: r?.toneMappingExposure ?? 1, min: 0, max: 5, step: 0.01,
-      onChange: (v) => {
-        if (r) r.toneMappingExposure = v;
-      },
+      value: getR()?.toneMappingExposure ?? 1, min: 0, max: 5, step: 0.01,
+      onChange: (v) => { const r = getR(); if (r) r.toneMappingExposure = v; },
     });
     body.appendChild(row('Exposure', expSlider.el));
   }

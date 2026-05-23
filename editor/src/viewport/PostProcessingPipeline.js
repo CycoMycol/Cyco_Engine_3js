@@ -200,21 +200,22 @@ export class PostProcessingPipeline {
 
   _onResize(event) {
     if (!this._composer) return;
-    // Rebuild the entire pipeline at the new size rather than patching individual pass internals.
-    // OutlinePass and UnrealBloomPass create render targets in their constructors
-    // and don't reliably resize them via resolution.set() / setSize().
     const renderer = this.engine.rendererManager?.renderer;
-    const type     = this.engine.rendererManager?.activeType ?? 'webgl';
-    const scene    = this.engine.scene;
-    const camera   = this.engine.camera;
-    if (!renderer || !scene || !camera) return;
+    if (!renderer) return;
     const { width, height } = event.detail;
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
-    if (type === 'webgl') {
-      this._buildWebGLPipeline(renderer, scene, camera, w, h);
-    } else {
-      this._rebuildForType(renderer, type);
+
+    // Resize the composer and all its passes in-place.
+    // UnrealBloomPass, OutlinePass and ShaderPass all implement setSize() correctly
+    // in r184 — this avoids a full rebuild that would reset every pass to its defaults
+    // and leave the PostProcessingProperties UI holding stale closed-over references.
+    this._composer.setSize(w, h);
+
+    // ShaderPass (FXAA) stores resolution in a uniform; setSize() doesn't update it.
+    if (this.fxaaPass) {
+      const dpr = renderer.getPixelRatio();
+      this.fxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
     }
   }
 
