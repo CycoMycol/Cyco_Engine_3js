@@ -257,8 +257,14 @@ export class ViewportEngine {
   async _onEnvMapChange({ detail } = {}) {
     const { url, isHDR } = detail ?? {};
     if (!url || !this.scene) return;
-    const renderer = this.rendererManager.renderer;
+    let renderer = this.rendererManager.renderer;
     if (!renderer) return;
+    // PMREMGenerator requires a real WebGLRenderer — use inner renderer for PathTracer wrapper
+    renderer = renderer._webglRenderer ?? renderer;
+    if (!renderer.isWebGLRenderer) {
+      console.warn('[ViewportEngine] HDRI env map not supported with current renderer — switch to WebGL first.');
+      return;
+    }
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
     try {
@@ -374,6 +380,9 @@ export class ViewportEngine {
    * @param {THREE.WebGLRenderer} renderer
    */
   _buildSkyEnvMap(colorStops, renderer) {
+    // PMREMGenerator requires a real WebGLRenderer — skip for WebGPU/SVG/CSS3D
+    const glRenderer = renderer?._webglRenderer ?? renderer;
+    if (!glRenderer?.isWebGLRenderer) return;
     try {
       const w = 512, h = 256;
       const canvas = document.createElement('canvas');
@@ -393,7 +402,7 @@ export class ViewportEngine {
       tex.mapping    = THREE.EquirectangularReflectionMapping;
       tex.colorSpace = THREE.SRGBColorSpace;
 
-      const pmrem  = new THREE.PMREMGenerator(renderer);
+      const pmrem  = new THREE.PMREMGenerator(glRenderer);
       pmrem.compileEquirectangularShader();
       const envTex = pmrem.fromEquirectangular(tex).texture;
       pmrem.dispose();
@@ -439,8 +448,12 @@ export class ViewportEngine {
    * MUST call pmrem.dispose() after use — holds WebGL render targets.
    */
   _setupIBL() {
-    const renderer = this.rendererManager.renderer;
-    if (!renderer || typeof renderer.getSize !== 'function') return; // SVG/CSS3D renderers
+    let renderer = this.rendererManager.renderer;
+    if (!renderer) return;
+    // PathTracingRenderer wraps an inner WebGLRenderer — use that for IBL
+    if (renderer._webglRenderer) renderer = renderer._webglRenderer;
+    // PMREMGenerator requires a real WebGLRenderer (not WebGPU/SVG/CSS3D)
+    if (!renderer.isWebGLRenderer) return;
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
     const envTexture = pmrem.fromScene(new RoomEnvironment()).texture;
@@ -715,7 +728,8 @@ export class ViewportEngine {
 
     // ViewHelper renders on top of main frame — must use autoClear=false so it
     // doesn't wipe the already-rendered scene before drawing its axes widget.
-    if (this.viewHelper) {
+    // SVGRenderer and CSS3DRenderer don't have clearDepth() — skip on those.
+    if (this.viewHelper && renderer?.domElement instanceof HTMLCanvasElement) {
       renderer.autoClear = false;
       this.viewHelper.render(renderer);
       renderer.autoClear = true;
@@ -808,6 +822,8 @@ export class ViewportEngine {
         this._resizeObserver.observe(container);
       }
       this._container = container;
+      // Keep RendererManager's container in sync so renderer switches read the correct size
+      this.rendererManager.container = container;
 
       // Rebuild loading overlay in the new container
       this._buildLoadingOverlay(container);

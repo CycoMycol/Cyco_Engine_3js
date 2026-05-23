@@ -1,7 +1,7 @@
 /**
  * SelectionManager.js
  * Manages object selection state via raycasting (click) and box marquee (drag).
- * Applies/removes selection highlights (OutlinePass + emissive tint).
+ * Applies/removes selection highlights via OutlinePass only.
  *
  * Depends on: ViewportEngine (injected)
  *
@@ -51,9 +51,6 @@ export class SelectionManager {
     /** @type {SelectionHelper|null} */
     this._selectionHelper = null;
 
-    /** Emissive tint cache for highlight/restore: Map<uuid, THREE.Color> */
-    this._emissiveCache  = new Map();
-
     /** Currently hovered object (for outline hover highlight) */
     this._hoveredObject = null;
 
@@ -85,7 +82,6 @@ export class SelectionManager {
   }
 
   clearSelection() {
-    for (const obj of this.selected) this._removeHighlight(obj);
     this.selected.clear();
     this._setHoveredObject(null); // also clear hover outline
     window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
@@ -280,7 +276,6 @@ export class SelectionManager {
       window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
     }
     this.selected.add(object);
-    this._applyHighlight(object);
     this._dispatchSelection();
   }
 
@@ -315,32 +310,6 @@ export class SelectionManager {
       p = p.parent;
     }
     return false;
-  }
-
-  // ─── Selection highlight ──────────────────────────────────────────────────
-
-  _applyHighlight(object) {
-    object.traverse(child => {
-      if (!child.isMesh) return;
-      const mat = child.material;
-      if (!mat || !mat.emissive) return;
-      this._emissiveCache.set(child.uuid, mat.emissive.clone());
-      mat.emissive.set(0xff6600); // orange accent
-    });
-    // OutlinePass will be updated by PostProcessingPipeline listening on cyco-select-node
-  }
-
-  _removeHighlight(object) {
-    object.traverse(child => {
-      if (!child.isMesh) return;
-      const mat = child.material;
-      if (!mat || !mat.emissive) return;
-      const cached = this._emissiveCache.get(child.uuid);
-      if (cached) {
-        mat.emissive.copy(cached);
-        this._emissiveCache.delete(child.uuid);
-      }
-    });
   }
 
   _onDeselect() { this.clearSelection(); }

@@ -64,8 +64,9 @@ export class RendererManager {
 
   async _createWebGPU(w, h) {
     // Dynamic import keeps three.webgpu.min.js out of initial parse
-    const { default: WebGPURenderer } = await import('three/webgpu');
-    const renderer = new WebGPURenderer({ antialias: true });
+    // WebGPURenderer is a named export (not default) in three/webgpu
+    const { WebGPURenderer } = await import('three/webgpu');
+    const renderer = new WebGPURenderer({ antialias: true, forceWebGL: false });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -93,13 +94,21 @@ export class RendererManager {
   }
 
   async _createPathTracer(w, h) {
-    const { PathTracingRenderer } = await import('three-gpu-pathtracer');
-    const webglRenderer = this._createWebGL(w, h);
-    const ptRenderer = new PathTracingRenderer(webglRenderer);
-    ptRenderer.domElement = webglRenderer.domElement;
-    // Expose inner WebGLRenderer so consumers can use it for IBL etc.
-    ptRenderer._webglRenderer = webglRenderer;
-    return ptRenderer;
+    try {
+      const { PathTracingRenderer } = await import('three-gpu-pathtracer');
+      const webglRenderer = this._createWebGL(w, h);
+      const ptRenderer = new PathTracingRenderer(webglRenderer);
+      ptRenderer.domElement = webglRenderer.domElement;
+      // Expose inner WebGLRenderer so consumers can use it for IBL etc.
+      ptRenderer._webglRenderer = webglRenderer;
+      return ptRenderer;
+    } catch (err) {
+      console.warn('[RendererManager] PathTracer unavailable:', err.message);
+      window.dispatchEvent(new CustomEvent('cyco-notify', {
+        detail: { message: 'Path Tracer is unavailable in this environment — falling back to WebGL.', level: 'warn' }
+      }));
+      return null; // caller falls back to WebGL
+    }
   }
 
   // ─── Swap ─────────────────────────────────────────────────────────────────
@@ -114,31 +123,41 @@ export class RendererManager {
 
     // Check WebGPU availability before attempting
     if (type === 'webgpu' && !(await WebGPU.isAvailable())) {
-      console.warn('[RendererManager] WebGPU not available — staying on WebGL');
-      window.dispatchEvent(new CustomEvent('cyco-notify', {
-        detail: { message: 'WebGPU is not available in this browser.', level: 'warn' }
-      }));
-      return;
+      console.warn('[RendererManager] WebGPU not available in hardware — WebGPURenderer will use WebGL2 fallback backend');
     }
 
-    // Dispose current renderer
-    this._disposeActive();
-
-    // Create new renderer
+    // ── Create new renderer BEFORE disposing the old one so we can abort on failure ──
     let newRenderer;
-    switch (type) {
-      case 'webgpu':      newRenderer = await this._createWebGPU(w, h); break;
-      case 'svg':         newRenderer = this._createSVG(w, h); break;
-      case 'css3d':       newRenderer = this._createCSS3D(w, h); break;
-      case 'pathtracer':  newRenderer = await this._createPathTracer(w, h); break;
-      default:            newRenderer = this._createWebGL(w, h); break;
+    let resolvedType = type;
+    try {
+      switch (type) {
+        case 'webgpu':      newRenderer = await this._createWebGPU(w, h); break;
+        case 'svg':         newRenderer = this._createSVG(w, h); break;
+        case 'css3d':       newRenderer = this._createCSS3D(w, h); break;
+        case 'pathtracer':  newRenderer = await this._createPathTracer(w, h); break;
+        default:            newRenderer = this._createWebGL(w, h); break;
+      }
+    } catch (err) {
+      console.error('[RendererManager] Failed to create renderer:', err);
+      window.dispatchEvent(new CustomEvent('cyco-notify', {
+        detail: { message: `Failed to switch to ${type}: ${err.message}`, level: 'error' }
+      }));
+      return; // old renderer stays active
     }
 
+    // PathTracer unavailable — fall back to standard WebGL
+    if (!newRenderer) {
+      newRenderer = this._createWebGL(w, h);
+      resolvedType = 'webgl';
+    }
+
+    // Dispose old and install new
+    this._disposeActive();
     this.renderer = newRenderer;
-    this.activeType = type;
+    this.activeType = resolvedType;
     this.container.appendChild(newRenderer.domElement);
 
-    this._dispatch('cyco-renderer-changed', { renderer: newRenderer, type });
+    this._dispatch('cyco-renderer-changed', { renderer: newRenderer, type: resolvedType });
   }
 
   _disposeActive() {
