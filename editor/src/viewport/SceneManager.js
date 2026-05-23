@@ -275,6 +275,9 @@ export class SceneManager {
           : obj.material.dispose?.();
       }
       obj.material = mat;
+      // Remove from preview cache so a pending mouseleave → restore
+      // doesn't overwrite the material we just applied permanently.
+      this._previewCache.delete(obj);
       this._markDirty();
     }
   }

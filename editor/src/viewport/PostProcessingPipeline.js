@@ -45,6 +45,9 @@ export class PostProcessingPipeline {
     /** @type {OutlinePass|null} — exposed for SelectionManager to set selectedObjects */
     this.outlinePass = null;
 
+    /** @type {OutlinePass|null} — hover highlight (white outline, thinner) */
+    this.hoverOutlinePass = null;
+
     /** @type {UnrealBloomPass|null} */
     this.bloomPass = null;
 
@@ -81,6 +84,7 @@ export class PostProcessingPipeline {
     this._onResize          = this._onResize.bind(this);
     this._onSelectNode      = this._onSelectNode.bind(this);
     this._onDeselectAll     = this._onDeselectAll.bind(this);
+    this._onHoverObject     = this._onHoverObject.bind(this);
     this._onPpSettings      = this._onPpSettings.bind(this);
 
     window.addEventListener('cyco-vp-ready',          this._onVpReady);
@@ -89,6 +93,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-vp-resize',         this._onResize);
     window.addEventListener('cyco-select-node',       this._onSelectNode);
     window.addEventListener('cyco-deselect-all',      this._onDeselectAll);
+    window.addEventListener('cyco-hover-object',      this._onHoverObject);
     window.addEventListener('cyco-pp-settings',       this._onPpSettings);
   }
 
@@ -120,6 +125,15 @@ export class PostProcessingPipeline {
     this.outlinePass.visibleEdgeColor.set(0xff6600);
     this.outlinePass.hiddenEdgeColor.set(0x333333);
     this._composer.addPass(this.outlinePass);
+
+    // 2b. Hover outline pass — white outline when mousing over unselected objects
+    this.hoverOutlinePass = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
+    this.hoverOutlinePass.edgeStrength  = 2;
+    this.hoverOutlinePass.edgeGlow      = 0;
+    this.hoverOutlinePass.edgeThickness = 1;
+    this.hoverOutlinePass.visibleEdgeColor.set(0xffffff);
+    this.hoverOutlinePass.hiddenEdgeColor.set(0x222222);
+    this._composer.addPass(this.hoverOutlinePass);
 
     // 3. Bloom — threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
     //    Strength 0.8, radius 0.4. Sun disc is SDR + lens flare handles sun glow.
@@ -342,6 +356,12 @@ export class PostProcessingPipeline {
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
   }
 
+  _onHoverObject(event) {
+    if (!this.hoverOutlinePass) return;
+    const { object } = event.detail ?? {};
+    this.hoverOutlinePass.selectedObjects = object ? [object] : [];
+  }
+
   _onPpSettings(event) {
     const { pass, prop, value } = event.detail;
     switch (pass) {
@@ -367,6 +387,7 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-vp-resize',         this._onResize);
     window.removeEventListener('cyco-select-node',       this._onSelectNode);
     window.removeEventListener('cyco-deselect-all',      this._onDeselectAll);
+    window.removeEventListener('cyco-hover-object',      this._onHoverObject);
     window.removeEventListener('cyco-pp-settings',       this._onPpSettings);
   }
 }

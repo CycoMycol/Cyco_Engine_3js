@@ -54,11 +54,15 @@ export class SelectionManager {
     /** Emissive tint cache for highlight/restore: Map<uuid, THREE.Color> */
     this._emissiveCache  = new Map();
 
+    /** Currently hovered object (for outline hover highlight) */
+    this._hoveredObject = null;
+
     this._onVpReady          = this._onVpReady.bind(this);
     this._onRendererChanged  = this._onRendererChanged.bind(this);
     this._onPointerDown      = this._onPointerDown.bind(this);
     this._onPointerMove      = this._onPointerMove.bind(this);
     this._onPointerUp        = this._onPointerUp.bind(this);
+    this._onPointerLeave     = this._onPointerLeave.bind(this);
     this._onDeselect         = this._onDeselect.bind(this);
 
     window.addEventListener('cyco-vp-ready',         this._onVpReady);
@@ -83,6 +87,7 @@ export class SelectionManager {
   clearSelection() {
     for (const obj of this.selected) this._removeHighlight(obj);
     this.selected.clear();
+    this._setHoveredObject(null); // also clear hover outline
     window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
   }
 
@@ -123,16 +128,18 @@ export class SelectionManager {
 
   _attachPointerEvents(canvas) {
     this._canvas = canvas;
-    canvas.addEventListener('pointerdown', this._onPointerDown);
-    canvas.addEventListener('pointermove', this._onPointerMove);
-    canvas.addEventListener('pointerup',   this._onPointerUp);
+    canvas.addEventListener('pointerdown',  this._onPointerDown);
+    canvas.addEventListener('pointermove',  this._onPointerMove);
+    canvas.addEventListener('pointerup',    this._onPointerUp);
+    canvas.addEventListener('pointerleave', this._onPointerLeave);
   }
 
   _detachPointerEvents() {
     if (!this._canvas) return;
-    this._canvas.removeEventListener('pointerdown', this._onPointerDown);
-    this._canvas.removeEventListener('pointermove', this._onPointerMove);
-    this._canvas.removeEventListener('pointerup',   this._onPointerUp);
+    this._canvas.removeEventListener('pointerdown',  this._onPointerDown);
+    this._canvas.removeEventListener('pointermove',  this._onPointerMove);
+    this._canvas.removeEventListener('pointerup',    this._onPointerUp);
+    this._canvas.removeEventListener('pointerleave', this._onPointerLeave);
     this._canvas = null;
   }
 
@@ -141,6 +148,7 @@ export class SelectionManager {
     this._pointerDown.set(event.clientX, event.clientY);
     this._isDragging    = false;
     this._gizmoDragging = false; // failsafe reset; normally cleared by dragging-changed(false)
+    this._pointerDownOnCanvas = true; // mark that the press originated on the canvas
 
     const ndc = this._toNDC(event);
     if (this._selectionBox) {
@@ -149,25 +157,62 @@ export class SelectionManager {
   }
 
   _onPointerMove(event) {
-    if (!this._active || !(event.buttons & 1)) return; // left button held
-    if (this._gizmoDragging) return; // TransformControls owns this drag
+    if (!this._active) return;
 
-    const dx = event.clientX - this._pointerDown.x;
-    const dy = event.clientY - this._pointerDown.y;
-    if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {
-      this._isDragging = true;
-      if (this._selectionHelper) this._selectionHelper.enabled = true;
+    if (event.buttons & 1) {
+      // Left button held — marquee drag logic
+      if (this._gizmoDragging) return;
+      const dx = event.clientX - this._pointerDown.x;
+      const dy = event.clientY - this._pointerDown.y;
+      if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {
+        this._isDragging = true;
+        if (this._selectionHelper) this._selectionHelper.enabled = true;
+      }
+      if (this._isDragging && this._selectionBox) {
+        const ndc = this._toNDC(event);
+        this._selectionBox.endPoint.set(ndc.x, ndc.y, 0.5);
+        this._selectionBox.select(); // live preview
+      }
+    } else {
+      // No button held — hover highlight
+      this._updateHover(event);
     }
+  }
 
-    if (this._isDragging && this._selectionBox) {
-      const ndc = this._toNDC(event);
-      this._selectionBox.endPoint.set(ndc.x, ndc.y, 0.5);
-      this._selectionBox.select(); // live preview
-    }
+  _onPointerLeave() {
+    this._setHoveredObject(null);
+  }
+
+  _updateHover(event) {
+    const ndc = this._toNDC(event);
+    const camera = this.engine.camera;
+    const scene  = this.engine.scene;
+    if (!camera || !scene) return;
+    this._raycaster.setFromCamera(ndc, camera);
+    const hits = this._raycaster
+      .intersectObjects(scene.children, true)
+      .filter(h => !this._isNonSelectable(h.object));
+    this._setHoveredObject(hits.length > 0 ? hits[0].object : null);
+  }
+
+  _setHoveredObject(obj) {
+    if (this._hoveredObject === obj) return;
+    this._hoveredObject = obj;
+    // Only show hover outline for objects that are NOT already selected
+    const showHover = obj && !this.selected.has(obj) ? obj : null;
+    window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: showHover } }));
   }
 
   _onPointerUp(event) {
     if (!this._active || event.button !== 0) return;
+
+    // If the press did not start on the canvas (e.g. user dragged a material card
+    // from another panel and released here), ignore — do NOT clear selection.
+    if (!this._pointerDownOnCanvas) {
+      if (this._selectionHelper) this._selectionHelper.enabled = false;
+      return;
+    }
+    this._pointerDownOnCanvas = false;
 
     if (this._selectionHelper) this._selectionHelper.enabled = false;
 
@@ -230,6 +275,10 @@ export class SelectionManager {
 
   _selectObject(object) {
     if (this.selected.has(object)) return; // already selected
+    // If this object was being hovered, clear the hover outline — selection outline takes over
+    if (this._hoveredObject === object) {
+      window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
+    }
     this.selected.add(object);
     this._applyHighlight(object);
     this._dispatchSelection();
@@ -295,6 +344,12 @@ export class SelectionManager {
   }
 
   _onDeselect() { this.clearSelection(); }
+
+  // ——— Hover / outline helpers ——————————————————————————————————————
+
+  clearHover() {
+    this._setHoveredObject(null);
+  }
 
   // ─── Coordinate helpers ───────────────────────────────────────────────────
 

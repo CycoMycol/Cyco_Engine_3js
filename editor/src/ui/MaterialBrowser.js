@@ -47,7 +47,9 @@ export class MaterialBrowser {
     this._activeCategory = null; // null = "All"
     this._searchQuery    = '';
     this._element        = null;
-    this._lastPreset     = null; // last hovered / right-clicked card
+    this._lastPreset     = null; // currently hovered card
+    this._selectedPreset = null; // clicked / drag-started card (persists)
+    this._selectedCardEl = null; // DOM element of the selected card
 
     this._buildElement();
     this._refreshGrid();
@@ -55,6 +57,14 @@ export class MaterialBrowser {
     // Update Apply-button state whenever selection changes
     window.addEventListener('cyco-select-node',  () => this._updateApplyBtn());
     window.addEventListener('cyco-deselect-all', () => this._updateApplyBtn());
+
+    // Keep selected card in sync when a drag-drop applies a material
+    window.addEventListener('cyco-material-dragged', (e) => {
+      const preset = MATERIALS.find(m => m.id === e.detail?.matId);
+      if (!preset) return;
+      const card = this._grid.querySelector(`[data-mat-id="${preset.id}"]`);
+      this._selectCard(preset, card ?? null);
+    });
   }
 
   get element() { return this._element; }
@@ -91,15 +101,15 @@ export class MaterialBrowser {
       if (collapsed) this._searchInput.focus();
     });
 
-    // "Apply to Object" button — enabled only when object+material are both ready
+    // "Apply to Object" button — enabled only when a card is selected + object is selected
     this._applyBtn = document.createElement('button');
     this._applyBtn.textContent = 'Apply to Object';
     this._applyBtn.className   = 'ce-btn-small';
-    this._applyBtn.title       = 'Hover a material and select an object to enable';
+    this._applyBtn.title       = 'Click a material card to select it, then click here to apply';
     this._applyBtn.style.cssText = 'flex-shrink:0;opacity:0.4;cursor:not-allowed;white-space:nowrap;';
     this._applyBtn.disabled = true;
     this._applyBtn.addEventListener('click', () => {
-      if (this._lastPreset) this._applyToSelection(this._lastPreset);
+      if (this._selectedPreset) this._applyToSelection(this._selectedPreset);
     });
 
     searchRow.appendChild(searchToggle);
@@ -160,6 +170,13 @@ export class MaterialBrowser {
     for (const preset of filtered) {
       this._grid.appendChild(this._makeCard(preset));
     }
+
+    // Restore selected card highlight after grid rebuild
+    if (this._selectedPreset) {
+      const card = this._grid.querySelector(`[data-mat-id="${this._selectedPreset.id}"]`);
+      if (card) { card.classList.add('mat-card-selected'); this._selectedCardEl = card; }
+      else       { this._selectedCardEl = null; }
+    }
   }
 
   _makeCard(preset) {
@@ -186,19 +203,22 @@ export class MaterialBrowser {
     card.addEventListener('mouseenter', () => {
       this._lastPreset = preset;
       this._previewOnSelection(preset);
-      this._updateApplyBtn();
     });
     card.addEventListener('mouseleave', () => this._restoreSelection());
-    card.addEventListener('click',      () => this._applyToSelection(preset));
+    // Click → select the card (persistent highlight); does NOT immediately apply
+    card.addEventListener('click', () => this._selectCard(preset, card));
     card.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      this._lastPreset = preset;
       this._showContextMenu(preset, e.clientX, e.clientY);
     });
 
     card.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('application/x-cyco-material', preset.id);
       e.dataTransfer.effectAllowed = 'copy';
+      // Stop propagation so DockView doesn't treat this as a panel-drag
+      e.stopPropagation();
+      // Drag also counts as selecting the card
+      this._selectCard(preset, card);
     });
 
     return card;
@@ -269,11 +289,22 @@ export class MaterialBrowser {
     setTimeout(() => { this._grid.style.outline = old; }, 600);
   }
 
+  // ── Card selection (persistent) ───────────────────────────────────────────
+
+  _selectCard(preset, cardEl) {
+    // Remove highlight from previous selection
+    this._selectedCardEl?.classList.remove('mat-card-selected');
+    this._selectedPreset = preset;
+    this._selectedCardEl = cardEl;
+    cardEl?.classList.add('mat-card-selected');
+    this._updateApplyBtn();
+  }
+
   // ── Apply-button state ────────────────────────────────────────────────────
 
   _updateApplyBtn() {
     if (!this._applyBtn) return;
-    const enabled = !!this._lastPreset && this._getSelectedMeshes().length > 0;
+    const enabled = !!this._selectedPreset && this._getSelectedMeshes().length > 0;
     this._applyBtn.disabled        = !enabled;
     this._applyBtn.style.opacity   = enabled ? '1' : '0.4';
     this._applyBtn.style.cursor    = enabled ? 'pointer' : 'not-allowed';
@@ -324,6 +355,12 @@ export class MaterialBrowser {
         background: var(--bg-hover, #2a2a2a) !important;
       }
       .mat-card:active { cursor: grabbing; }
+      .mat-card-selected {
+        border-color: var(--accent-color, #4488ff) !important;
+        background: var(--bg-hover, #2e2e3a) !important;
+        outline: 2px solid var(--accent-color, #4488ff);
+        outline-offset: -1px;
+      }
       button[data-category].active {
         background: var(--accent-color, #4488ff) !important;
         color: #fff !important;
@@ -335,8 +372,79 @@ export class MaterialBrowser {
 }
 
 // ── Drag-and-drop onto viewport canvas ────────────────────────────────────────
-// Listen for drops on the canvas; resolve material id → apply to hit object
+// Listens for drops on both the WebGL canvas AND the viewport container div
+// so that drops work even when DockView overlays are stacked on top.
 (function setupCanvasDrop() {
+  function _raycastHit(e, canvasEl) {
+    const ve = window.__cyco?.viewportEngine;
+    if (!ve) return null;
+    const rect = canvasEl.getBoundingClientRect();
+    const ndcX = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+    const ndcY = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), ve.camera);
+    const hits = raycaster.intersectObjects(ve.scene.children, true)
+      .filter(h => !h.object.userData._isGizmo && (h.object.isMesh || h.object.isSkinnedMesh));
+    return hits.length > 0 ? hits[0].object : null;
+  }
+
+  function _applyDrop(e, canvasEl) {
+    const matId = e.dataTransfer.getData('application/x-cyco-material');
+    if (!matId) return;
+    e.preventDefault();
+
+    // Clear drag hover highlight
+    window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
+
+    const preset = MATERIALS.find(m => m.id === matId);
+    if (!preset) return;
+
+    const hit = _raycastHit(e, canvasEl);
+
+    // If objects are selected, ALWAYS apply to selection.
+    // Only fall back to raycast hit when nothing is selected.
+    const sm = window.__cyco?.selectionManager;
+    const selectedMeshes = sm ? [...sm.selected].filter(o => o.isMesh || o.isSkinnedMesh) : [];
+    const targetObjects = selectedMeshes.length > 0
+      ? selectedMeshes
+      : hit ? [hit] : [];
+    if (targetObjects.length > 0) {
+      window.dispatchEvent(new CustomEvent('cyco-apply-material', {
+        detail: { preset, targetObjects }
+      }));
+      // Notify MaterialBrowser that this preset was applied via drag
+      window.dispatchEvent(new CustomEvent('cyco-material-dragged', { detail: { matId: preset.id } }));
+    }
+  }
+
+  function _bindDropTarget(el, canvasEl) {
+    if (!el || el.dataset.cycoDropBound) return;
+    el.dataset.cycoDropBound = '1';
+    el.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer.types.includes('application/x-cyco-material')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      // Show hover highlight on the object under the cursor during drag
+      const sm = window.__cyco?.selectionManager;
+      const selected = sm ? [...sm.selected] : [];
+      if (selected.length === 0) {
+        // Only show drag-hover when nothing is selected (selection takes priority)
+        const hit = _raycastHit(e, canvasEl);
+        window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: hit } }));
+      }
+    });
+    el.addEventListener('dragleave', () => {
+      window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
+    });
+    el.addEventListener('drop', (e) => _applyDrop(e, canvasEl));
+  }
+
+  function _bindCanvasDrop(canvas) {
+    _bindDropTarget(canvas, canvas);
+    const container = document.getElementById('cyco-viewport-canvas');
+    if (container) _bindDropTarget(container, canvas);
+  }
+
   window.addEventListener('cyco-vp-ready', () => {
     const canvas = window.__cyco?.rendererManager?.renderer?.domElement;
     if (!canvas) return;
@@ -348,43 +456,22 @@ export class MaterialBrowser {
     if (canvas) _bindCanvasDrop(canvas);
   });
 
-  function _bindCanvasDrop(canvas) {
-    canvas.addEventListener('dragover', (e) => {
-      if (e.dataTransfer.types.includes('application/x-cyco-material')) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-      }
-    });
-    canvas.addEventListener('drop', (e) => {
-      const matId = e.dataTransfer.getData('application/x-cyco-material');
-      if (!matId) return;
-      e.preventDefault();
+  // cyco-viewport-container-ready fires while ViewportEngine._onContainerReady is on
+  // the call stack — by the time OUR listener runs, ViewportEngine has already called
+  // init() and the canvas exists.  We can therefore bind both targets immediately.
+  window.addEventListener('cyco-viewport-container-ready', (e) => {
+    const container = e.detail?.container;
+    if (!container) return;
+    const canvas = window.__cyco?.rendererManager?.renderer?.domElement;
+    if (canvas) {
+      _bindDropTarget(canvas, canvas);
+      _bindDropTarget(container, canvas);
+    }
+  });
 
-      // Resolve preset from already-imported MATERIALS array
-      const preset = MATERIALS.find(m => m.id === matId);
-      if (!preset) return;
-
-      // Raycast to find the object under the drop point
-      const ve = window.__cyco?.viewportEngine;
-      if (!ve) return;
-      const rect = canvas.getBoundingClientRect();
-      const ndcX = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
-      const ndcY = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
-      const raycaster = new THREE.Raycaster();
-      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), ve.camera);
-      const hits = raycaster.intersectObjects(ve.scene.children, true)
-        .filter(h => !h.object.userData._isGizmo && (h.object.isMesh || h.object.isSkinnedMesh));
-
-      // If nothing hit by raycast, fall back to the current selection
-      const sm = window.__cyco?.selectionManager;
-      const selectedMeshes = sm ? [...sm.selected].filter(o => o.isMesh || o.isSkinnedMesh) : [];
-      const targetObjects = hits.length > 0 ? [hits[0].object] : selectedMeshes;
-      if (targetObjects.length > 0) {
-        window.dispatchEvent(new CustomEvent('cyco-apply-material', {
-          detail: { preset, targetObjects }
-        }));
-      }
-    });
+  // If the viewport is already ready when this module loads, bind immediately.
+  if (window.__cyco?.rendererManager?.renderer?.domElement) {
+    _bindCanvasDrop(window.__cyco.rendererManager.renderer.domElement);
   }
 })();
 
