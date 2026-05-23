@@ -47,9 +47,14 @@ export class MaterialBrowser {
     this._activeCategory = null; // null = "All"
     this._searchQuery    = '';
     this._element        = null;
+    this._lastPreset     = null; // last hovered / right-clicked card
 
     this._buildElement();
     this._refreshGrid();
+
+    // Update Apply-button state whenever selection changes
+    window.addEventListener('cyco-select-node',  () => this._updateApplyBtn());
+    window.addEventListener('cyco-deselect-all', () => this._updateApplyBtn());
   }
 
   get element() { return this._element; }
@@ -63,18 +68,43 @@ export class MaterialBrowser {
 
     // Search bar
     const searchRow = document.createElement('div');
-    searchRow.style.cssText = 'display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
+    searchRow.style.cssText = 'display:flex;align-items:center;gap:5px;padding:5px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
+
+    // Magnifying-glass toggle
+    const searchToggle = document.createElement('button');
+    searchToggle.innerHTML = '&#128269;';
+    searchToggle.title = 'Toggle search';
+    searchToggle.style.cssText = 'background:none;border:none;color:var(--text-secondary,#aaa);cursor:pointer;font-size:14px;padding:0 2px;flex-shrink:0;line-height:1;';
 
     this._searchInput = document.createElement('input');
     this._searchInput.type = 'text';
     this._searchInput.placeholder = 'Search materials…';
-    this._searchInput.style.cssText = 'flex:1;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-primary,#e0e0e0);border-radius:4px;padding:3px 8px;font-size:12px;';
+    this._searchInput.style.cssText = 'flex:1;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-primary,#e0e0e0);border-radius:4px;padding:3px 8px;font-size:12px;min-width:0;';
     this._searchInput.addEventListener('input', () => {
       this._searchQuery = this._searchInput.value.toLowerCase();
       this._refreshGrid();
     });
 
+    searchToggle.addEventListener('click', () => {
+      const collapsed = this._searchInput.style.display === 'none';
+      this._searchInput.style.display = collapsed ? '' : 'none';
+      if (collapsed) this._searchInput.focus();
+    });
+
+    // "Apply to Object" button — enabled only when object+material are both ready
+    this._applyBtn = document.createElement('button');
+    this._applyBtn.textContent = 'Apply to Object';
+    this._applyBtn.className   = 'ce-btn-small';
+    this._applyBtn.title       = 'Hover a material and select an object to enable';
+    this._applyBtn.style.cssText = 'flex-shrink:0;opacity:0.4;cursor:not-allowed;white-space:nowrap;';
+    this._applyBtn.disabled = true;
+    this._applyBtn.addEventListener('click', () => {
+      if (this._lastPreset) this._applyToSelection(this._lastPreset);
+    });
+
+    searchRow.appendChild(searchToggle);
     searchRow.appendChild(this._searchInput);
+    searchRow.appendChild(this._applyBtn);
     root.appendChild(searchRow);
 
     // Category tabs
@@ -153,9 +183,18 @@ export class MaterialBrowser {
     card.appendChild(label);
 
     // ── Events ──
-    card.addEventListener('mouseenter', () => this._previewOnSelection(preset));
+    card.addEventListener('mouseenter', () => {
+      this._lastPreset = preset;
+      this._previewOnSelection(preset);
+      this._updateApplyBtn();
+    });
     card.addEventListener('mouseleave', () => this._restoreSelection());
     card.addEventListener('click',      () => this._applyToSelection(preset));
+    card.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      this._lastPreset = preset;
+      this._showContextMenu(preset, e.clientX, e.clientY);
+    });
 
     card.addEventListener('dragstart', (e) => {
       e.dataTransfer.setData('application/x-cyco-material', preset.id);
@@ -230,6 +269,49 @@ export class MaterialBrowser {
     setTimeout(() => { this._grid.style.outline = old; }, 600);
   }
 
+  // ── Apply-button state ────────────────────────────────────────────────────
+
+  _updateApplyBtn() {
+    if (!this._applyBtn) return;
+    const enabled = !!this._lastPreset && this._getSelectedMeshes().length > 0;
+    this._applyBtn.disabled        = !enabled;
+    this._applyBtn.style.opacity   = enabled ? '1' : '0.4';
+    this._applyBtn.style.cursor    = enabled ? 'pointer' : 'not-allowed';
+  }
+
+  // ── Context menu ──────────────────────────────────────────────────────────
+
+  _showContextMenu(preset, x, y) {
+    document.getElementById('mat-ctx-menu')?.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'mat-ctx-menu';
+    menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#444);border-radius:5px;padding:4px 0;z-index:99999;min-width:150px;box-shadow:0 4px 16px rgba(0,0,0,0.5);`;
+
+    const hasSel = this._getSelectedMeshes().length > 0;
+    const item   = document.createElement('div');
+    item.textContent    = 'Apply to Object';
+    item.style.cssText  = `padding:7px 14px;font-size:12px;white-space:nowrap;cursor:${hasSel ? 'pointer' : 'default'};color:${hasSel ? 'var(--text-primary,#e0e0e0)' : 'var(--text-disabled,#666)'};`;
+    if (hasSel) {
+      item.addEventListener('mouseenter', () => { item.style.background = 'var(--accent-color,#4488ff)'; item.style.color = '#fff'; });
+      item.addEventListener('mouseleave', () => { item.style.background = ''; item.style.color = ''; });
+      item.addEventListener('click', (e) => { e.stopPropagation(); menu.remove(); this._applyToSelection(preset); });
+    }
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+
+    // Dismiss when clicking outside
+    const dismiss = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', dismiss, true); } };
+    setTimeout(() => document.addEventListener('mousedown', dismiss, true), 0);
+
+    // Keep menu inside viewport
+    requestAnimationFrame(() => {
+      const r = menu.getBoundingClientRect();
+      if (r.right  > window.innerWidth)  menu.style.left = `${x - r.width}px`;
+      if (r.bottom > window.innerHeight) menu.style.top  = `${y - r.height}px`;
+    });
+  }
+
   // ── Styles ────────────────────────────────────────────────────────────────
 
   _injectStyles() {
@@ -293,7 +375,10 @@ export class MaterialBrowser {
       const hits = raycaster.intersectObjects(ve.scene.children, true)
         .filter(h => !h.object.userData._isGizmo && (h.object.isMesh || h.object.isSkinnedMesh));
 
-      const targetObjects = hits.length > 0 ? [hits[0].object] : [];
+      // If nothing hit by raycast, fall back to the current selection
+      const sm = window.__cyco?.selectionManager;
+      const selectedMeshes = sm ? [...sm.selected].filter(o => o.isMesh || o.isSkinnedMesh) : [];
+      const targetObjects = hits.length > 0 ? [hits[0].object] : selectedMeshes;
       if (targetObjects.length > 0) {
         window.dispatchEvent(new CustomEvent('cyco-apply-material', {
           detail: { preset, targetObjects }
