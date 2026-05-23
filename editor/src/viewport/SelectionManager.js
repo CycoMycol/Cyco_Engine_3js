@@ -43,6 +43,7 @@ export class SelectionManager {
     this._pointer        = new THREE.Vector2();
     this._pointerDown    = new THREE.Vector2();
     this._isDragging     = false;
+    this._gizmoDragging  = false; // true while TransformControls is actively dragging
     this._dragThreshold  = 5; // pixels
 
     /** @type {SelectionBox|null} */
@@ -138,7 +139,8 @@ export class SelectionManager {
   _onPointerDown(event) {
     if (!this._active || event.button !== 0) return; // left button only
     this._pointerDown.set(event.clientX, event.clientY);
-    this._isDragging = false;
+    this._isDragging    = false;
+    this._gizmoDragging = false; // failsafe reset; normally cleared by dragging-changed(false)
 
     const ndc = this._toNDC(event);
     if (this._selectionBox) {
@@ -148,6 +150,7 @@ export class SelectionManager {
 
   _onPointerMove(event) {
     if (!this._active || !(event.buttons & 1)) return; // left button held
+    if (this._gizmoDragging) return; // TransformControls owns this drag
 
     const dx = event.clientX - this._pointerDown.x;
     const dy = event.clientY - this._pointerDown.y;
@@ -167,6 +170,14 @@ export class SelectionManager {
     if (!this._active || event.button !== 0) return;
 
     if (this._selectionHelper) this._selectionHelper.enabled = false;
+
+    // dragging-changed(true) was received during this drag — gizmo owns it.
+    // dragging-changed(false) fires on document pointerup, which is AFTER this
+    // canvas handler, so _gizmoDragging is still true here. Skip selection.
+    if (this._gizmoDragging) {
+      this._isDragging = false;
+      return;
+    }
 
     if (this._isDragging) {
       this._isDragging = false;
@@ -196,7 +207,8 @@ export class SelectionManager {
     } else {
       if (!event.shiftKey && !event.ctrlKey) {
         this.clearSelection();
-        // Clicking empty space opens environment properties
+        // Clicking empty space: show environment properties.
+        // Tool mode is intentionally NOT changed — user stays on whatever tool they had.
         window.dispatchEvent(new CustomEvent('cyco-show-properties', { detail: { type: 'environment' } }));
       }
     }

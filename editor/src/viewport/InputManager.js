@@ -37,6 +37,7 @@ const DEFAULT_BINDINGS = {
   translateMode:     'w',
   rotateMode:        'e',
   scaleMode:         'r',
+  selectMode:        'q',
   toggleGrid:        'g',
   toggleStats:       '`',
 };
@@ -76,6 +77,7 @@ export class InputManager {
     'Translate Mode':   'translateMode',
     'Rotate Mode':      'rotateMode',
     'Scale Mode':       'scaleMode',
+    'Select Mode':      'selectMode',
     'Toggle Grid':      'toggleGrid',
     'Toggle Stats':     'toggleStats',
   };
@@ -151,6 +153,9 @@ export class InputManager {
         break;
       case b.scaleMode:
         window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'scale' } }));
+        break;
+      case b.selectMode:
+        window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'select' } }));
         break;
       case b.toggleGrid:
         window.dispatchEvent(new CustomEvent('cyco-vp-toggle-grid'));

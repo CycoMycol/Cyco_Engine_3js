@@ -35,7 +35,7 @@ export class TransformGizmo {
 
     this._snapEnabled = false;
     this._snapValue   = 0.25;
-    this._mode        = 'translate';
+    this._mode        = 'select'; // default: pointer/select, no gizmo shown
 
     /** State snapshot before a drag begins (for TransformCommand undo). */
     this._matrixBefore = null;
@@ -77,14 +77,18 @@ export class TransformGizmo {
     }
 
     this.controls = new TransformControls(camera, renderer.domElement);
-    this.controls.setMode(this._mode);
+    // TransformControls only accepts translate/rotate/scale; use translate as the
+    // internal default when in select mode (gizmo won't be shown anyway).
+    this.controls.setMode(this._mode !== 'select' ? this._mode : 'translate');
     this.controls.setSpace('world');
     this._applySnap();
 
-    // CRITICAL — prevents camera orbiting while dragging the gizmo
+    // CRITICAL — prevents camera orbiting while dragging the gizmo.
+    // Also flags SelectionManager so it ignores the pointer-up that ends the drag.
     this.controls.addEventListener('dragging-changed', event => {
       const orbitControls = this.engine.controls;
       if (orbitControls) orbitControls.enabled = !event.value;
+      this.selectionManager._gizmoDragging = !!event.value;
     });
 
     // Record matrix before drag for undo
@@ -135,7 +139,9 @@ export class TransformGizmo {
 
     if (object && !object.userData.cycoLocked) {
       this._targetObject = object;
-      this.controls.attach(object);
+      if (this._mode !== 'select') {
+        this.controls.attach(object);
+      }
     } else {
       this.detach();
     }
@@ -145,9 +151,19 @@ export class TransformGizmo {
 
   _onTool(event) {
     const { mode } = event.detail;
-    if (!['translate', 'rotate', 'scale'].includes(mode)) return;
+    if (!['translate', 'rotate', 'scale', 'select'].includes(mode)) return;
     this._mode = mode;
-    this.controls?.setMode(mode);
+    if (mode === 'select') {
+      // Hide the visual gizmo but keep _targetObject so re-enabling a transform
+      // mode can re-attach without needing a new selection event.
+      this.controls?.detach();
+    } else {
+      this.controls?.setMode(mode);
+      // If an object is already selected, re-show the gizmo for it.
+      if (this._targetObject) {
+        this.controls?.attach(this._targetObject);
+      }
+    }
   }
 
   _onSnap(event) {

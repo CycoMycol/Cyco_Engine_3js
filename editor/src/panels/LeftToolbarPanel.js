@@ -13,7 +13,8 @@ import { BasePanel } from './BasePanel.js';
 export class LeftToolbarPanel extends BasePanel {
   constructor() {
     super();
-    this._activeTool  = 'translate';
+    this._activeTool       = 'select';
+    this._lastTransformTool = 'translate'; // what the cycle button currently shows
     this._viewMode    = '3d';
     this._toolBtns    = {};
     this._viewBtns    = {};
@@ -43,29 +44,34 @@ export class LeftToolbarPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
-    // Transform cycle toggle (translate → rotate → scale)
-    const CYCLE = ['translate', 'rotate', 'scale'];
-    const cycleId = CYCLE.includes(this._activeTool) ? this._activeTool : 'translate';
-    const transformBtn = _toolBtn(_toolIcon(cycleId), _toolTip(cycleId), () => {
-      const cur  = CYCLE.includes(this._activeTool) ? this._activeTool : 'translate';
-      const next = CYCLE[(CYCLE.indexOf(cur) + 1) % CYCLE.length];
-      this._activeTool = next;
+    // Select tool
+    const selectBtn = _toolBtn(_toolIcon('select'), _toolTip('select'), () => {
+      this._activeTool = 'select';
       this._refreshToolBtns();
-      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: next } }));
+      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'select' } }));
+    });
+    selectBtn.dataset.tool = 'select';
+    this._toolBtns['select'] = selectBtn;
+    bar.appendChild(selectBtn);
+
+    // Transform cycle toggle (translate → rotate → scale)
+    // First click while NOT active: activate the shown tool (no cycle).
+    // First click while ALREADY active: cycle to the next tool.
+    const CYCLE = ['translate', 'rotate', 'scale'];
+    const transformBtn = _toolBtn(_toolIcon(this._lastTransformTool), _toolTip(this._lastTransformTool), () => {
+      if (this._activeTool === this._lastTransformTool) {
+        // Already on this transform — cycle to next
+        const idx = CYCLE.indexOf(this._lastTransformTool);
+        this._lastTransformTool = CYCLE[(idx + 1) % CYCLE.length];
+      }
+      // Activate the (possibly advanced) shown tool
+      this._activeTool = this._lastTransformTool;
+      this._refreshToolBtns();
+      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: this._lastTransformTool } }));
     });
     transformBtn.dataset.tool = 'transform';
     this._toolBtns['transform'] = transformBtn;
     bar.appendChild(transformBtn);
-
-    // Rect Transform
-    const rectBtn = _toolBtn(_toolIcon('rect'), 'Rect Transform  T', () => {
-      this._activeTool = 'rect';
-      this._refreshToolBtns();
-      window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'rect' } }));
-    });
-    rectBtn.dataset.tool = 'rect';
-    this._toolBtns['rect'] = rectBtn;
-    bar.appendChild(rectBtn);
 
     bar.appendChild(_toolSep());
 
@@ -115,6 +121,18 @@ export class LeftToolbarPanel extends BasePanel {
 
     bar.appendChild(_toolSep());
 
+    // Sync button state when tool changes arrive from other systems (keyboard, etc.)
+    window.addEventListener('cyco-vp-tool', (e) => {
+      const { mode } = e.detail ?? {};
+      if (['select', 'translate', 'rotate', 'scale'].includes(mode)) {
+        this._activeTool = mode;
+        if (['translate', 'rotate', 'scale'].includes(mode)) {
+          this._lastTransformTool = mode; // keep button showing the active transform
+        }
+        this._refreshToolBtns();
+      }
+    });
+
     this._refreshToolBtns();
     this._refreshViewBtns();
     return bar;
@@ -123,15 +141,14 @@ export class LeftToolbarPanel extends BasePanel {
   _refreshToolBtns() {
     const CYCLE = ['translate', 'rotate', 'scale'];
     const onCycle = CYCLE.includes(this._activeTool);
-    const cycleId  = onCycle ? this._activeTool : 'translate';
+    const sb = this._toolBtns['select'];
+    if (sb) sb.classList.toggle('active', this._activeTool === 'select');
     const tb = this._toolBtns['transform'];
     if (tb) {
       tb.classList.toggle('active', onCycle);
-      tb.innerHTML = _toolIcon(cycleId);
-      tb.title     = _toolTip(cycleId);
+      tb.innerHTML = _toolIcon(this._lastTransformTool);
+      tb.title     = _toolTip(this._lastTransformTool);
     }
-    const rb = this._toolBtns['rect'];
-    if (rb) rb.classList.toggle('active', this._activeTool === 'rect');
   }
 
   _refreshViewBtns() {
@@ -274,6 +291,9 @@ function _toolBtn(svgHtml, tip, onClick) {
 
 function _toolIcon(id) {
   switch (id) {
+    case 'select': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor">
+      <path d="M4 2 L4 14.5 L7 11.5 L9.5 17.2 L11.5 16.2 L9 10.5 L13.5 10.5 Z"/>
+    </svg>`;
     case 'translate': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor">
       <path d="M10 1.5 L8 5H9.5V9.5H5V8L1.5 10 5 12V10.5H9.5V15H8L10 18.5 12 15H10.5V10.5H15V12L18.5 10 15 8V9.5H10.5V5H12Z"/>
     </svg>`;
@@ -321,10 +341,10 @@ function _toolIcon(id) {
 
 function _toolTip(id) {
   switch (id) {
+    case 'select':    return 'Select  Q';
     case 'translate': return 'Translate  W';
     case 'rotate':    return 'Rotate  E';
     case 'scale':     return 'Scale  R';
-    case 'rect':      return 'Rect Transform  T';
     default:          return '';
   }
 }
