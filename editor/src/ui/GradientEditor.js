@@ -25,7 +25,7 @@ export class GradientEditor {
       { pos: 0.45, color: '#d4732a' },
       { pos: 0.52, color: '#87CEEB' },
       { pos: 1.0,  color: '#1565C0' },
-    ]).map(s => ({ ...s }));
+    ]).map(s => ({ blend: 0, ...s }));
 
     this._opacityStops = (opts.opacityStops ?? [
       { pos: 0.0, opacity: 1.0 },
@@ -50,7 +50,7 @@ export class GradientEditor {
   }
 
   setData({ colorStops, opacityStops } = {}) {
-    if (colorStops)   this._colorStops   = colorStops.map(s => ({ ...s }));
+    if (colorStops)   this._colorStops   = colorStops.map(s => ({ blend: 0, ...s }));
     if (opacityStops) this._opacityStops = opacityStops.map(s => ({ ...s }));
     this._sel = null;
     this._rebuildHandles();
@@ -128,34 +128,34 @@ export class GradientEditor {
       'display:flex;align-items:center;gap:4px;font-size:11px;' +
       'color:var(--text-secondary,#999);margin-bottom:4px;flex-wrap:wrap;';
 
-    const numSt =
-      'width:44px;background:var(--bg-primary,#1e1e1e);border:1px solid var(--border-color,#444);' +
-      'color:var(--text-primary,#e0e0e0);padding:2px 4px;border-radius:3px;font-size:11px;';
-
     el.appendChild(this._span('Opacity:'));
-    const valIn = this._numInput(numSt, 0, 100, 1);
-    valIn.addEventListener('change', () => {
-      const s = this._selOf('opacity');
-      if (!s) return;
-      s.opacity = Math.max(0, Math.min(1, (parseFloat(valIn.value) || 0) / 100));
-      this._rebuildHandles();
-      this._updateCanvas();
-      this._emit();
+    const { wrap: valWrap, inp: valIn } = this._scrubInput({
+      value: 100, min: 0, max: 100, step: 0.5, decimals: 0,
+      onChange: (v) => {
+        const s = this._selOf('opacity');
+        if (!s) return;
+        s.opacity = v / 100;
+        this._rebuildHandles();
+        this._updateCanvas();
+        this._emit();
+      },
     });
-    el.appendChild(valIn);
+    el.appendChild(valWrap);
     el.appendChild(this._span('%'));
 
     el.appendChild(this._span('Location:', 'margin-left:8px;'));
-    const locIn = this._numInput(numSt, 0, 100, 0.1);
-    locIn.addEventListener('change', () => {
-      const s = this._selOf('opacity');
-      if (!s) return;
-      s.pos = Math.max(0, Math.min(1, (parseFloat(locIn.value) || 0) / 100));
-      this._rebuildHandles();
-      this._updateCanvas();
-      this._emit();
+    const { wrap: locWrap, inp: locIn } = this._scrubInput({
+      value: 0, min: 0, max: 100, step: 0.1, decimals: 1,
+      onChange: (v) => {
+        const s = this._selOf('opacity');
+        if (!s) return;
+        s.pos = v / 100;
+        this._rebuildHandles();
+        this._updateCanvas();
+        this._emit();
+      },
     });
-    el.appendChild(locIn);
+    el.appendChild(locWrap);
     el.appendChild(this._span('%'));
 
     const del = this._delBtn(() => {
@@ -180,10 +180,6 @@ export class GradientEditor {
       'display:flex;align-items:center;gap:4px;font-size:11px;' +
       'color:var(--text-secondary,#999);flex-wrap:wrap;';
 
-    const numSt =
-      'width:44px;background:var(--bg-primary,#1e1e1e);border:1px solid var(--border-color,#444);' +
-      'color:var(--text-primary,#e0e0e0);padding:2px 4px;border-radius:3px;font-size:11px;';
-
     el.appendChild(this._span('Color:'));
 
     const swatch = document.createElement('button');
@@ -204,16 +200,32 @@ export class GradientEditor {
     el.appendChild(swatch);
 
     el.appendChild(this._span('Location:', 'margin-left:8px;'));
-    const locIn = this._numInput(numSt, 0, 100, 0.1);
-    locIn.addEventListener('change', () => {
-      const s = this._selOf('color');
-      if (!s) return;
-      s.pos = Math.max(0, Math.min(1, (parseFloat(locIn.value) || 0) / 100));
-      this._rebuildHandles();
-      this._updateCanvas();
-      this._emit();
+    const { wrap: locWrap, inp: locIn } = this._scrubInput({
+      value: 0, min: 0, max: 100, step: 0.1, decimals: 1,
+      onChange: (v) => {
+        const s = this._selOf('color');
+        if (!s) return;
+        s.pos = v / 100;
+        this._rebuildHandles();
+        this._updateCanvas();
+        this._emit();
+      },
     });
-    el.appendChild(locIn);
+    el.appendChild(locWrap);
+    el.appendChild(this._span('%'));
+
+    el.appendChild(this._span('Blend:', 'margin-left:8px;'));
+    const { wrap: blendWrap, inp: blendIn } = this._scrubInput({
+      value: 0, min: 0, max: 100, step: 0.5, decimals: 0,
+      onChange: (v) => {
+        const s = this._selOf('color');
+        if (!s) return;
+        s.blend = v / 100;
+        this._updateCanvas();
+        this._emit();
+      },
+    });
+    el.appendChild(blendWrap);
     el.appendChild(this._span('%'));
 
     const del = this._delBtn(() => {
@@ -229,7 +241,7 @@ export class GradientEditor {
     });
     el.appendChild(del);
 
-    return { el, swatch, locIn };
+    return { el, swatch, locIn, blendIn };
   }
 
   // ── Handle management ──────────────────────────────────────────────────────
@@ -331,24 +343,97 @@ export class GradientEditor {
 
     // Checker background (shows transparency)
     const sq = 8;
-    for (let row = 0; row < Math.ceil(h / sq); row++) {
-      for (let col = 0; col < Math.ceil(w / sq); col++) {
-        ctx.fillStyle = (row + col) % 2 === 0 ? '#ccc' : '#888';
-        ctx.fillRect(col * sq, row * sq, sq, sq);
+    for (let cr = 0; cr < Math.ceil(h / sq); cr++) {
+      for (let cc = 0; cc < Math.ceil(w / sq); cc++) {
+        ctx.fillStyle = (cr + cc) % 2 === 0 ? '#ccc' : '#888';
+        ctx.fillRect(cc * sq, cr * sq, sq, sq);
       }
     }
 
     const sorted = [...this._colorStops].sort((a, b) => a.pos - b.pos);
-    if (sorted.length >= 2) {
-      const g = ctx.createLinearGradient(0, 0, w, 0);
-      sorted.forEach(s => { try { g.addColorStop(s.pos, s.color); } catch {} });
-      ctx.fillStyle = g;
-    } else if (sorted.length === 1) {
-      ctx.fillStyle = sorted[0].color;
-    } else {
-      ctx.fillStyle = '#888';
+    if (!sorted.length) return;
+
+    const hasBlend = sorted.some(s => (s.blend ?? 0) > 0.001);
+
+    if (!hasBlend) {
+      // Fast path: native linear gradient
+      if (sorted.length >= 2) {
+        const g = ctx.createLinearGradient(0, 0, w, 0);
+        sorted.forEach(s => { try { g.addColorStop(s.pos, s.color); } catch {} });
+        ctx.fillStyle = g;
+      } else {
+        ctx.fillStyle = sorted[0].color;
+      }
+      ctx.fillRect(0, 0, w, h);
+      return;
     }
-    ctx.fillRect(0, 0, w, h);
+
+    // Compute linear base gradient into float array
+    const _parse = (hex) => {
+      const n = parseInt(hex.replace('#', ''), 16);
+      return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+    };
+    const linear = new Float32Array(w * 3);
+    for (let x = 0; x < w; x++) {
+      const t = x / Math.max(w - 1, 1);
+      let pr, pg, pb;
+      if (t <= sorted[0].pos) {
+        [pr, pg, pb] = _parse(sorted[0].color);
+      } else if (t >= sorted[sorted.length - 1].pos) {
+        [pr, pg, pb] = _parse(sorted[sorted.length - 1].color);
+      } else {
+        let s0 = sorted[0], s1 = sorted[1];
+        for (let j = 0; j < sorted.length - 1; j++) {
+          if (t >= sorted[j].pos && t <= sorted[j + 1].pos) {
+            s0 = sorted[j]; s1 = sorted[j + 1]; break;
+          }
+        }
+        const rawT = (t - s0.pos) / (s1.pos - s0.pos + 1e-9);
+        const [r0, g0, b0] = _parse(s0.color);
+        const [r1, g1, b1] = _parse(s1.color);
+        pr = r0 + (r1 - r0) * rawT;
+        pg = g0 + (g1 - g0) * rawT;
+        pb = b0 + (b1 - b0) * rawT;
+      }
+      linear[x * 3] = pr; linear[x * 3 + 1] = pg; linear[x * 3 + 2] = pb;
+    }
+
+    // Per-segment Gaussian blur — softens transitions between close stops
+    const output = linear.slice();
+    for (let si = 0; si < sorted.length - 1; si++) {
+      const s0 = sorted[si], s1 = sorted[si + 1];
+      const bAmt = Math.max(s0.blend ?? 0, s1.blend ?? 0);
+      if (bAmt < 0.001) continue;
+      const x0 = Math.round(s0.pos * (w - 1));
+      const x1 = Math.round(s1.pos * (w - 1));
+      const span = Math.max(x1 - x0, 1);
+      const radius = Math.ceil(bAmt * span * 8.0);
+      const sigma  = radius / 2.5 + 1;
+      const bx0 = Math.max(0, x0 - radius);
+      const bx1 = Math.min(w - 1, x1 + radius);
+      for (let x = bx0; x <= bx1; x++) {
+        let sr = 0, sg = 0, sb = 0, sw = 0;
+        for (let dx = -radius; dx <= radius; dx++) {
+          const nx = Math.max(0, Math.min(w - 1, x + dx));
+          const wk = Math.exp(-0.5 * (dx / sigma) ** 2);
+          sr += wk * linear[nx * 3]; sg += wk * linear[nx * 3 + 1]; sb += wk * linear[nx * 3 + 2];
+          sw += wk;
+        }
+        if (sw > 0) { output[x * 3] = sr / sw; output[x * 3 + 1] = sg / sw; output[x * 3 + 2] = sb / sw; }
+      }
+    }
+
+    const imgData = ctx.createImageData(w, h);
+    for (let x = 0; x < w; x++) {
+      for (let y = 0; y < h; y++) {
+        const pi = (y * w + x) * 4;
+        imgData.data[pi]     = Math.round(output[x * 3]);
+        imgData.data[pi + 1] = Math.round(output[x * 3 + 1]);
+        imgData.data[pi + 2] = Math.round(output[x * 3 + 2]);
+        imgData.data[pi + 3] = 255;
+      }
+    }
+    ctx.putImageData(imgData, 0, 0);
   }
 
   // ── Stops panel ────────────────────────────────────────────────────────────
@@ -375,6 +460,7 @@ export class GradientEditor {
       if (stop) {
         this._colRow.swatch.style.background = stop.color;
         this._colRow.locIn.value = +(stop.pos * 100).toFixed(1);
+        this._colRow.blendIn.value = Math.round((stop.blend ?? 0) * 100);
       }
     }
   }
@@ -383,7 +469,7 @@ export class GradientEditor {
 
   _addColStop(pos) {
     const color = this._sampleColor(pos);
-    this._colorStops.push({ pos, color });
+    this._colorStops.push({ pos, color, blend: 0 });
     this._colorStops.sort((a, b) => a.pos - b.pos);
     const idx = this._colorStops.findIndex(s => s.pos === pos && s.color === color);
     this._sel = { type: 'color', index: Math.max(0, idx) };
@@ -462,11 +548,55 @@ export class GradientEditor {
     return s;
   }
 
-  _numInput(style, min, max, step) {
-    const i = document.createElement('input');
-    i.type = 'number'; i.min = min; i.max = max; i.step = step;
-    i.style.cssText = style;
-    return i;
+  _scrubInput({ value = 0, min = 0, max = 100, step = 0.1, decimals = 1, onChange } = {}) {
+    const clamp = v => Math.max(min, Math.min(max, v));
+
+    const handle = document.createElement('span');
+    handle.className = 'ce-prop-scrub-handle';
+    handle.title = 'Drag to change value · Shift ×10 · Alt ×0.1';
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.inputMode = 'decimal';
+    inp.value = parseFloat(value).toFixed(decimals);
+    inp.style.cssText =
+      'width:40px;background:var(--bg-primary,#1e1e1e);border:1px solid var(--border-color,#444);' +
+      'color:var(--text-primary,#e0e0e0);padding:2px 4px;border-radius:3px;font-size:11px;';
+
+    inp.addEventListener('change', () => {
+      const v = clamp(parseFloat(inp.value) || 0);
+      inp.value = v.toFixed(decimals);
+      if (onChange) onChange(v);
+    });
+
+    let _startVal = 0, _acc = 0;
+    handle.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      _startVal = parseFloat(inp.value) || 0;
+      _acc = 0;
+      handle.requestPointerLock?.();
+      const onMove = (ev) => {
+        const mult = ev.shiftKey ? 10 : ev.altKey ? 0.1 : 1;
+        _acc += (ev.movementX - ev.movementY) * mult;
+        const v = clamp(_startVal + _acc * step);
+        inp.value = v.toFixed(decimals);
+        if (onChange) onChange(v);
+      };
+      const onUp = () => {
+        document.exitPointerLock?.();
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    const wrap = document.createElement('span');
+    wrap.style.cssText = 'display:inline-flex;align-items:center;gap:2px;flex-shrink:0;';
+    wrap.appendChild(handle);
+    wrap.appendChild(inp);
+    return { wrap, inp };
   }
 
   _delBtn(onClick) {

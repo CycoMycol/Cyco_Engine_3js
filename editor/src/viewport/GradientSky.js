@@ -119,6 +119,8 @@ function buildGradientTex(colorStops) {
     return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
   };
 
+  // Linear pass
+  const linear = new Float32Array(SAMPLES * 3);
   for (let i = 0; i < SAMPLES; i++) {
     const t = i / (SAMPLES - 1);
     let r, g, b;
@@ -136,17 +138,45 @@ function buildGradientTex(colorStops) {
           s0 = sorted[j]; s1 = sorted[j + 1]; break;
         }
       }
-      const blend = (t - s0.pos) / (s1.pos - s0.pos + 1e-9);
+      const rawT = (t - s0.pos) / (s1.pos - s0.pos + 1e-9);
       const [r0, g0, b0] = parse(s0.color);
       const [r1, g1, b1] = parse(s1.color);
-      r = Math.round(r0 + (r1 - r0) * blend);
-      g = Math.round(g0 + (g1 - g0) * blend);
-      b = Math.round(b0 + (b1 - b0) * blend);
+      r = r0 + (r1 - r0) * rawT;
+      g = g0 + (g1 - g0) * rawT;
+      b = b0 + (b1 - b0) * rawT;
     }
+    linear[i * 3] = r; linear[i * 3 + 1] = g; linear[i * 3 + 2] = b;
+  }
 
-    data[i * 4]     = r;
-    data[i * 4 + 1] = g;
-    data[i * 4 + 2] = b;
+  // Per-segment Gaussian blur for softer transitions
+  const output = linear.slice();
+  for (let si = 0; si < sorted.length - 1; si++) {
+    const s0 = sorted[si], s1 = sorted[si + 1];
+    const bAmt = Math.max(s0.blend ?? 0, s1.blend ?? 0);
+    if (bAmt < 0.001) continue;
+    const x0 = Math.round(s0.pos * (SAMPLES - 1));
+    const x1 = Math.round(s1.pos * (SAMPLES - 1));
+    const span = Math.max(x1 - x0, 1);
+    const radius = Math.ceil(bAmt * span * 8.0);
+    const sigma  = radius / 2.5 + 1;
+    const bx0 = Math.max(0, x0 - radius);
+    const bx1 = Math.min(SAMPLES - 1, x1 + radius);
+    for (let x = bx0; x <= bx1; x++) {
+      let sr = 0, sg = 0, sb = 0, sw = 0;
+      for (let dx = -radius; dx <= radius; dx++) {
+        const nx = Math.max(0, Math.min(SAMPLES - 1, x + dx));
+        const wk = Math.exp(-0.5 * (dx / sigma) ** 2);
+        sr += wk * linear[nx * 3]; sg += wk * linear[nx * 3 + 1]; sb += wk * linear[nx * 3 + 2];
+        sw += wk;
+      }
+      if (sw > 0) { output[x * 3] = sr / sw; output[x * 3 + 1] = sg / sw; output[x * 3 + 2] = sb / sw; }
+    }
+  }
+
+  for (let i = 0; i < SAMPLES; i++) {
+    data[i * 4]     = Math.round(output[i * 3]);
+    data[i * 4 + 1] = Math.round(output[i * 3 + 1]);
+    data[i * 4 + 2] = Math.round(output[i * 3 + 2]);
     data[i * 4 + 3] = 255;
   }
 
