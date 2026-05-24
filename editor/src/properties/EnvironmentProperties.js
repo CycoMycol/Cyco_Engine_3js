@@ -408,17 +408,55 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Wind Speed', speedSlider.el));
 
-    const baseSlider = slider({
-      value: cs()?._p?.cloudBase ?? 300, min: 1, max: 2000, step: 1,
-      onChange: (v) => cs()?.setParam('cloudBase', v),
+    const windDirSlider = slider({
+      value: Math.round((cs()?._p?.windAngle ?? 0) * (180 / Math.PI)), min: 0, max: 360, step: 1,
+      onChange: (v) => cs()?.setParam('windAngleDeg', v),
     });
-    body.appendChild(row('Cloud Base Y', baseSlider.el));
+    body.appendChild(row('Wind Direction', windDirSlider.el));
 
-    const topSlider = slider({
-      value: cs()?._p?.cloudTop ?? 600, min: 10, max: 2000, step: 1,
-      onChange: (v) => cs()?.setParam('cloudTop', v),
+    const heightSlider = slider({
+      value: cs()?._p?.cloudBase ?? 300, min: 1, max: 5000, step: 1,
+      onChange: (v) => cs()?.setParam('cloudHeight', v),
     });
-    body.appendChild(row('Cloud Top Y', topSlider.el));
+    body.appendChild(row('Cloud Height', heightSlider.el));
+
+    const thicknessSlider = slider({
+      value: ((cs()?._p?.cloudTop ?? 600) - (cs()?._p?.cloudBase ?? 300)), min: 10, max: 2000, step: 1,
+      onChange: (v) => cs()?.setParam('cloudThickness', v),
+    });
+    body.appendChild(row('Thickness', thicknessSlider.el));
+
+    const shadowCb = checkbox({
+      checked: cs()?._p?.shadowEnabled ?? false,
+      onChange: (v) => cs()?.setShadows(v),
+    });
+    body.appendChild(row('Cast Shadows', shadowCb));
+
+    const shadowStrSlider = slider({
+      value: cs()?._p?.shadowStrength ?? 0.5, min: 0, max: 1, step: 0.01,
+      onChange: (v) => cs()?.setParam('shadowStrength', v),
+    });
+    body.appendChild(row('Shadow Strength', shadowStrSlider.el));
+
+    // ── Bloom filters ────────────────────────────────────────────────────────
+    // These sliders filter how much the cloud layer contributes to the global
+    // UnrealBloomPass without touching any other scene object.
+    //
+    //  Bloom Strength  — multiplies cloud output brightness (0 = no bloom, 2 = double)
+    //  Bloom Threshold — per-cloud luminance floor; cloud pixels below this value are
+    //                    zeroed before the bloom pass sees them (0 = off / all bloom)
+
+    const bloomStrengthSlider = slider({
+      value: cs()?._p?.bloomBrightness ?? 1.0, min: 0, max: 2, step: 0.01,
+      onChange: (v) => cs()?.setParam('bloomBrightness', v),
+    });
+    body.appendChild(row('Bloom Strength', bloomStrengthSlider.el));
+
+    const bloomThresholdSlider = slider({
+      value: cs()?._p?.cloudBloomThreshold ?? 0.0, min: 0, max: 1, step: 0.01,
+      onChange: (v) => cs()?.setParam('cloudBloomThreshold', v),
+    });
+    body.appendChild(row('Bloom Threshold', bloomThresholdSlider.el));
   }
 
   // ── Fog ───────────────────────────────────────────────────────────────────

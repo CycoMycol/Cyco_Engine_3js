@@ -45,26 +45,33 @@ uniform vec3  uSkyHorizon;
 uniform vec3  uSkyZenith;
 uniform float uCloudBase;
 uniform float uCloudTop;
+uniform float uBloomBrightness;
+uniform float uCloudBloomThreshold;
+uniform float uWindAngle;  // radians; 0 = +X, PI/2 = +Z
 
 varying vec3 vWorldPos;
 
-// ── Noise helpers ─────────────────────────────────────────────────────────────
-
-float hash(float n) {
-  return fract(sin(n) * 43758.5453);
+// ── Improved value noise (Inigo Quilez) ──────────────────────────────────────
+// 3D hash: maps vec3 → float with no axis-aligned correlation stripes.
+// Avoids the 1D-hash-from-3D-coords pattern that caused the visible ripple artifacts.
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
 }
 
+// Quintic smoothstep (C2 continuity) instead of cubic (C1).
+// The cubic smoothstep has a discontinuous second derivative at grid cell boundaries,
+// which creates visible Mach-band ripple artifacts. Quintic eliminates these.
 float valueNoise(vec3 x) {
-  vec3 p = floor(x);
+  vec3 i = floor(x);
   vec3 f = fract(x);
-  f = f * f * (3.0 - 2.0 * f);
-  float n = p.x + p.y * 57.0 + 113.0 * p.z;
-  return mix(
-    mix(mix(hash(n +   0.0), hash(n +   1.0), f.x),
-        mix(hash(n +  57.0), hash(n +  58.0), f.x), f.y),
-    mix(mix(hash(n + 113.0), hash(n + 114.0), f.x),
-        mix(hash(n + 170.0), hash(n + 171.0), f.x), f.y),
-    f.z);
+  // Quintic: 6t^5 - 15t^4 + 10t^3
+  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(mix(mix(hash(i + vec3(0,0,0)), hash(i + vec3(1,0,0)), u.x),
+                 mix(hash(i + vec3(0,1,0)), hash(i + vec3(1,1,0)), u.x), u.y),
+             mix(mix(hash(i + vec3(0,0,1)), hash(i + vec3(1,0,1)), u.x),
+                 mix(hash(i + vec3(0,1,1)), hash(i + vec3(1,1,1)), u.x), u.y), u.z);
 }
 
 float fbm(vec3 p) {
@@ -74,7 +81,7 @@ float fbm(vec3 p) {
   for (int i = 0; i < 6; i++) {
     val  += amp * valueNoise(p * freq);
     amp  *= 0.5;
-    freq *= 2.1;
+    freq *= 2.0;  // Exact octave ratio — 2.1 created inter-octave interference patterns
   }
   return val;
 }
@@ -88,8 +95,10 @@ float cloudDensity(vec3 p) {
   // Vertical profile — rounded billowy tops, fade at base
   float profile = smoothstep(0.0, 0.15, h) * smoothstep(1.0, 0.4, h);
 
-  // Wind drift
-  vec3 windOfs = vec3(uTime * uWindSpeed, 0.0, uTime * uWindSpeed * 0.35);
+  // Wind drift along user-controlled direction
+  float wCos = cos(uWindAngle);
+  float wSin = sin(uWindAngle);
+  vec3 windOfs = vec3(wCos, 0.0, wSin) * uTime * uWindSpeed;
   vec3 sp = (p + windOfs) / uScale;
 
   // Large-scale billowy base shape
@@ -140,15 +149,23 @@ void main() {
   float tEnd   = tFar;
 
   // ── Ray march ─────────────────────────────────────────────────────────────
-  const int STEPS = 32;
+  // 48 steps (was 32) — finer resolution reduces step-boundary stairstepping.
+  const int STEPS = 48;
   float stepSz = (tEnd - tStart) / float(STEPS);
+
+  // Per-pixel jitter: offset each ray's start position by a random fraction of
+  // one step. This breaks up the regular sampling grid that causes Moiré /
+  // banding artifacts — the same technique used by three.js webgl_volume_cloud.
+  float jitter = fract(sin(dot(gl_FragCoord.xy, vec2(127.1, 311.7))) * 43758.5453);
+  tStart += jitter * stepSz;
 
   float transmit  = 1.0;
   vec3  scattered = vec3(0.0);
   bool  hit       = false;
 
   for (int i = 0; i < STEPS; i++) {
-    float t   = tStart + (float(i) + 0.5) * stepSz;
+    float t   = tStart + float(i) * stepSz;
+    if (t > tEnd) break;
     vec3  pos = ro + rd * t;
     float d   = cloudDensity(pos);
 
@@ -186,33 +203,122 @@ void main() {
   if (alpha < 0.005) discard;
 
   // Divide accumulated scattered light by alpha to get pre-multiplied colour
-  gl_FragColor = vec4(scattered / max(alpha, 0.01), alpha);
+  vec3 cloudColor = scattered / max(alpha, 0.01);
+  // Per-cloud bloom filter: threshold zeros out dim cloud pixels; brightness scales output
+  float lum = dot(cloudColor, vec3(0.2126, 0.7152, 0.0722));
+  if (lum < uCloudBloomThreshold) cloudColor = vec3(0.0);
+  cloudColor *= uBloomBrightness;
+  gl_FragColor = vec4(cloudColor, alpha);
 }
 `;
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ── Cloud Shadow shaders ──────────────────────────────────────────────────────
+// The shadow is a large flat plane at ground level (y ≈ 0).  For each fragment
+// the shader fires a ray upward toward the sun through the cloud slab, integrates
+// density (fast 3-octave FBM), and outputs a dark semi-transparent colour whose
+// alpha is proportional to cloud density above that point.
+const SHADOW_VERT = /* glsl */`
+varying vec3 vWorldPos;
+void main() {
+  vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const SHADOW_FRAG = /* glsl */`
+precision highp float;
+
+uniform float uTime;
+uniform float uCoverage;
+uniform float uDensity;
+uniform float uScale;
+uniform float uWindSpeed;
+uniform float uWindAngle;
+uniform vec3  uSunDir;
+uniform float uCloudBase;
+uniform float uCloudTop;
+uniform float uShadowStrength;
+
+varying vec3 vWorldPos;
+
+float hash(vec3 p) {
+  p = fract(p * 0.3183099 + 0.1);
+  p *= 17.0;
+  return fract(p.x * p.y * p.z * (p.x + p.y + p.z));
+}
+
+float valueNoise(vec3 x) {
+  vec3 i = floor(x); vec3 f = fract(x);
+  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  return mix(mix(mix(hash(i),           hash(i+vec3(1,0,0)), u.x),
+                 mix(hash(i+vec3(0,1,0)), hash(i+vec3(1,1,0)), u.x), u.y),
+             mix(mix(hash(i+vec3(0,0,1)), hash(i+vec3(1,0,1)), u.x),
+                 mix(hash(i+vec3(0,1,1)), hash(i+vec3(1,1,1)), u.x), u.y), u.z);
+}
+
+// 3-octave fast variant (shadow pass doesn't need full detail)
+float cloudDensityFast(vec3 p) {
+  float h = clamp((p.y - uCloudBase) / max(uCloudTop - uCloudBase, 0.001), 0.0, 1.0);
+  float profile = smoothstep(0.0, 0.15, h) * smoothstep(1.0, 0.4, h);
+  float wCos = cos(uWindAngle); float wSin = sin(uWindAngle);
+  vec3 sp = (p + vec3(wCos, 0.0, wSin) * uTime * uWindSpeed) / uScale * 0.55;
+  float v = 0.0, a = 0.5, fr = 1.0;
+  for (int i = 0; i < 3; i++) { v += a * valueNoise(sp * fr); a *= 0.5; fr *= 2.0; }
+  return max(0.0, v - (1.0 - uCoverage * 0.95)) * profile * uDensity * 2.5;
+}
+
+void main() {
+  // No shadow when sun is below horizon or clouds are off
+  if (uCoverage < 0.04 || uSunDir.y < 0.04) discard;
+
+  float shadowDensity = 0.0;
+  const int SHADOW_STEPS = 8;
+  float slabH  = max(uCloudTop - uCloudBase, 1.0);
+  float stepSz = slabH / float(SHADOW_STEPS);
+
+  // March from ground point upward through cloud slab along sun direction
+  for (int i = 0; i < SHADOW_STEPS; i++) {
+    float y = uCloudBase + (float(i) + 0.5) * stepSz;
+    float t = (y - vWorldPos.y) / max(uSunDir.y, 0.001);
+    shadowDensity += cloudDensityFast(vWorldPos + uSunDir * t) * stepSz;
+  }
+
+  float shadow = 1.0 - exp(-shadowDensity * 0.06);
+  float alpha  = shadow * uShadowStrength;
+  if (alpha < 0.01) discard;
+
+  // Cool blue-grey tint (sky occlusion look)
+  gl_FragColor = vec4(0.0, 0.04, 0.12, alpha);
+}
+`;
 
 export class VolumetricClouds {
   /**
    * @param {import('./ViewportEngine.js').ViewportEngine} vpe
    */
   constructor(vpe) {
-    this._vpe  = vpe;
-    this._mesh = null;
-    this._t0   = performance.now();
+    this._vpe        = vpe;
+    this._mesh       = null;
+    this._shadowMesh = null;
+    this._t0         = performance.now();
 
     this._p = {
-      enabled:    false,
-      coverage:   0.45,
-      density:    0.7,
-      scale:      55.0,
-      windSpeed:  0.4,
-      // Sky Mode defaults: cloud slab sits high in the world so the camera always
-      // looks UP to see clouds and ground objects are never occluded.
-      cloudBase:  300.0,
-      cloudTop:   600.0,
-      skyMode:    true,   // true = sky layer (depth-tested, fixed altitude)
-                          // false = legacy surround (no depth test, follows camera)
+      enabled:             false,
+      coverage:            0.45,
+      density:             0.7,
+      scale:               55.0,
+      windSpeed:           0.4,
+      windAngle:           0.0,    // radians; 0=+X(east), PI/2=+Z(south)
+      cloudBase:           300.0,
+      cloudTop:            600.0,
+      skyMode:             true,
+      shadowEnabled:       false,
+      shadowStrength:      0.5,
+      shadowPlaneY:        0.05,   // world Y where shadow plane sits
+      bloomBrightness:     1.0,
+      cloudBloomThreshold: 0.0,
       sunDir:     new THREE.Vector3(0.45, 0.87, 0.22),
       sunColor:   new THREE.Color(1.0, 0.97, 0.88),
       skyHorizon: new THREE.Color(0.55, 0.70, 0.90),
@@ -226,17 +332,47 @@ export class VolumetricClouds {
 
   setEnabled(enabled) {
     this._p.enabled = enabled;
-    if (enabled) this._createMesh();
-    else          this._destroyMesh();
+    if (enabled) {
+      this._createMesh();
+      if (this._p.shadowEnabled) this._createShadowMesh();
+    } else {
+      this._destroyMesh();
+      this._destroyShadowMesh();
+    }
   }
 
   /**
-   * Set a named cloud parameter and push to GPU uniforms.
-   * Valid keys: coverage | density | scale | windSpeed | cloudBase | cloudTop
+   * Set a cloud parameter. Special computed keys:
+   *   cloudHeight    — moves whole slab (keeps thickness constant)
+   *   cloudThickness — changes cloudTop (keeps base constant)
+   *   windAngleDeg   — sets windAngle in degrees (0=east, 90=south)
    */
   setParam(key, value) {
-    this._p[key] = value;
+    if (key === 'cloudHeight') {
+      const thickness = this._p.cloudTop - this._p.cloudBase;
+      this._p.cloudBase = value;
+      this._p.cloudTop  = value + thickness;
+    } else if (key === 'cloudThickness') {
+      this._p.cloudTop = this._p.cloudBase + Math.max(10, value);
+    } else if (key === 'windAngleDeg') {
+      this._p.windAngle = value * (Math.PI / 180);
+    } else {
+      this._p[key] = value;
+    }
     this._pushUniforms();
+    this._pushShadowUniforms();
+  }
+
+  /** Toggle cloud shadows on/off; optionally set strength (0–1). */
+  setShadows(enabled, strength) {
+    this._p.shadowEnabled = enabled;
+    if (strength !== undefined) this._p.shadowStrength = strength;
+    if (enabled && this._p.enabled) {
+      this._createShadowMesh();
+    } else {
+      this._destroyShadowMesh();
+    }
+    this._pushShadowUniforms();
   }
 
   /**
@@ -248,9 +384,10 @@ export class VolumetricClouds {
     const phi   = THREE.MathUtils.degToRad(90 - elevation);
     const theta = THREE.MathUtils.degToRad(azimuth);
     this._p.sunDir.setFromSphericalCoords(1, phi, theta);
-    if (this._mesh?.material?.uniforms) {
+    if (this._mesh?.material?.uniforms)
       this._mesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
-    }
+    if (this._shadowMesh?.material?.uniforms)
+      this._shadowMesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
   }
 
   /**
@@ -275,18 +412,22 @@ export class VolumetricClouds {
     const cam = this._vpe?.camera;
     if (cam) {
       if (this._p.skyMode) {
-        // Sky Layer mode: dome follows camera XZ only so the cloud slab stays at a
-        // fixed world altitude regardless of where the camera flies vertically.
         this._mesh.position.set(cam.position.x, 0, cam.position.z);
       } else {
-        // Legacy Surround mode: dome follows camera in all 3 axes.
         this._mesh.position.copy(cam.position);
       }
+    }
+
+    if (this._shadowMesh) {
+      this._shadowMesh.material.uniforms.uTime.value = t;
+      if (cam)
+        this._shadowMesh.position.set(cam.position.x, this._p.shadowPlaneY, cam.position.z);
     }
   }
 
   dispose() {
     this._destroyMesh();
+    this._destroyShadowMesh();
   }
 
   // ── Private ─────────────────────────────────────────────────────────────────
@@ -300,39 +441,75 @@ export class VolumetricClouds {
       vertexShader:   CLOUD_VERT,
       fragmentShader: CLOUD_FRAG,
       uniforms: {
-        uTime:       { value: 0 },
-        uCoverage:   { value: this._p.coverage },
-        uDensity:    { value: this._p.density },
-        uScale:      { value: this._p.scale },
-        uWindSpeed:  { value: this._p.windSpeed },
-        uSunDir:     { value: this._p.sunDir.clone() },
-        uSunColor:   { value: this._p.sunColor.clone() },
-        uSkyHorizon: { value: this._p.skyHorizon.clone() },
-        uSkyZenith:  { value: this._p.skyZenith.clone() },
-        uCloudBase:  { value: this._p.cloudBase },
-        uCloudTop:   { value: this._p.cloudTop },
+        uTime:                { value: 0 },
+        uCoverage:            { value: this._p.coverage },
+        uDensity:             { value: this._p.density },
+        uScale:               { value: this._p.scale },
+        uWindSpeed:           { value: this._p.windSpeed },
+        uWindAngle:           { value: this._p.windAngle },
+        uSunDir:              { value: this._p.sunDir.clone() },
+        uSunColor:            { value: this._p.sunColor.clone() },
+        uSkyHorizon:          { value: this._p.skyHorizon.clone() },
+        uSkyZenith:           { value: this._p.skyZenith.clone() },
+        uCloudBase:           { value: this._p.cloudBase },
+        uCloudTop:            { value: this._p.cloudTop },
+        uBloomBrightness:     { value: this._p.bloomBrightness },
+        uCloudBloomThreshold: { value: this._p.cloudBloomThreshold },
       },
-      transparent:    true,
-      depthWrite:     false,
-      // Sky Layer mode: depthTest=true means opaque scene objects (which write depth
-      // before transparent meshes) correctly occlude clouds — the cloud fragment depth
-      // is clamped to the far plane (gl_Position.z = gl_Position.w) so any real geometry
-      // at depth < 1.0 passes in front.  Legacy Surround mode keeps the original
-      // depthTest:false behaviour so clouds wrap around the camera at any altitude.
-      depthTest:      !!this._p.skyMode,
-      side:           THREE.BackSide,
+      transparent: true,
+      depthWrite:  false,
+      depthTest:   !!this._p.skyMode,
+      side:        THREE.BackSide,
     });
 
-    // Large box — camera is inside; BackSide shows the inner sky-dome faces.
     const geo = new THREE.BoxGeometry(1800, 1800, 1800);
-
     this._mesh = new THREE.Mesh(geo, mat);
     this._mesh.name          = '__cyco_clouds';
-    this._mesh.raycast       = () => {};   // non-selectable
-    this._mesh.frustumCulled = false;      // always render
-    this._mesh.renderOrder   = 1;          // after Sky mesh (renderOrder 0)
-
+    this._mesh.raycast       = () => {};
+    this._mesh.frustumCulled = false;
+    this._mesh.renderOrder   = 1;
     scene.add(this._mesh);
+  }
+
+  _createShadowMesh() {
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+    this._destroyShadowMesh();
+
+    const mat = new THREE.ShaderMaterial({
+      vertexShader:   SHADOW_VERT,
+      fragmentShader: SHADOW_FRAG,
+      uniforms: {
+        uTime:           { value: 0 },
+        uCoverage:       { value: this._p.coverage },
+        uDensity:        { value: this._p.density },
+        uScale:          { value: this._p.scale },
+        uWindSpeed:      { value: this._p.windSpeed },
+        uWindAngle:      { value: this._p.windAngle },
+        uSunDir:         { value: this._p.sunDir.clone() },
+        uCloudBase:      { value: this._p.cloudBase },
+        uCloudTop:       { value: this._p.cloudTop },
+        uShadowStrength: { value: this._p.shadowStrength },
+      },
+      transparent:         true,
+      depthWrite:          false,
+      depthTest:           true,
+      polygonOffset:       true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits:  -1,
+    });
+
+    // Large flat plane follows camera XZ to always cover visible ground
+    const geo  = new THREE.PlaneGeometry(12000, 12000);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.rotation.x    = -Math.PI / 2;
+    mesh.position.y    = this._p.shadowPlaneY;
+    mesh.name          = '__cyco_cloud_shadow';
+    mesh.raycast       = () => {};
+    mesh.frustumCulled = false;
+    mesh.renderOrder   = 0;
+    this._shadowMesh   = mesh;
+    scene.add(this._shadowMesh);
   }
 
   _destroyMesh() {
@@ -343,17 +520,42 @@ export class VolumetricClouds {
     this._mesh = null;
   }
 
+  _destroyShadowMesh() {
+    if (!this._shadowMesh) return;
+    this._vpe?.scene?.remove(this._shadowMesh);
+    this._shadowMesh.geometry.dispose();
+    this._shadowMesh.material.dispose();
+    this._shadowMesh = null;
+  }
+
   _pushUniforms() {
     if (!this._mesh?.material?.uniforms) return;
     const u = this._mesh.material.uniforms;
-    u.uCoverage.value    = this._p.coverage;
-    u.uDensity.value     = this._p.density;
-    u.uScale.value       = this._p.scale;
-    u.uWindSpeed.value   = this._p.windSpeed;
-    u.uCloudBase.value   = this._p.cloudBase;
-    u.uCloudTop.value    = this._p.cloudTop;
+    u.uCoverage.value            = this._p.coverage;
+    u.uDensity.value             = this._p.density;
+    u.uScale.value               = this._p.scale;
+    u.uWindSpeed.value           = this._p.windSpeed;
+    u.uWindAngle.value           = this._p.windAngle;
+    u.uCloudBase.value           = this._p.cloudBase;
+    u.uCloudTop.value            = this._p.cloudTop;
+    u.uBloomBrightness.value     = this._p.bloomBrightness;
+    u.uCloudBloomThreshold.value = this._p.cloudBloomThreshold;
     u.uSunColor.value.copy(this._p.sunColor);
     u.uSkyHorizon.value.copy(this._p.skyHorizon);
     u.uSkyZenith.value.copy(this._p.skyZenith);
+  }
+
+  _pushShadowUniforms() {
+    if (!this._shadowMesh?.material?.uniforms) return;
+    const u = this._shadowMesh.material.uniforms;
+    u.uCoverage.value       = this._p.coverage;
+    u.uDensity.value        = this._p.density;
+    u.uScale.value          = this._p.scale;
+    u.uWindSpeed.value      = this._p.windSpeed;
+    u.uWindAngle.value      = this._p.windAngle;
+    u.uCloudBase.value      = this._p.cloudBase;
+    u.uCloudTop.value       = this._p.cloudTop;
+    u.uShadowStrength.value = this._p.shadowStrength;
+    u.uSunDir.value.copy(this._p.sunDir);
   }
 }
