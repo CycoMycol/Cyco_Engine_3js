@@ -206,13 +206,19 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Contrast', contrastSlider.el));
 
-    // ── Sky gradient ────────────────────────────────────────────────────────
-    const gradLabel = document.createElement('div');
-    gradLabel.style.cssText =
-      'font-size:11px;color:var(--text-secondary,#999);padding:4px 4px 2px;' +
-      'font-style:italic;';
-    gradLabel.textContent = 'Sky Colours  (left = nadir → right = zenith)';
-    body.appendChild(gradLabel);
+    // ── Sky gradient (collapsible) ───────────────────────────────────────────
+    const gradHdr = document.createElement('div');
+    gradHdr.style.cssText =
+      'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
+      'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
+      'cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;' +
+      'border-top:1px solid rgba(255,255,255,0.04);';
+    const gradArrow = document.createElement('span');
+    gradArrow.style.cssText = 'font-size:8px;width:10px;flex-shrink:0;';
+    gradArrow.textContent = '▾';
+    gradHdr.appendChild(gradArrow);
+    gradHdr.appendChild(document.createTextNode('Sky Colours'));
+    body.appendChild(gradHdr);
 
     // Read back current gradient if sky is already active
     const initGrad = ve?.gradientSky?.getGradient();
@@ -223,47 +229,92 @@ export class EnvironmentProperties {
     gradEditor.element.style.padding = '0 4px 4px';
     body.appendChild(gradEditor.element);
 
+    gradHdr.addEventListener('click', () => {
+      const open = gradEditor.element.style.display !== 'none';
+      gradEditor.element.style.display = open ? 'none' : '';
+      gradArrow.textContent = open ? '▸' : '▾';
+    });
+
+    // ── Helper: sub-section collapsible header ───────────────────────────────
+    const _subSection = (label) => {
+      const hdr = document.createElement('div');
+      hdr.style.cssText =
+        'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
+        'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
+        'cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;' +
+        'border-top:1px solid rgba(255,255,255,0.04);';
+      const arrow = document.createElement('span');
+      arrow.style.cssText = 'font-size:8px;width:10px;flex-shrink:0;';
+      arrow.textContent = '▾';
+      hdr.appendChild(arrow);
+      hdr.appendChild(document.createTextNode(label));
+      const rows = [];
+      hdr.addEventListener('click', () => {
+        const open = arrow.textContent === '▾';
+        arrow.textContent = open ? '▸' : '▾';
+        rows.forEach(r => { r.style.display = open ? 'none' : ''; });
+      });
+      body.appendChild(hdr);
+      return { addRow: (r) => { rows.push(r); body.appendChild(r); } };
+    };
+
     // ── Sun controls ────────────────────────────────────────────────────────
     const showSunCb = checkbox({ checked: true, onChange: () => _fire() });
-    body.appendChild(row('Show Sun', showSunCb));
-
     const sunColorSw = colorSwatch({ color: '#fff8e7', onChange: () => _fire() });
-    body.appendChild(row('Sun Color', sunColorSw.el));
+
+    const sunSec = _subSection('Sun');
+
+    // Combined "Show + Color" row
+    const sunComboCtrl = document.createElement('div');
+    sunComboCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    sunComboCtrl.appendChild(showSunCb);
+    sunComboCtrl.appendChild(sunColorSw.el);
+    const sunComboRow = row('Sun', sunComboCtrl);
+    sunSec.addRow(sunComboRow);
 
     const sunGlowSlider = slider({
       value: 0.5, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
-    body.appendChild(row('Sun Glow', sunGlowSlider.el));
+    sunSec.addRow(row('Glow', sunGlowSlider.el));
 
     // ── Moon controls ───────────────────────────────────────────────────────
     const showMoonCb = checkbox({ checked: true, onChange: () => _fire() });
-    body.appendChild(row('Show Moon', showMoonCb));
-
     const moonColorSw = colorSwatch({ color: '#c0d4ff', onChange: () => _fire() });
-    body.appendChild(row('Moon Color', moonColorSw.el));
+
+    const moonSec = _subSection('Moon');
+
+    const moonComboCtrl = document.createElement('div');
+    moonComboCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    moonComboCtrl.appendChild(showMoonCb);
+    moonComboCtrl.appendChild(moonColorSw.el);
+    const moonComboRow = row('Moon', moonComboCtrl);
+    moonSec.addRow(moonComboRow);
 
     const moonGlowSlider = slider({
       value: 0.3, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
-    body.appendChild(row('Moon Glow', moonGlowSlider.el));
+    moonSec.addRow(row('Glow', moonGlowSlider.el));
 
     // ── Lens Flare ──────────────────────────────────────────────────────────
     const lensflareEnabledCb = checkbox({ checked: true, onChange: () => _fire() });
-    body.appendChild(row('Lens Flare', lensflareEnabledCb));
+
+    const flareSec = _subSection('Lens Flare');
+
+    flareSec.addRow(row('Enable', lensflareEnabledCb));
 
     const lensflareSizeSlider = slider({
       value: 300, min: 50, max: 1200, step: 10,
       onChange: () => _fire(),
     });
-    body.appendChild(row('Flare Size', lensflareSizeSlider.el));
+    flareSec.addRow(row('Size', lensflareSizeSlider.el));
 
     const lensflareOpacitySlider = slider({
       value: 0.7, min: 0, max: 1, step: 0.05,
       onChange: () => _fire(),
     });
-    body.appendChild(row('Flare Opacity', lensflareOpacitySlider.el));
+    flareSec.addRow(row('Opacity', lensflareOpacitySlider.el));
 
     // Store all references
     this._skyControls = {

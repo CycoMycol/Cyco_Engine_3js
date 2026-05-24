@@ -570,6 +570,19 @@ export class CameraViewPanel extends BasePanel {
     const prevEnv = scene.environment;
     if (this._localEnvTex) scene.environment = this._localEnvTex;
 
+    // ── Scale lensflare to match main viewport proportions ────────────────
+    const lensflare = window.__cyco?.gradientSky?._lensflare;
+    const savedFlareSizes = [];
+    if (lensflare?.elements?.length) {
+      const mainH = window.__cyco?.rendererManager?.renderer?.domElement?.height ?? 1;
+      const camH  = this._cameraRenderer.domElement.height;
+      const flareScale = camH / Math.max(1, mainH);
+      for (const el of lensflare.elements) {
+        savedFlareSizes.push(el.size);
+        el.size = el.size * flareScale;
+      }
+    }
+
     // ── Render: use EffectComposer only when main pipeline is enabled ──────
     if (this._cameraComposer && this._cameraRenderPass && ppEnabled) {
       this._cameraRenderPass.scene  = scene;
@@ -581,6 +594,11 @@ export class CameraViewPanel extends BasePanel {
 
     // Restore scene env so main renderer keeps its context-correct texture
     scene.environment = prevEnv;
+
+    // Restore lensflare sizes
+    if (lensflare?.elements?.length && savedFlareSizes.length) {
+      lensflare.elements.forEach((el, i) => { el.size = savedFlareSizes[i]; });
+    }
 
     // ── Restore ───────────────────────────────────────────────────────────
     if (savedAspect !== undefined) {
