@@ -39,6 +39,7 @@ export class EnvironmentProperties {
     this._buildBackgroundSection(root);
     this._buildSkySection(root);
     this._buildCloudSection(root);
+    this._buildLowCloudsSection(root);
     this._buildFogSection(root);
     this._buildEnvMapSection(root);
 
@@ -371,18 +372,37 @@ export class EnvironmentProperties {
       checked: !!window.__cyco?.cloudSystem?.enabled,
       onChange: (v) => cs()?.setEnabled(v),
     });
-    body.appendChild(row('Enable Clouds', enableCb));
 
-    // ── Sky Mode toggle ──────────────────────────────────────────────────────
-    // Sky Layer (ON): clouds sit at a fixed high altitude, depth-tested so
-    // scene objects are always visible in front of the cloud layer.
-    // Legacy Surround (OFF): original behaviour — clouds wrap around the camera
-    // at a low altitude with no depth testing (objects may appear inside clouds).
+    // Sky Layer (ON): clouds sit at fixed high altitude, depth-tested so scene objects stay in front.
+    // Legacy Surround (OFF): clouds wrap around camera at low altitude, no depth test.
     const skyModeCb = checkbox({
       checked: cs()?._p?.skyMode ?? true,
       onChange: (v) => cs()?.setSkyMode(v),
     });
-    body.appendChild(row('Sky Layer Mode', skyModeCb));
+
+    // Animate checkbox — when unchecked, uTime freezes and clouds stay in place
+    const animateCb = checkbox({
+      checked: cs()?._p?.animated ?? true,
+      onChange: (v) => cs()?.setAnimated(v),
+    });
+
+    // Helper: wrap a checkbox with a text label in a flex container
+    const _mkCbLabel = (cb, text) => {
+      const w = document.createElement('label');
+      w.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;';
+      w.appendChild(cb);
+      w.appendChild(document.createTextNode(text));
+      return w;
+    };
+
+    // "Enable" + "Sky Layer" on the same row
+    const cloudsTopCtrl = document.createElement('div');
+    cloudsTopCtrl.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    cloudsTopCtrl.appendChild(_mkCbLabel(enableCb, 'Enable'));
+    cloudsTopCtrl.appendChild(_mkCbLabel(skyModeCb, 'Sky Layer'));
+    body.appendChild(row('Clouds', cloudsTopCtrl));
+
+    body.appendChild(row('Animate', animateCb));
 
     const coverageSlider = slider({
       value: cs()?._p?.coverage ?? 0.45, min: 0, max: 1, step: 0.01,
@@ -457,6 +477,99 @@ export class EnvironmentProperties {
       onChange: (v) => cs()?.setParam('cloudBloomThreshold', v),
     });
     body.appendChild(row('Bloom Threshold', bloomThresholdSlider.el));
+  }
+
+  // ── Low Clouds (second cloud layer — ground-level, shadow casting) ────────
+
+  _buildLowCloudsSection(root) {
+    const { el, body } = section('Low Clouds');
+    root.appendChild(el);
+
+    const cs2 = () => window.__cyco?.cloudSystem2;
+
+    const enableCb2 = checkbox({
+      checked: !!window.__cyco?.cloudSystem2?.enabled,
+      onChange: (v) => cs2()?.setEnabled(v),
+    });
+
+    const animateCb2 = checkbox({
+      checked: cs2()?._p?.animated ?? true,
+      onChange: (v) => cs2()?.setAnimated(v),
+    });
+
+    const _mkCbLabel2 = (cb, text) => {
+      const w = document.createElement('label');
+      w.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;';
+      w.appendChild(cb);
+      w.appendChild(document.createTextNode(text));
+      return w;
+    };
+
+    const topCtrl2 = document.createElement('div');
+    topCtrl2.style.cssText = 'display:flex;align-items:center;gap:10px;';
+    topCtrl2.appendChild(_mkCbLabel2(enableCb2, 'Enable'));
+    topCtrl2.appendChild(_mkCbLabel2(animateCb2, 'Animate'));
+    body.appendChild(row('Low Clouds', topCtrl2));
+
+    const coverageSlider2 = slider({
+      value: cs2()?._p?.coverage ?? 0.3, min: 0, max: 1, step: 0.01,
+      onChange: (v) => cs2()?.setParam('coverage', v),
+    });
+    body.appendChild(row('Coverage', coverageSlider2.el));
+
+    const densitySlider2 = slider({
+      value: cs2()?._p?.density ?? 0.8, min: 0, max: 1, step: 0.01,
+      onChange: (v) => cs2()?.setParam('density', v),
+    });
+    body.appendChild(row('Density', densitySlider2.el));
+
+    const scaleSlider2 = slider({
+      value: cs2()?._p?.scale ?? 30, min: 5, max: 150, step: 1,
+      onChange: (v) => cs2()?.setParam('scale', v),
+    });
+    body.appendChild(row('Scale', scaleSlider2.el));
+
+    const speedSlider2 = slider({
+      value: cs2()?._p?.windSpeed ?? 0.8, min: 0, max: 3, step: 0.05,
+      onChange: (v) => cs2()?.setParam('windSpeed', v),
+    });
+    body.appendChild(row('Wind Speed', speedSlider2.el));
+
+    const windDirSlider2 = slider({
+      value: Math.round((cs2()?._p?.windAngle ?? 0) * (180 / Math.PI)), min: 0, max: 360, step: 1,
+      onChange: (v) => cs2()?.setParam('windAngleDeg', v),
+    });
+    body.appendChild(row('Wind Direction', windDirSlider2.el));
+
+    const heightSlider2 = slider({
+      value: cs2()?._p?.cloudBase ?? 40, min: 1, max: 1000, step: 1,
+      onChange: (v) => cs2()?.setParam('cloudHeight', v),
+    });
+    body.appendChild(row('Cloud Height', heightSlider2.el));
+
+    const thicknessSlider2 = slider({
+      value: ((cs2()?._p?.cloudTop ?? 120) - (cs2()?._p?.cloudBase ?? 40)), min: 10, max: 500, step: 1,
+      onChange: (v) => cs2()?.setParam('cloudThickness', v),
+    });
+    body.appendChild(row('Thickness', thicknessSlider2.el));
+
+    const shadowCb2 = checkbox({
+      checked: cs2()?._p?.shadowEnabled ?? true,
+      onChange: (v) => cs2()?.setShadows(v),
+    });
+    body.appendChild(row('Cast Shadows', shadowCb2));
+
+    const shadowStrSlider2 = slider({
+      value: cs2()?._p?.shadowStrength ?? 0.4, min: 0, max: 1, step: 0.01,
+      onChange: (v) => cs2()?.setParam('shadowStrength', v),
+    });
+    body.appendChild(row('Shadow Strength', shadowStrSlider2.el));
+
+    const bloomStrSlider2 = slider({
+      value: cs2()?._p?.bloomBrightness ?? 1.0, min: 0, max: 2, step: 0.01,
+      onChange: (v) => cs2()?.setParam('bloomBrightness', v),
+    });
+    body.appendChild(row('Bloom Strength', bloomStrSlider2.el));
   }
 
   // ── Fog ───────────────────────────────────────────────────────────────────

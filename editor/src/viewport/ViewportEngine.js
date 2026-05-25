@@ -131,8 +131,21 @@ export class ViewportEngine {
     // IBL — must be called after renderer + scene exist
     this._setupIBL();
 
-    // Volumetric cloud system (WebGL ray marching)
+    // Volumetric cloud system (WebGL ray marching) — sky-layer high clouds
     this.cloudSystem = new VolumetricClouds(this);
+
+    // Second cloud layer — low-altitude atmospheric clouds that cast shadows
+    this.cloudSystem2 = new VolumetricClouds(this);
+    this.cloudSystem2._p.skyMode        = false;
+    this.cloudSystem2._p.cloudBase      = 40;
+    this.cloudSystem2._p.cloudTop       = 120;
+    this.cloudSystem2._p.coverage       = 0.3;
+    this.cloudSystem2._p.density        = 0.8;
+    this.cloudSystem2._p.windSpeed      = 0.8;
+    this.cloudSystem2._p.scale          = 30;
+    this.cloudSystem2._p.shadowEnabled  = true;
+    this.cloudSystem2._p.shadowStrength = 0.4;
+    this.cloudSystem2._p.morphSpeed     = 0.12;
 
     // Gradient sky + sun/moon system
     this.gradientSky = new GradientSky(this);
@@ -237,6 +250,7 @@ export class ViewportEngine {
 
     // Sync cloud sun direction
     this.cloudSystem?.updateSunFromSky(elevation, azimuth);
+    this.cloudSystem2?.updateSunFromSky(elevation, azimuth);
   }
 
   /** Apply fog to the active scene. */
@@ -421,7 +435,7 @@ export class ViewportEngine {
     this.scene.background = new THREE.Color(0x1a1a1a);
 
     // Default camera
-    this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 1000);
+    this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 10000);
     this.camera.position.set(5, 5, 5);
     this.camera.lookAt(0, 0, 0);
 
@@ -713,6 +727,7 @@ export class ViewportEngine {
 
     // Volumetric clouds update (time + camera follow)
     this.cloudSystem?.update();
+    this.cloudSystem2?.update();
 
     // Gradient sky follows camera
     this.gradientSky?.update();

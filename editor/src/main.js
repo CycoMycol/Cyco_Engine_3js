@@ -146,6 +146,7 @@ if (typeof window !== 'undefined') {
     viewportContextMenu,
     dockviewApi: dockApi,
     get cloudSystem()  { return viewportEngine.cloudSystem; },
+    get cloudSystem2() { return viewportEngine.cloudSystem2; },
     get gradientSky()  { return viewportEngine.gradientSky; },
     get postPipeline() { return postPipeline; },
   };

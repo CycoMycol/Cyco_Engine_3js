@@ -48,6 +48,7 @@ uniform float uCloudTop;
 uniform float uBloomBrightness;
 uniform float uCloudBloomThreshold;
 uniform float uWindAngle;  // radians; 0 = +X, PI/2 = +Z
+uniform float uMorphSpeed; // how fast cloud shapes evolve (independent of wind drift)
 
 varying vec3 vWorldPos;
 
@@ -98,14 +99,16 @@ float cloudDensity(vec3 p) {
   // Wind drift along user-controlled direction
   float wCos = cos(uWindAngle);
   float wSin = sin(uWindAngle);
-  vec3 windOfs = vec3(wCos, 0.0, wSin) * uTime * uWindSpeed;
-  vec3 sp = (p + windOfs) / uScale;
+  // Wind drift applied in noise space (after scale division) so windSpeed directly controls
+  // drift rate regardless of cloud scale. At windSpeed=1, clouds traverse one noise tile in ~6s.
+  vec3 sp = p / uScale;
+  sp += vec3(wCos, 0.0, wSin) * uTime * uWindSpeed * 0.3;
 
   // Large-scale billowy base shape
   float base = fbm(sp * 0.55);
 
-  // Fine-scale wisps and eroded edges
-  float detail = fbm(sp * 2.4 + vec3(4.7, 9.1, 2.3)) * 0.28;
+  // Fine-scale wisps and eroded edges — evolve at a different rate than base to create visible shape morphing
+  float detail = fbm(sp * 2.4 + vec3(4.7 + uTime * uMorphSpeed * 1.5, 9.1, 2.3 - uTime * uMorphSpeed * 1.1)) * 0.28;
 
   float d = (base + detail) - (1.0 - uCoverage * 0.95);
   return max(0.0, d) * profile * uDensity * 2.5;
@@ -131,9 +134,16 @@ void main() {
   vec3 ro = cameraPosition;
   vec3 rd = normalize(vWorldPos - ro);
 
-  // Smooth fade at the horizon (avoids hard cutoff on nearly-horizontal rays)
-  float horizonFade = smoothstep(0.0, 0.05, abs(rd.y));
+  // Fade clouds to zero over a wide angular band at the horizon.
+  // Near-horizontal rays accumulate massive density regardless of step size.
+  // The fade AND per-sample density scale together eliminate the white bloom.
+  float horizonFade = smoothstep(0.35, 0.70, abs(rd.y));
   if (horizonFade < 0.001) discard;
+
+  // Elevation density scale: multiplied into each density sample inside the march.
+  // Converts "path-length opacity" to "column opacity" — prevents clouds brightening
+  // just because you're viewing them at a shallower angle.
+  float elevScale = clamp(abs(rd.y) * 2.0, 0.0, 1.0);
 
   // Infinite-slab intersection: find where the ray enters / exits the cloud layer
   float invRdY = 1.0 / rd.y;
@@ -149,9 +159,16 @@ void main() {
   float tEnd   = tFar;
 
   // ── Ray march ─────────────────────────────────────────────────────────────
-  // 48 steps (was 32) — finer resolution reduces step-boundary stairstepping.
-  const int STEPS = 48;
-  float stepSz = (tEnd - tStart) / float(STEPS);
+  // Fixed-step-size approach: cap each step at MAX_STEP_SZ world units.
+  // A near-horizontal ray through the 300-unit slab at rd.y=0.1 is 3000 units;
+  // splitting 3000 into 48 "variable" steps gives 62-unit steps where each step
+  // has extinction ≈ density × 62 → instantly opaque → white bloom.
+  // Capping at 10 units/step means 48 steps only reach 480 units, and density
+  // per step stays physically plausible regardless of ray angle.
+  const int   STEPS       = 48;
+  const float MAX_STEP_SZ = 10.0;
+  float stepSz = min((tEnd - tStart) / float(STEPS), MAX_STEP_SZ);
+  tEnd = min(tEnd, tStart + stepSz * float(STEPS));
 
   // Per-pixel jitter: offset each ray's start position by a random fraction of
   // one step. This breaks up the regular sampling grid that causes Moiré /
@@ -167,7 +184,7 @@ void main() {
     float t   = tStart + float(i) * stepSz;
     if (t > tEnd) break;
     vec3  pos = ro + rd * t;
-    float d   = cloudDensity(pos);
+    float d   = cloudDensity(pos) * elevScale;  // attenuate density at shallow angles
 
     if (d > 0.001) {
       hit = true;
@@ -240,6 +257,7 @@ uniform vec3  uSunDir;
 uniform float uCloudBase;
 uniform float uCloudTop;
 uniform float uShadowStrength;
+uniform float uMorphSpeed;
 
 varying vec3 vWorldPos;
 
@@ -263,7 +281,10 @@ float cloudDensityFast(vec3 p) {
   float h = clamp((p.y - uCloudBase) / max(uCloudTop - uCloudBase, 0.001), 0.0, 1.0);
   float profile = smoothstep(0.0, 0.15, h) * smoothstep(1.0, 0.4, h);
   float wCos = cos(uWindAngle); float wSin = sin(uWindAngle);
-  vec3 sp = (p + vec3(wCos, 0.0, wSin) * uTime * uWindSpeed) / uScale * 0.55;
+  // Match main shader: drift in noise space (* 0.55 to stay consistent with shadow sp scale)
+  vec3 sp = p / uScale * 0.55;
+  sp += vec3(wCos, 0.0, wSin) * uTime * uWindSpeed * 0.3 * 0.55;
+  sp += vec3(uTime * uMorphSpeed * 0.15, 0.0, -uTime * uMorphSpeed * 0.1);
   float v = 0.0, a = 0.5, fr = 1.0;
   for (int i = 0; i < 3; i++) { v += a * valueNoise(sp * fr); a *= 0.5; fr *= 2.0; }
   return max(0.0, v - (1.0 - uCoverage * 0.95)) * profile * uDensity * 2.5;
@@ -319,6 +340,8 @@ export class VolumetricClouds {
       shadowPlaneY:        0.05,   // world Y where shadow plane sits
       bloomBrightness:     1.0,
       cloudBloomThreshold: 0.0,
+      animated:            true,   // when false, uTime freezes so clouds stay in place
+      morphSpeed:          0.08,   // how fast cloud shapes evolve (independent of wind drift)
       sunDir:     new THREE.Vector3(0.45, 0.87, 0.22),
       sunColor:   new THREE.Color(1.0, 0.97, 0.88),
       skyHorizon: new THREE.Color(0.55, 0.70, 0.90),
@@ -356,6 +379,8 @@ export class VolumetricClouds {
       this._p.cloudTop = this._p.cloudBase + Math.max(10, value);
     } else if (key === 'windAngleDeg') {
       this._p.windAngle = value * (Math.PI / 180);
+    } else if (key === 'morphSpeed') {
+      this._p.morphSpeed = Math.max(0, value);
     } else {
       this._p[key] = value;
     }
@@ -403,25 +428,41 @@ export class VolumetricClouds {
     }
   }
 
+  /**
+   * Pause or resume cloud animation.
+   * When paused, uTime freezes so clouds stay in place; when resumed, time
+   * continues smoothly from the frozen value.
+   */
+  setAnimated(v) {
+    const wasAnimated = this._p.animated;
+    this._p.animated = !!v;
+    if (v && !wasAnimated) {
+      // Resume: shift _t0 so uTime continues from where it was frozen
+      const frozenT = this._mesh?.material?.uniforms?.uTime?.value ?? 0;
+      this._t0 = performance.now() - frozenT * 1000;
+    }
+  }
+
   /** Call once per frame from ViewportEngine._tick(). */
   update() {
     if (!this._mesh) return;
-    const t = (performance.now() - this._t0) * 0.001;
-    this._mesh.material.uniforms.uTime.value = t;
+    if (this._p.animated) {
+      const t = (performance.now() - this._t0) * 0.001;
+      this._mesh.material.uniforms.uTime.value = t;
+      if (this._shadowMesh)
+        this._shadowMesh.material.uniforms.uTime.value = t;
+    }
 
     const cam = this._vpe?.camera;
     if (cam) {
-      if (this._p.skyMode) {
-        this._mesh.position.set(cam.position.x, 0, cam.position.z);
-      } else {
-        this._mesh.position.copy(cam.position);
-      }
+      // Always follow camera in all 3 dimensions so the camera stays inside the BackSide
+      // box regardless of altitude. Cloud heights (uCloudBase/uCloudTop) are world-space
+      // uniforms in the shader — the box position doesn't affect where clouds appear.
+      this._mesh.position.copy(cam.position);
     }
 
-    if (this._shadowMesh) {
-      this._shadowMesh.material.uniforms.uTime.value = t;
-      if (cam)
-        this._shadowMesh.position.set(cam.position.x, this._p.shadowPlaneY, cam.position.z);
+    if (this._shadowMesh && cam) {
+      this._shadowMesh.position.set(cam.position.x, this._p.shadowPlaneY, cam.position.z);
     }
   }
 
@@ -455,6 +496,7 @@ export class VolumetricClouds {
         uCloudTop:            { value: this._p.cloudTop },
         uBloomBrightness:     { value: this._p.bloomBrightness },
         uCloudBloomThreshold: { value: this._p.cloudBloomThreshold },
+        uMorphSpeed:          { value: this._p.morphSpeed },
       },
       transparent: true,
       depthWrite:  false,
@@ -490,6 +532,7 @@ export class VolumetricClouds {
         uCloudBase:      { value: this._p.cloudBase },
         uCloudTop:       { value: this._p.cloudTop },
         uShadowStrength: { value: this._p.shadowStrength },
+        uMorphSpeed:     { value: this._p.morphSpeed },
       },
       transparent:         true,
       depthWrite:          false,
@@ -540,6 +583,7 @@ export class VolumetricClouds {
     u.uCloudTop.value            = this._p.cloudTop;
     u.uBloomBrightness.value     = this._p.bloomBrightness;
     u.uCloudBloomThreshold.value = this._p.cloudBloomThreshold;
+    u.uMorphSpeed.value          = this._p.morphSpeed;
     u.uSunColor.value.copy(this._p.sunColor);
     u.uSkyHorizon.value.copy(this._p.skyHorizon);
     u.uSkyZenith.value.copy(this._p.skyZenith);
@@ -556,6 +600,7 @@ export class VolumetricClouds {
     u.uCloudBase.value      = this._p.cloudBase;
     u.uCloudTop.value       = this._p.cloudTop;
     u.uShadowStrength.value = this._p.shadowStrength;
+    u.uMorphSpeed.value     = this._p.morphSpeed;
     u.uSunDir.value.copy(this._p.sunDir);
   }
 }
