@@ -542,7 +542,7 @@ export class EnvironmentProperties {
     body.appendChild(row('Wind Direction', windDirSlider2.el));
 
     const heightSlider2 = slider({
-      value: cs2()?._p?.cloudBase ?? 40, min: 1, max: 1000, step: 1,
+      value: cs2()?._p?.cloudBase ?? 5, min: 0, max: 1000, step: 1,
       onChange: (v) => cs2()?.setParam('cloudHeight', v),
     });
     body.appendChild(row('Cloud Height', heightSlider2.el));

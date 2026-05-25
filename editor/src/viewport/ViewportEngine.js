@@ -137,8 +137,8 @@ export class ViewportEngine {
     // Second cloud layer — low-altitude atmospheric clouds that cast shadows
     this.cloudSystem2 = new VolumetricClouds(this);
     this.cloudSystem2._p.skyMode        = false;
-    this.cloudSystem2._p.cloudBase      = 40;
-    this.cloudSystem2._p.cloudTop       = 120;
+    this.cloudSystem2._p.cloudBase      = 5;
+    this.cloudSystem2._p.cloudTop       = 85;
     this.cloudSystem2._p.coverage       = 0.3;
     this.cloudSystem2._p.density        = 0.8;
     this.cloudSystem2._p.windSpeed      = 0.8;

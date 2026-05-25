@@ -134,15 +134,12 @@ void main() {
   vec3 ro = cameraPosition;
   vec3 rd = normalize(vWorldPos - ro);
 
-  // Fade clouds to zero over a wide angular band at the horizon.
-  // Near-horizontal rays accumulate massive density regardless of step size.
-  // The fade AND per-sample density scale together eliminate the white bloom.
-  float horizonFade = smoothstep(0.35, 0.70, abs(rd.y));
+  // Discard near-horizontal rays: steep rays only.  The fade below is applied
+  // per-sample so the boundary dissolves into natural wisps rather than a hard circle.
+  float horizonFade = smoothstep(0.30, 0.75, abs(rd.y));
   if (horizonFade < 0.001) discard;
 
-  // Elevation density scale: multiplied into each density sample inside the march.
-  // Converts "path-length opacity" to "column opacity" — prevents clouds brightening
-  // just because you're viewing them at a shallower angle.
+  // Elevation density scale: converts path-length opacity to column opacity.
   float elevScale = clamp(abs(rd.y) * 2.0, 0.0, 1.0);
 
   // Infinite-slab intersection: find where the ray enters / exits the cloud layer
@@ -184,7 +181,15 @@ void main() {
     float t   = tStart + float(i) * stepSz;
     if (t > tEnd) break;
     vec3  pos = ro + rd * t;
-    float d   = cloudDensity(pos) * elevScale;  // attenuate density at shallow angles
+
+    // Horizontal world-space distance fade — prevents the box boundary from being
+    // visible as a hard edge and naturally dissolves clouds into the far distance.
+    float hDist    = length(pos.xz - ro.xz);
+    float distFade = 1.0 - smoothstep(650.0, 870.0, hDist);
+
+    // Apply all three fades to density so the cloud SHAPE thins out naturally
+    // (wispy edges, breaks up near the boundary) rather than cutting alpha hard.
+    float d = cloudDensity(pos) * elevScale * horizonFade * distFade;
 
     if (d > 0.001) {
       hit = true;
@@ -216,7 +221,7 @@ void main() {
 
   if (!hit) discard;
 
-  float alpha = clamp(1.0 - transmit, 0.0, 1.0) * horizonFade;
+  float alpha = clamp(1.0 - transmit, 0.0, 1.0);
   if (alpha < 0.005) discard;
 
   // Divide accumulated scattered light by alpha to get pre-multiplied colour

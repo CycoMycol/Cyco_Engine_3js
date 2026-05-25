@@ -125,6 +125,7 @@ export function row(label, control) {
   const lbl = document.createElement('div');
   lbl.className   = 'ce-prop-row-label';
   lbl.textContent = label;
+  lbl.title       = label;   // tooltip shows full name when truncated
 
   el.appendChild(lbl);
   el.appendChild(control);
