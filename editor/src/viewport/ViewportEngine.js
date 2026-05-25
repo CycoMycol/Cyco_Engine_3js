@@ -453,6 +453,7 @@ export class ViewportEngine {
     this.gridHelper = this._makeGrid(20, 20);
     this.axesHelper = new THREE.AxesHelper(1);
     this.axesHelper.raycast = () => {};
+    this.axesHelper.userData._isHelper = true;
     this.scene.add(this.gridHelper, this.axesHelper);
     // Reduce IBL contribution so directional light shadows remain visible
     this.scene.environmentIntensity = 0.4;
@@ -461,6 +462,9 @@ export class ViewportEngine {
   _makeGrid(size, divisions) {
     const g = new THREE.GridHelper(size, divisions, 0x888888, 0x555555);
     g.raycast = () => {}; // non-selectable
+    g.userData._isHelper = true;
+    g.castShadow    = false;
+    g.receiveShadow = false;
     return g;
   }
 

@@ -117,7 +117,14 @@ export class PostProcessingPipeline {
     // 1. Render scene
     this._composer.addPass(new RenderPass(scene, camera));
 
-    // 2. Outline pass — for selection highlight
+    // 2. Bloom — runs BEFORE outline passes so the selection outline never gets bloomed.
+    //    threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
+    //    Strength 0.8, radius 0.4. Sun disc is SDR + lens flare handles sun glow.
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
+    this._composer.addPass(this.bloomPass);
+
+    // 3. Outline pass — added AFTER bloom so the orange outline (0xff6600) is never
+    //    treated as a bright emissive and bloomed into a yellow glow on shadows.
     this.outlinePass = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
     this.outlinePass.edgeStrength = 3;
     this.outlinePass.edgeGlow     = 0;
@@ -126,7 +133,7 @@ export class PostProcessingPipeline {
     this.outlinePass.hiddenEdgeColor.set(0x333333);
     this._composer.addPass(this.outlinePass);
 
-    // 2b. Hover outline pass — white outline when mousing over unselected objects
+    // 3b. Hover outline pass — white outline when mousing over unselected objects
     this.hoverOutlinePass = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
     this.hoverOutlinePass.edgeStrength  = 2;
     this.hoverOutlinePass.edgeGlow      = 0;
@@ -134,11 +141,6 @@ export class PostProcessingPipeline {
     this.hoverOutlinePass.visibleEdgeColor.set(0xffffff);
     this.hoverOutlinePass.hiddenEdgeColor.set(0x222222);
     this._composer.addPass(this.hoverOutlinePass);
-
-    // 3. Bloom — threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
-    //    Strength 0.8, radius 0.4. Sun disc is SDR + lens flare handles sun glow.
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
-    this._composer.addPass(this.bloomPass);
 
     // 4. SMAA — must come BEFORE OutputPass (operates on linear-sRGB HDR data).
     const dpr = renderer.getPixelRatio();

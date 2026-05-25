@@ -185,7 +185,7 @@ export class EnvironmentProperties {
       value: ve?.skyAzimuth ?? 180, min: 0, max: 360, step: 1,
       onChange: () => _fire(true),
     });
-    body.appendChild(row('Azimuth', azimuthSlider.el));
+    body.appendChild(row('Rotation', azimuthSlider.el));
 
     // ── Exposure / Saturation / Contrast ────────────────────────────────────────
     const exposureSlider = slider({

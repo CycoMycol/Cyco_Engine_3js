@@ -115,16 +115,27 @@ export class RendererProperties {
     });
     shadowBody.appendChild(row('Map Size', mapSizeSelect));
 
-    // Sun shadow radius (PCF softness)
-    const curRadius = sunLight()?.shadow?.radius ?? 3;
-    const radiusSlider = slider({
-      value: curRadius, min: 0, max: 16, step: 0.5,
+    // Shadow blur — PCF/VSM softness radius
+    const curBlur = sunLight()?.shadow?.radius ?? 4;
+    const blurSlider = slider({
+      value: curBlur, min: 0, max: 25, step: 0.5,
       onChange: (v) => {
         const l = sunLight();
         if (l) l.shadow.radius = v;
       },
     });
-    shadowBody.appendChild(row('Radius', radiusSlider.el));
+    shadowBody.appendChild(row('Blur', blurSlider.el));
+
+    // VSM blur samples (VSM shadow map only — higher = smoother but slower)
+    const curSamples = sunLight()?.shadow?.blurSamples ?? 8;
+    const blurSamplesSlider = slider({
+      value: curSamples, min: 1, max: 25, step: 1,
+      onChange: (v) => {
+        const l = sunLight();
+        if (l) l.shadow.blurSamples = Math.round(v);
+      },
+    });
+    shadowBody.appendChild(row('Blur Samples', blurSamplesSlider.el));
 
     // Sun shadow bias
     const curBias = sunLight()?.shadow?.bias ?? -0.0005;
@@ -136,6 +147,111 @@ export class RendererProperties {
       },
     });
     shadowBody.appendChild(row('Bias', biasSlider.el));
+
+    // Shadow direction — moves the sun light without changing sky colours
+    const _getSunElev = () => {
+      const l = sunLight();
+      if (!l) return 30;
+      return THREE.MathUtils.radToDeg(Math.asin(
+        Math.max(-1, Math.min(1, l.position.y / (l.position.length() || 1)))
+      ));
+    };
+    const _getSunAz = () => {
+      const l = sunLight();
+      if (!l) return 180;
+      return (THREE.MathUtils.radToDeg(Math.atan2(l.position.x, l.position.z)) + 360) % 360;
+    };
+    const _applyDir = (elev, az) => {
+      const l = sunLight();
+      if (!l) return;
+      const phi   = THREE.MathUtils.degToRad(90 - elev);
+      const theta = THREE.MathUtils.degToRad(az);
+      l.position.setFromSphericalCoords(200, phi, theta);
+    };
+
+    const sunElevSlider = slider({
+      value: _getSunElev(), min: -10, max: 90, step: 0.5,
+      onChange: (v) => _applyDir(v, parseFloat(sunAzSlider.input.value)),
+    });
+    shadowBody.appendChild(row('Elevation', sunElevSlider.el));
+
+    const sunAzSlider = slider({
+      value: _getSunAz(), min: 0, max: 360, step: 1,
+      onChange: (v) => _applyDir(parseFloat(sunElevSlider.input.value), v),
+    });
+    shadowBody.appendChild(row('Rotation', sunAzSlider.el));
+
+    // Shadow Area — controls the orthographic frustum size of the sun shadow camera.
+    // Smaller = higher resolution shadows in a tighter area.
+    // Larger  = shadows cover more of the scene but with lower texel density.
+    const _getShadowArea = () => sunLight()?.shadow?.camera?.right ?? 50;
+    const shadowAreaSlider = slider({
+      value: _getShadowArea(), min: 5, max: 500, step: 5,
+      onChange: (v) => {
+        const l = sunLight();
+        if (!l) return;
+        l.shadow.camera.left   = -v;
+        l.shadow.camera.right  =  v;
+        l.shadow.camera.top    =  v;
+        l.shadow.camera.bottom = -v;
+        l.shadow.camera.updateProjectionMatrix();
+        l.shadow.map?.dispose();
+        l.shadow.map = null;
+      },
+    });
+    shadowBody.appendChild(row('Shadow Area', shadowAreaSlider.el));
+
+    // Shadow darkness — two-phase system to avoid PBR artifacts:
+    //   Phase 1 (0–5):  shadow.intensity scales 0 → 1.0  (blocks direct light, no artifacts)
+    //   Phase 2 (5–30): shadow.intensity stays at 1.0,
+    //                   fill lights (ambient + hemi + IBL) scale from full → 0
+    //                   so shadows go from "lit by ambient" toward solid black.
+    //
+    // shadow.intensity > 1.0 causes negative direct-light values in the PBR shader which
+    // interact with roughness/metalness BRDF terms and tone-mapping to produce a warm/metallic
+    // artifact in shadow areas — avoided entirely by capping at 1.0.
+    const ve = window.__cyco?.viewportEngine;
+    const _aLight = ve?._ambientLight;
+    const _hLight = ve?._hemisphereLight;
+    // Store base intensities on the objects the first time — survives panel re-opens.
+    if (_aLight && _aLight._cyShadowBase === undefined) _aLight._cyShadowBase = _aLight.intensity;
+    if (_hLight && _hLight._cyShadowBase === undefined) _hLight._cyShadowBase = _hLight.intensity;
+    if (ve?.scene && ve.scene._cyShadowBaseEnvInt === undefined)
+      ve.scene._cyShadowBaseEnvInt = ve.scene.environmentIntensity ?? 0;
+    const _origAmbient = _aLight?._cyShadowBase ?? 0.3;
+    const _origHemi    = _hLight?._cyShadowBase ?? 0.4;
+    const _origEnvInt  = ve?.scene?._cyShadowBaseEnvInt ?? 0.4;
+
+    let _sDarkness = 5.0;
+    let _sOpacity  = 1.0;
+    const _applyShadowStrength = () => {
+      const l = sunLight();
+      const d = Math.max(0, Math.min(30, _sDarkness));
+      // Phase 1: shadow.intensity capped at 1.0 (no negative direct light)
+      if (l?.shadow) l.shadow.intensity = Math.min(1.0, (d / 5) * _sOpacity);
+      // Phase 2: reduce fill lights to push shadow area toward solid black
+      const fill = d <= 5 ? 1.0 : Math.max(0, 1.0 - (d - 5) / 25);
+      if (_aLight) _aLight.intensity         = _origAmbient * fill;
+      if (_hLight) _hLight.intensity         = _origHemi    * fill;
+      if (ve?.scene) ve.scene.environmentIntensity = _origEnvInt * fill;
+    };
+    // Back-calculate darkness from current shadow.intensity on open
+    const _initInt = sunLight()?.shadow?.intensity;
+    if (_initInt !== undefined) {
+      _sDarkness = Math.min(5, Math.max(0, _initInt * 5));
+    }
+
+    const darkSlider = slider({
+      value: _sDarkness, min: 0, max: 30, step: 0.1,
+      onChange: (v) => { _sDarkness = v; _applyShadowStrength(); },
+    });
+    shadowBody.appendChild(row('Darkness', darkSlider.el));
+
+    const opacSlider = slider({
+      value: _sOpacity, min: 0, max: 1, step: 0.01,
+      onChange: (v) => { _sOpacity = v; _applyShadowStrength(); },
+    });
+    shadowBody.appendChild(row('Opacity', opacSlider.el));
 
     // ── Tone Mapping ──
     const { el: tmSec, body: tmBody } = section('Tone Mapping');

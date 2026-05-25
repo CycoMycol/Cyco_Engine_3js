@@ -336,15 +336,17 @@ export class GradientSky {
     this._sunLight.castShadow = true;
     this._sunLight.shadow.mapSize.width  = 2048;
     this._sunLight.shadow.mapSize.height = 2048;
+    this._sunLight.shadow.mapSize.width  = 2048;
+    this._sunLight.shadow.mapSize.height = 2048;
     this._sunLight.shadow.camera.near   = 0.5;
-    this._sunLight.shadow.camera.far    = 5000;
-    this._sunLight.shadow.camera.left   = -300;
-    this._sunLight.shadow.camera.right  =  300;
-    this._sunLight.shadow.camera.top    =  300;
-    this._sunLight.shadow.camera.bottom = -300;
-    this._sunLight.shadow.radius        = 3;
+    this._sunLight.shadow.camera.far    = 1000;
+    this._sunLight.shadow.camera.left   = -50;
+    this._sunLight.shadow.camera.right  =  50;
+    this._sunLight.shadow.camera.top    =  50;
+    this._sunLight.shadow.camera.bottom = -50;
+    this._sunLight.shadow.radius        = 1;
     this._sunLight.shadow.blurSamples   = 8;
-    this._sunLight.shadow.bias          = -0.0005;
+    this._sunLight.shadow.bias          = -0.001;
 
     this._sunLight.target.position.set(0, 0, 0);
     this._sunLight.target.name = '__cyco_sun_target';

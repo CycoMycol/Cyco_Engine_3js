@@ -61,9 +61,10 @@ export class ContactShadows {
     this._dispose();
 
     const s = this._size;
-    // Shadow camera height: use a fixed practical height independent of coverage area.
-    // 5 units gives good alpha for objects 0.5–3 units tall.
-    const camH = 5;
+    // Shadow camera height: lower = stronger shadows for same darkness value.
+    // camH=3 means a 1-unit-tall box produces alpha≈0.33 (33% dark at darkness=1),
+    // and a 3-unit object produces a fully black shadow at darkness≥1.
+    const camH = 3;
 
     // Render targets
     this._renderTarget = new THREE.WebGLRenderTarget(SHADOW_RT_SIZE, SHADOW_RT_SIZE);
@@ -130,6 +131,8 @@ export class ContactShadows {
     this._blurPlane = new THREE.Mesh(new THREE.PlaneGeometry(2 * s, 2 * s));
     this._blurPlane.rotation.x = -Math.PI / 2;
     this._blurPlane.visible = false;
+    this._blurPlane.userData._isHelper = true;
+    this._blurPlane.raycast = () => {};
 
     // Visible shadow plane at y = _y
     // Use a ShaderMaterial + CustomBlending so opacity works correctly:
@@ -160,19 +163,29 @@ export class ContactShadows {
           gl_FragColor = vec4( result, 1.0 );
         }
       `,
-      transparent:    true,
-      depthWrite:     false,
-      blending:       THREE.CustomBlending,
-      blendEquation:  THREE.AddEquation,
-      blendSrc:       THREE.DstColorFactor,
-      blendDst:       THREE.ZeroFactor,
+      transparent:          true,
+      depthWrite:           false,
+      depthTest:            true,    // respect depth — don't render over objects above y=0
+      polygonOffset:        true,    // push shadow plane slightly in front of ground plane
+      polygonOffsetFactor:  -1,      // to avoid z-fighting with a coincident ground mesh
+      polygonOffsetUnits:   -1,
+      blending:             THREE.CustomBlending,
+      blendEquation:        THREE.AddEquation,
+      blendSrc:             THREE.DstColorFactor,
+      blendDst:             THREE.ZeroFactor,
     });
     this._plane = new THREE.Mesh(new THREE.PlaneGeometry(2 * s, 2 * s), planeMat);
     this._plane.rotation.x = -Math.PI / 2;
-    this._plane.renderOrder = -1;
+    // renderOrder = 1 → render AFTER all default (renderOrder=0) scene objects.
+    // The ground plane at renderOrder=0 draws first; this shadow then multiplies
+    // over it.  depthTest=true + polygonOffset ensure it sits on the ground but
+    // never draws over objects above y=0 (cubes, characters, etc.).
+    this._plane.renderOrder = 1;
     this._plane.receiveShadow = false;
     this._plane.castShadow    = false;
     this._plane.name = '__cyco_contact_shadow_plane';
+    this._plane.userData._isHelper = true;
+    this._plane.raycast = () => {};
 
     // Group holds camera, blur plane and visible plane
     this._shadowGroup = new THREE.Group();
@@ -188,14 +201,12 @@ export class ContactShadows {
   update(renderer, scene) {
     if (!this._enabled || !this._shadowGroup || !this._plane) return;
 
-    // Collect all transform-controls objects (root + entire subtree)
-    // so they are excluded from both visibility and material-swap passes.
+    // Collect all transform-gizmo objects so they are excluded from both
+    // visibility and material-swap passes.  TransformGizmo tags every descendant
+    // of the helper with userData._isGizmo = true.
     const tcObjects = new Set();
     scene.traverse(obj => {
-      if (obj.isTransformControlsRoot) {
-        obj.traverse(child => tcObjects.add(child));
-        tcObjects.add(obj);
-      }
+      if (obj.userData?._isGizmo) tcObjects.add(obj);
     });
 
     // Exclude helpers, transform controls, and the shadow plane itself
