@@ -1,16 +1,14 @@
 /**
  * PostProcessingProperties.js
- * Controls for the post-processing pipeline (bloom, outline, GTAO, output).
+ * Controls for the post-processing pipeline (bloom, outline, ambient occlusion, output).
  *
  * Events dispatched:
  *   cyco-pp-bloom-change   { enabled, threshold, strength, radius }
  *   cyco-pp-outline-change { enabled, color, thickness }
- *   cyco-pp-gtao-change    { enabled, radius, intensity, distanceExponent }
  *   cyco-pp-output-change  { toneMapping, exposure }
  */
 
-import * as THREE from 'three';
-import { section, row, slider, checkbox, colorSwatch, readOnly } from './propUtils.js';
+import { section, row, slider, checkbox, colorSwatch, select } from './propUtils.js';
 
 export class PostProcessingProperties {
   constructor() {
@@ -41,7 +39,7 @@ export class PostProcessingProperties {
     this._buildEffectComposerSection(root);
     this._buildBloomSection(root);
     this._buildOutlineSection(root);
-    this._buildGTAOSection(root);
+    this._buildAmbientOcclusionSection(root);
     this._buildOutputSection(root);
 
     return root;
@@ -154,43 +152,173 @@ export class PostProcessingProperties {
     body.appendChild(row('Strength', strengthSlider.el));
   }
 
-  // ── GTAO ─────────────────────────────────────────────────────────────────
+  // ── Ambient Occlusion ─────────────────────────────────────────────────────
 
-  _buildGTAOSection(root) {
-    const { el, body } = section('Ambient Occlusion (GTAO)');
+  _buildAmbientOcclusionSection(root) {
+    const { el, body } = section('Ambient Occlusion');
     root.appendChild(el);
 
-    const getGtao = () => window.__cyco?.viewportEngine?.postProcessing?.gtaoPass;
-    const gtaoPass = getGtao();
+    const getPP = () => window.__cyco?.viewportEngine?.postProcessing;
 
+    // ─ Enabled checkbox ────────────────────────────────────────────────────
     const enabledCb = checkbox({
-      checked: gtaoPass?.enabled ?? false,
-      onChange: (v) => { const p = getGtao(); if (p) p.enabled = v; },
+      checked: getPP()?._aoEnabled ?? false,
+      onChange: (v) => {
+        const pp = getPP();
+        if (pp) pp.setAoEnabled(v);
+        this._rebuildAoControls(controlsContainer, typeSelect);
+      },
     });
     body.appendChild(row('Enabled', enabledCb));
 
-    if (!gtaoPass) {
-      body.appendChild(readOnly('GTAO not available (WebGL only or not initialised)'));
+    // ─ Type dropdown ───────────────────────────────────────────────────────
+    const typeSelect = select({
+      options: [
+        ['gtao',      'GTAO (WebGL)'],
+        ['sao',       'SAO (WebGL)'],
+        ['ssao',      'SSAO (WebGL)'],
+        ['ao_webgpu', 'AO (WebGPU)'],
+      ],
+      value: getPP()?._aoType ?? 'gtao',
+      onChange: (v) => {
+        const pp = getPP();
+        if (!pp) return;
+        if (pp._aoEnabled) {
+          pp.setAoType(v);            // rebuilds pipeline with new AO type
+        } else {
+          pp._aoType = v;             // store choice for when AO is enabled
+        }
+        this._rebuildAoControls(controlsContainer, typeSelect);
+      },
+    });
+    body.appendChild(row('Type', typeSelect));
+
+    // ─ Dynamic controls container ──────────────────────────────────────────
+    const controlsContainer = document.createElement('div');
+    body.appendChild(controlsContainer);
+    this._rebuildAoControls(controlsContainer, typeSelect);
+  }
+
+  /** Swap the parameter controls inside the AO section based on the selected type. */
+  _rebuildAoControls(container, typeSelect) {
+    container.innerHTML = '';
+    const getPP    = () => window.__cyco?.viewportEngine?.postProcessing;
+    const type     = typeSelect.value;
+    const rendType = window.__cyco?.rendererManager?.activeType ?? 'webgl';
+
+    if (type === 'ao_webgpu') {
+      const msg = document.createElement('div');
+      msg.style.cssText = 'padding:8px 12px;font-size:11px;color:var(--text-secondary,#888);line-height:1.5;';
+      if (rendType !== 'webgpu') {
+        msg.textContent = 'AO (WebGPU) requires the WebGPU renderer. Switch the renderer type in Renderer → Type to use this mode.';
+      } else {
+        msg.textContent = 'WebGPU AO (TSL-based GTAO) — parameters will be available once the WebGPU post-processing pipeline is activated.';
+      }
+      container.appendChild(msg);
       return;
     }
 
-    const radiusSlider = slider({
-      value: gtaoPass?.radius ?? 0.25, min: 0.01, max: 1, step: 0.01,
-      onChange: (v) => { const p = getGtao(); if (p) p.radius = v; },
-    });
-    body.appendChild(row('Radius', radiusSlider.el));
+    if (type === 'gtao')       this._buildGtaoControls(container, getPP);
+    else if (type === 'sao')   this._buildSaoControls(container, getPP);
+    else if (type === 'ssao')  this._buildSsaoControls(container, getPP);
+  }
 
-    const intensitySlider = slider({
-      value: gtaoPass?.intensity ?? 1, min: 0, max: 5, step: 0.05,
-      onChange: (v) => { const p = getGtao(); if (p) p.intensity = v; },
-    });
-    body.appendChild(row('Intensity', intensitySlider.el));
+  /** GTAO parameter sliders (AO + Poisson Denoise). */
+  _buildGtaoControls(container, getPP) {
+    const getAo = () => getPP()?._aoGtaoParams ?? {};
+    const getPd = () => getPP()?._aoPdParams   ?? {};
 
-    const distExpSlider = slider({
-      value: gtaoPass?.distanceExponent ?? 1, min: 0.1, max: 3, step: 0.1,
-      onChange: (v) => { const p = getGtao(); if (p) p.distanceExponent = v; },
+    const aoSliders = [
+      ['Radius',            'radius',           0.01, 1,    0.01 ],
+      ['Distance Exp.',     'distanceExponent',  1,    4,    0.01 ],
+      ['Thickness',         'thickness',         0.01, 10,   0.01 ],
+      ['Distance Fall Off', 'distanceFallOff',   0,    1,    0.01 ],
+      ['Scale',             'scale',             0.01, 2,    0.01 ],
+      ['Samples',           'samples',           2,    32,   1    ],
+    ];
+    for (const [label, key, mn, mx, step] of aoSliders) {
+      const sl = slider({
+        value: getAo()[key] ?? mn, min: mn, max: mx, step,
+        onChange: (v) => {
+          const pp = getPP(); if (!pp) return;
+          pp.updateGtaoParams({ [key]: key === 'samples' ? Math.round(v) : v });
+        },
+      });
+      container.appendChild(row(label, sl.el));
+    }
+
+    // Denoise sub-header
+    const subHdr = document.createElement('div');
+    subHdr.style.cssText = 'padding:6px 12px 2px;font-size:10px;color:var(--text-secondary,#888);font-weight:600;letter-spacing:0.06em;text-transform:uppercase;';
+    subHdr.textContent = 'Poisson Denoise';
+    container.appendChild(subHdr);
+
+    const pdSliders = [
+      ['Luma Phi',    'lumaPhi',        0,    20,   0.01  ],
+      ['Depth Phi',   'depthPhi',       0.01, 20,   0.01  ],
+      ['Normal Phi',  'normalPhi',      0.01, 20,   0.01  ],
+      ['Radius',      'radius',         0,    32,   1     ],
+      ['Radius Exp.', 'radiusExponent', 0.1,  4,    0.1   ],
+      ['Rings',       'rings',          1,    16,   0.125 ],
+      ['Samples',     'samples',        2,    32,   1     ],
+    ];
+    for (const [label, key, mn, mx, step] of pdSliders) {
+      const sl = slider({
+        value: getPd()[key] ?? mn, min: mn, max: mx, step,
+        onChange: (v) => {
+          const pp = getPP(); if (!pp) return;
+          pp.updatePdParams({ [key]: key === 'samples' ? Math.round(v) : v });
+        },
+      });
+      container.appendChild(row(label, sl.el));
+    }
+  }
+
+  /** SAO parameter sliders. */
+  _buildSaoControls(container, getPP) {
+    const getP = () => getPP()?._aoSaoParams ?? {};
+
+    const sliders = [
+      ['Bias',              'saoBias',            -1,   1,    0.01  ],
+      ['Intensity',         'saoIntensity',         0,   1,    0.01  ],
+      ['Scale',             'saoScale',             0,   10,   0.01  ],
+      ['Kernel Radius',     'saoKernelRadius',      1,   100,  1     ],
+      ['Min Resolution',    'saoMinResolution',     0,   1,    0.001 ],
+      ['Blur Radius',       'saoBlurRadius',        0,   200,  1     ],
+      ['Blur Std Dev',      'saoBlurStdDev',        0.5, 150,  0.5   ],
+      ['Blur Depth Cutoff', 'saoBlurDepthCutoff',   0,   0.1,  0.001 ],
+    ];
+    for (const [label, key, mn, mx, step] of sliders) {
+      const sl = slider({
+        value: getP()[key] ?? mn, min: mn, max: mx, step,
+        onChange: (v) => { const pp = getPP(); if (pp) pp.updateSaoParams({ [key]: v }); },
+      });
+      container.appendChild(row(label, sl.el));
+    }
+
+    const blurCb = checkbox({
+      checked: getP().saoBlur !== false,
+      onChange: (v) => { const pp = getPP(); if (pp) pp.updateSaoParams({ saoBlur: v }); },
     });
-    body.appendChild(row('Dist. Exponent', distExpSlider.el));
+    container.appendChild(row('Blur', blurCb));
+  }
+
+  /** SSAO parameter sliders. */
+  _buildSsaoControls(container, getPP) {
+    const getP = () => getPP()?._aoSsaoParams ?? {};
+
+    const sliders = [
+      ['Kernel Radius', 'kernelRadius', 0,     32,   0.5    ],
+      ['Min Distance',  'minDistance',  0.001, 0.02, 0.0001 ],
+      ['Max Distance',  'maxDistance',  0.01,  0.3,  0.001  ],
+    ];
+    for (const [label, key, mn, mx, step] of sliders) {
+      const sl = slider({
+        value: getP()[key] ?? mn, min: mn, max: mx, step,
+        onChange: (v) => { const pp = getPP(); if (pp) pp.updateSsaoParams({ [key]: v }); },
+      });
+      container.appendChild(row(label, sl.el));
+    }
   }
 
   // ── Output ────────────────────────────────────────────────────────────────

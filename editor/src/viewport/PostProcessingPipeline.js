@@ -29,6 +29,9 @@ import { OutputPass }      from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
 import { SMAAPass }        from 'three/addons/postprocessing/SMAAPass.js';
 import { LUTPass }         from 'three/addons/postprocessing/LUTPass.js';
+import { GTAOPass }        from 'three/addons/postprocessing/GTAOPass.js';
+import { SAOPass }         from 'three/addons/postprocessing/SAOPass.js';
+import { SSAOPass }        from 'three/addons/postprocessing/SSAOPass.js';
 import { FXAAShader }      from 'three/addons/shaders/FXAAShader.js';
 import { LUTCubeLoader }   from 'three/addons/loaders/LUTCubeLoader.js';
 
@@ -78,6 +81,39 @@ export class PostProcessingPipeline {
     /** Loaded 3D LUT texture */
     this._lutTexture = null;
 
+    /** @type {GTAOPass|SAOPass|SSAOPass|null} — active ambient occlusion pass */
+    this.aoPass = null;
+
+    /** AO type: 'gtao' | 'sao' | 'ssao' | 'ao_webgpu' */
+    this._aoType = 'gtao';
+
+    /** Whether AO is active in the pipeline */
+    this._aoEnabled = false;
+
+    /** GTAO AO material parameters — survive pipeline rebuilds */
+    this._aoGtaoParams = {
+      radius: 0.25, distanceExponent: 1, thickness: 1, distanceFallOff: 1,
+      scale: 1, samples: 16, screenSpaceRadius: false,
+    };
+
+    /** GTAO Poisson Denoise parameters */
+    this._aoPdParams = {
+      lumaPhi: 10, depthPhi: 2, normalPhi: 3, radius: 4,
+      radiusExponent: 1, rings: 2, samples: 8,
+    };
+
+    /** SAO parameters */
+    this._aoSaoParams = {
+      saoBias: 0.5, saoIntensity: 0.18, saoScale: 1, saoKernelRadius: 100,
+      saoMinResolution: 0, saoBlur: true, saoBlurRadius: 8,
+      saoBlurStdDev: 4, saoBlurDepthCutoff: 0.01,
+    };
+
+    /** SSAO parameters */
+    this._aoSsaoParams = {
+      kernelRadius: 8, minDistance: 0.005, maxDistance: 0.1,
+    };
+
     this._onVpReady         = this._onVpReady.bind(this);
     this._onRendererChanged = this._onRendererChanged.bind(this);
     this._onTick            = this._onTick.bind(this);
@@ -116,6 +152,13 @@ export class PostProcessingPipeline {
 
     // 1. Render scene
     this._composer.addPass(new RenderPass(scene, camera));
+
+    // 1.5. Ambient Occlusion — applied right after scene render so AO darkening
+    //      feeds into the bloom pass (dark areas won't bloom, only bright emissives).
+    if (this._aoEnabled && this._aoType !== 'ao_webgpu') {
+      this._buildAoPassForType(this._aoType, scene, camera, w, h);
+      if (this.aoPass) this._composer.addPass(this.aoPass);
+    }
 
     // 2. Bloom — runs BEFORE outline passes so the selection outline never gets bloomed.
     //    threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
@@ -178,6 +221,7 @@ export class PostProcessingPipeline {
     this.fxaaPass    = null;
     this.smaaPass    = null;
     this.lutPass     = null;
+    this.aoPass      = null;
     this.engine.setPipelineActive(false);
   }
 
@@ -303,6 +347,104 @@ export class PostProcessingPipeline {
     this.setAntiAliasMode(v ? 'fxaa' : 'none');
   }
 
+  // ─── Ambient Occlusion API ───────────────────────────────────────────────────
+
+  /**
+   * Enable or disable ambient occlusion. Rebuilds the pipeline.
+   * @param {boolean} v
+   */
+  setAoEnabled(v) {
+    this._aoEnabled = !!v;
+    this._rebuildForCurrentType();
+  }
+
+  /**
+   * Set the AO algorithm. Rebuilds the pipeline.
+   * @param {'gtao'|'sao'|'ssao'|'ao_webgpu'} type
+   */
+  setAoType(type) {
+    this._aoType = type;
+    this._rebuildForCurrentType();
+  }
+
+  /**
+   * Live-update GTAO AO material parameters (no rebuild needed).
+   * @param {Partial<typeof PostProcessingPipeline.prototype._aoGtaoParams>} params
+   */
+  updateGtaoParams(params) {
+    Object.assign(this._aoGtaoParams, params);
+    if (this.aoPass instanceof GTAOPass) this.aoPass.updateGtaoMaterial(params);
+  }
+
+  /**
+   * Live-update GTAO Poisson Denoise parameters (no rebuild needed).
+   * @param {Partial<typeof PostProcessingPipeline.prototype._aoPdParams>} params
+   */
+  updatePdParams(params) {
+    Object.assign(this._aoPdParams, params);
+    if (this.aoPass instanceof GTAOPass) this.aoPass.updatePdMaterial(params);
+  }
+
+  /**
+   * Live-update SAO parameters (no rebuild needed).
+   * @param {Partial<typeof PostProcessingPipeline.prototype._aoSaoParams>} params
+   */
+  updateSaoParams(params) {
+    Object.assign(this._aoSaoParams, params);
+    if (this.aoPass instanceof SAOPass) Object.assign(this.aoPass.params, params);
+  }
+
+  /**
+   * Live-update SSAO parameters (no rebuild needed).
+   * @param {Partial<typeof PostProcessingPipeline.prototype._aoSsaoParams>} params
+   */
+  updateSsaoParams(params) {
+    Object.assign(this._aoSsaoParams, params);
+    if (this.aoPass instanceof SSAOPass) {
+      if (params.kernelRadius !== undefined) this.aoPass.kernelRadius = params.kernelRadius;
+      if (params.minDistance  !== undefined) this.aoPass.minDistance  = params.minDistance;
+      if (params.maxDistance  !== undefined) this.aoPass.maxDistance  = params.maxDistance;
+    }
+  }
+
+  /**
+   * Build the correct AO pass for the given type and store in this.aoPass.
+   * @param {'gtao'|'sao'|'ssao'} type
+   * @param {THREE.Scene}  scene
+   * @param {THREE.Camera} camera
+   * @param {number} w
+   * @param {number} h
+   */
+  _buildAoPassForType(type, scene, camera, w, h) {
+    this.aoPass = null;
+    switch (type) {
+      case 'gtao': {
+        const p = new GTAOPass(scene, camera, w, h);
+        p.output = GTAOPass.OUTPUT.Default;
+        p.updateGtaoMaterial(this._aoGtaoParams);
+        p.updatePdMaterial(this._aoPdParams);
+        this.aoPass = p;
+        break;
+      }
+      case 'sao': {
+        const p = new SAOPass(scene, camera, new THREE.Vector2(w, h));
+        Object.assign(p.params, this._aoSaoParams);
+        this.aoPass = p;
+        break;
+      }
+      case 'ssao': {
+        const p = new SSAOPass(scene, camera, w, h);
+        p.kernelRadius = this._aoSsaoParams.kernelRadius;
+        p.minDistance  = this._aoSsaoParams.minDistance;
+        p.maxDistance  = this._aoSsaoParams.maxDistance;
+        this.aoPass = p;
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
   /** Rebuild the pipeline for the current renderer type. */
   _rebuildForCurrentType() {
     const renderer = this.engine.rendererManager?.renderer;
@@ -370,8 +512,9 @@ export class PostProcessingPipeline {
       case 'outline':
         if (this.outlinePass && prop in this.outlinePass) this.outlinePass[prop] = value;
         break;
-      case 'gtao':
-        if (this.gtaoPass && prop in this.gtaoPass) this.gtaoPass[prop] = value;
+      case 'ao':
+      case 'gtao':  // legacy alias
+        if (this.aoPass && prop in this.aoPass) this.aoPass[prop] = value;
         break;
       case 'bloom':
         if (this.bloomPass && prop in this.bloomPass) this.bloomPass[prop] = value;
