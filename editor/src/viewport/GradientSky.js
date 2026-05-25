@@ -236,6 +236,7 @@ export class GradientSky {
     };
 
     this._updateDirs();
+    this._initSunLight();
   }
 
   get enabled() { return this._enabled; }
@@ -247,6 +248,9 @@ export class GradientSky {
       opacityStops: this._p.opacityStops.map(s => ({ ...s })),
     };
   }
+
+  /** The Three.js DirectionalLight that represents the sun (may be null if sky disabled). */
+  get sunLight() { return this._sunLight; }
 
   setEnabled(v) {
     this._enabled = !!v;
@@ -310,10 +314,44 @@ export class GradientSky {
   }
 
   dispose() {
+    const scene = this._vpe?.scene;
+    if (this._sunLight) {
+      scene?.remove(this._sunLight);
+      scene?.remove(this._sunLight.target);
+      this._sunLight = null;
+    }
     this._destroyMesh();
   }
 
   // ── Private ──────────────────────────────────────────────────────────────
+
+  _initSunLight() {
+    const scene = this._vpe?.scene;
+    if (!scene || this._sunLight) return;
+
+    this._sunLight = new THREE.DirectionalLight(0xfff8e7, 2.0);
+    this._sunLight.userData._isHelper = true;
+    this._sunLight.name = '__cyco_sun_light';
+
+    this._sunLight.castShadow = true;
+    this._sunLight.shadow.mapSize.width  = 2048;
+    this._sunLight.shadow.mapSize.height = 2048;
+    this._sunLight.shadow.camera.near   = 0.5;
+    this._sunLight.shadow.camera.far    = 5000;
+    this._sunLight.shadow.camera.left   = -300;
+    this._sunLight.shadow.camera.right  =  300;
+    this._sunLight.shadow.camera.top    =  300;
+    this._sunLight.shadow.camera.bottom = -300;
+    this._sunLight.shadow.radius        = 3;
+    this._sunLight.shadow.blurSamples   = 8;
+    this._sunLight.shadow.bias          = -0.0005;
+
+    this._sunLight.target.position.set(0, 0, 0);
+    this._sunLight.target.name = '__cyco_sun_target';
+
+    this._updateSunLight();
+    scene.add(this._sunLight, this._sunLight.target);
+  }
 
   _updateDirs() {
     const { elevation, azimuth } = this._p;
@@ -425,16 +463,11 @@ export class GradientSky {
     const cam = this._vpe?.camera;
     if (cam) this._mesh.position.copy(cam.position);
 
-    // Sun directional light
-    this._sunLight = new THREE.DirectionalLight(0xfff8e7, 0);
-    this._sunLight.userData._isHelper = true;
-    this._updateSunLight();
-
     // Lens flare
     this._createLensflare();
     this._updateLensflare();
 
-    scene.add(this._mesh, this._sunLight);
+    scene.add(this._mesh);
     if (this._lensflare) scene.add(this._lensflare);
   }
 
@@ -445,10 +478,6 @@ export class GradientSky {
       this._mesh.geometry.dispose();
       this._mesh.material.dispose();
       this._mesh = null;
-    }
-    if (this._sunLight) {
-      scene?.remove(this._sunLight);
-      this._sunLight = null;
     }
     if (this._lensflare) {
       scene?.remove(this._lensflare);

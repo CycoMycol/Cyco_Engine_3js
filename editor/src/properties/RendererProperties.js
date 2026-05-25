@@ -69,8 +69,7 @@ export class RendererProperties {
 
     const shadowTypeSelect = select({
       options: [
-        ['PCFSoftShadowMap', 'PCF Soft (recommended)'],
-        ['PCFShadowMap',     'PCF'],
+        ['PCFShadowMap',     'PCF Soft (recommended)'],
         ['BasicShadowMap',   'Basic'],
         ['VSMShadowMap',     'VSM'],
       ],
@@ -92,6 +91,51 @@ export class RendererProperties {
       },
     });
     shadowBody.appendChild(row('Enable Shadows', shadowCb));
+
+    // Shadow map size — applies to the sun directional light
+    const sunLight = () => window.__cyco?.viewportEngine?.gradientSky?.sunLight;
+    const curMapSize = sunLight()?.shadow?.mapSize?.width ?? 2048;
+    const mapSizeSelect = select({
+      options: [
+        ['512',  '512  (fast)'],
+        ['1024', '1024'],
+        ['2048', '2048 (default)'],
+        ['4096', '4096 (high quality)'],
+      ],
+      value: String(curMapSize),
+      onChange: (v) => {
+        const l = sunLight();
+        if (!l) return;
+        const s = parseInt(v, 10);
+        l.shadow.mapSize.width  = s;
+        l.shadow.mapSize.height = s;
+        l.shadow.map?.dispose();
+        l.shadow.map = null;
+      },
+    });
+    shadowBody.appendChild(row('Map Size', mapSizeSelect));
+
+    // Sun shadow radius (PCF softness)
+    const curRadius = sunLight()?.shadow?.radius ?? 3;
+    const radiusSlider = slider({
+      value: curRadius, min: 0, max: 16, step: 0.5,
+      onChange: (v) => {
+        const l = sunLight();
+        if (l) l.shadow.radius = v;
+      },
+    });
+    shadowBody.appendChild(row('Radius', radiusSlider.el));
+
+    // Sun shadow bias
+    const curBias = sunLight()?.shadow?.bias ?? -0.0005;
+    const biasSlider = slider({
+      value: curBias, min: -0.01, max: 0.01, step: 0.0001,
+      onChange: (v) => {
+        const l = sunLight();
+        if (l) l.shadow.bias = v;
+      },
+    });
+    shadowBody.appendChild(row('Bias', biasSlider.el));
 
     // ── Tone Mapping ──
     const { el: tmSec, body: tmBody } = section('Tone Mapping');
@@ -234,10 +278,9 @@ export class RendererProperties {
     const map = {
       [THREE.BasicShadowMap]:   'BasicShadowMap',
       [THREE.PCFShadowMap]:     'PCFShadowMap',
-      [THREE.PCFSoftShadowMap]: 'PCFSoftShadowMap',
       [THREE.VSMShadowMap]:     'VSMShadowMap',
     };
-    return map[t] ?? 'PCFSoftShadowMap';
+    return map[t] ?? 'PCFShadowMap';
   }
 
   _applyShadowMapType(name) {
@@ -246,7 +289,6 @@ export class RendererProperties {
     const map = {
       BasicShadowMap:   THREE.BasicShadowMap,
       PCFShadowMap:     THREE.PCFShadowMap,
-      PCFSoftShadowMap: THREE.PCFSoftShadowMap,
       VSMShadowMap:     THREE.VSMShadowMap,
     };
     if (map[name] !== undefined) r.shadowMap.type = map[name];

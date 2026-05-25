@@ -145,10 +145,11 @@ if (typeof window !== 'undefined') {
     commandManager,
     viewportContextMenu,
     dockviewApi: dockApi,
-    get cloudSystem()  { return viewportEngine.cloudSystem; },
-    get cloudSystem2() { return viewportEngine.cloudSystem2; },
-    get gradientSky()  { return viewportEngine.gradientSky; },
-    get postPipeline() { return postPipeline; },
+    get cloudSystem()     { return viewportEngine.cloudSystem; },
+    get cloudSystem2()    { return viewportEngine.cloudSystem2; },
+    get gradientSky()     { return viewportEngine.gradientSky; },
+    get contactShadows()  { return viewportEngine.contactShadows; },
+    get postPipeline()    { return postPipeline; },
   };
 }
 

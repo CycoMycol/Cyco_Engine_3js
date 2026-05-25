@@ -24,6 +24,7 @@ import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { VolumetricClouds } from './VolumetricClouds.js';
 import { GradientSky }     from './GradientSky.js';
+import { ContactShadows }  from './ContactShadows.js';
 
 /** Sentinel value: no active focus animation. */
 const NO_FOCUS = null;
@@ -149,6 +150,10 @@ export class ViewportEngine {
 
     // Gradient sky + sun/moon system
     this.gradientSky = new GradientSky(this);
+
+    // Contact shadow system (ground-plane fake shadows)
+    this.contactShadows = new ContactShadows();
+    this.contactShadows.init(this.rendererManager.renderer, this.scene);
 
     // OrbitControls
     this._buildControls();
@@ -440,8 +445,8 @@ export class ViewportEngine {
     this.camera.lookAt(0, 0, 0);
 
     // Non-hierarchy lights (not shown in scene tree)
-    this._ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-    this._hemisphereLight = new THREE.HemisphereLight(0x87ceeb, 0x8b7355, 0.8);
+    this._ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
+    this._hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x888888, 0.4);
     this.scene.add(this._ambientLight, this._hemisphereLight);
 
     // Grid + axes (non-selectable)
@@ -449,6 +454,8 @@ export class ViewportEngine {
     this.axesHelper = new THREE.AxesHelper(1);
     this.axesHelper.raycast = () => {};
     this.scene.add(this.gridHelper, this.axesHelper);
+    // Reduce IBL contribution so directional light shadows remain visible
+    this.scene.environmentIntensity = 0.4;
   }
 
   _makeGrid(size, divisions) {
@@ -732,6 +739,9 @@ export class ViewportEngine {
     // Gradient sky follows camera
     this.gradientSky?.update();
 
+    // Contact shadows — renders depth pass + blur before main frame
+    this.contactShadows?.update(renderer, this.scene);
+
     // Dispatch tick event for PostProcessingPipeline, ViewportStats, etc.
     window.dispatchEvent(new CustomEvent('cyco-vp-tick', { detail: { delta } }));
 
@@ -893,6 +903,7 @@ export class ViewportEngine {
     this._loadingOverlay?.remove();
 
     // Dispose scene objects
+    this.contactShadows?.dispose();
     this.scene?.traverse(child => {
       child.geometry?.dispose();
       const mats = [child.material].flat();

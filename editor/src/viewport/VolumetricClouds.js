@@ -311,12 +311,13 @@ void main() {
     shadowDensity += cloudDensityFast(vWorldPos + uSunDir * t) * stepSz;
   }
 
-  float shadow = 1.0 - exp(-shadowDensity * 0.06);
-  float alpha  = shadow * uShadowStrength;
-  if (alpha < 0.01) discard;
+  float shadow    = 1.0 - exp(-shadowDensity * 0.8);
+  float darkness   = shadow * uShadowStrength;
+  if (darkness < 0.01) discard;
 
-  // Cool blue-grey tint (sky occlusion look)
-  gl_FragColor = vec4(0.0, 0.04, 0.12, alpha);
+  // MultiplyBlending: white = no change, dark = shadow
+  float brightness = 1.0 - darkness;
+  gl_FragColor = vec4(brightness, brightness, brightness, 1.0);
 }
 `;
 
@@ -542,6 +543,10 @@ export class VolumetricClouds {
       transparent:         true,
       depthWrite:          false,
       depthTest:           true,
+      blending:            THREE.CustomBlending,
+      blendEquation:       THREE.AddEquation,
+      blendSrc:            THREE.DstColorFactor,
+      blendDst:            THREE.ZeroFactor,
       polygonOffset:       true,
       polygonOffsetFactor: -1,
       polygonOffsetUnits:  -1,
