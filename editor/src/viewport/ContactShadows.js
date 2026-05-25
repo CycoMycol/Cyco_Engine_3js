@@ -132,12 +132,40 @@ export class ContactShadows {
     this._blurPlane.visible = false;
 
     // Visible shadow plane at y = _y
-    const planeMat = new THREE.MeshBasicMaterial({
-      map:         this._renderTargetBlur.texture,
-      opacity:     this._opacity,
-      transparent: true,
-      depthWrite:  false,
-      blending:    THREE.MultiplyBlending,
+    // Use a ShaderMaterial + CustomBlending so opacity works correctly:
+    // result = mix(1.0, shadow_texture, uOpacity) * dst  (multiply blend)
+    // White = no change, dark = shadow; opacity fades the whole shadow in/out.
+    const planeMat = new THREE.ShaderMaterial({
+      uniforms: {
+        tShadow:  { value: this._renderTarget.texture },  // fully-blurred (H+V) result
+        uOpacity: { value: this._opacity },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+        }
+      `,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tShadow;
+        uniform float uOpacity;
+        varying vec2 vUv;
+        void main() {
+          vec3 shadow = texture2D( tShadow, vUv ).rgb;
+          // White in texture = no shadow (multiply by 1 = no change).
+          // Dark in texture  = shadow   (multiply darkens underlying scene).
+          // Opacity = 0 → output pure white (no effect); 1 → full shadow.
+          vec3 result = mix( vec3( 1.0 ), shadow, uOpacity );
+          gl_FragColor = vec4( result, 1.0 );
+        }
+      `,
+      transparent:    true,
+      depthWrite:     false,
+      blending:       THREE.CustomBlending,
+      blendEquation:  THREE.AddEquation,
+      blendSrc:       THREE.DstColorFactor,
+      blendDst:       THREE.ZeroFactor,
     });
     this._plane = new THREE.Mesh(new THREE.PlaneGeometry(2 * s, 2 * s), planeMat);
     this._plane.rotation.x = -Math.PI / 2;
@@ -256,7 +284,9 @@ export class ContactShadows {
 
   setOpacity(v) {
     this._opacity = v;
-    if (this._plane?.material) this._plane.material.opacity = v;
+    if (this._plane?.material?.uniforms?.uOpacity) {
+      this._plane.material.uniforms.uOpacity.value = v;
+    }
   }
 
   /** World-space Y position of the shadow receiver plane. */

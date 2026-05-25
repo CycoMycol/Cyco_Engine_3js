@@ -542,14 +542,11 @@ export class VolumetricClouds {
       },
       transparent:         true,
       depthWrite:          false,
-      depthTest:           true,
+      depthTest:           false,   // must be false to render over 3D objects, not just the ground
       blending:            THREE.CustomBlending,
       blendEquation:       THREE.AddEquation,
       blendSrc:            THREE.DstColorFactor,
       blendDst:            THREE.ZeroFactor,
-      polygonOffset:       true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits:  -1,
     });
 
     // Large flat plane follows camera XZ to always cover visible ground
@@ -560,7 +557,7 @@ export class VolumetricClouds {
     mesh.name          = '__cyco_cloud_shadow';
     mesh.raycast       = () => {};
     mesh.frustumCulled = false;
-    mesh.renderOrder   = 0;
+    mesh.renderOrder   = 3;  // render after all scene objects (clouds=1) so multiply affects everything
     this._shadowMesh   = mesh;
     scene.add(this._shadowMesh);
   }
