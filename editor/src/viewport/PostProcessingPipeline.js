@@ -298,6 +298,10 @@ export class PostProcessingPipeline {
       this._tslPipeline.dispose?.();
       this._tslPipeline = null;
     }
+    if (this._compileRT) {
+      this._compileRT.dispose();
+      this._compileRT = null;
+    }
     this._tslNodes = null;
     this.engine.setPipelineActive(false);
   }
@@ -697,16 +701,26 @@ export class PostProcessingPipeline {
 
   _onTick() {
     // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
-    if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {      // If new materials need compiling, run a direct render FIRST.
-      // The TSL pipeline renders immediately after with autoClear=true,
-      // erasing the direct render in the same animation frame — no ghost.
+    if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {
+      // If new materials need compiling, run a compile pass into an offscreen
+      // render target so it never touches the visible canvas — no ghosting.
       if (this._needsTslCompile) {
         this._needsTslCompile = false;
         const renderer = this.engine.rendererManager?.renderer;
         const scene    = this.engine.scene;
         const camera   = this.engine.camera;
-        if (renderer && scene && camera) renderer.render(scene, camera);
-      }      try {
+        if (renderer && scene && camera) {
+          // Allocate a tiny offscreen render target on first use
+          if (!this._compileRT) {
+            this._compileRT = new THREE.WebGLRenderTarget(1, 1);
+          }
+          const prev = renderer.getRenderTarget();
+          renderer.setRenderTarget(this._compileRT);
+          renderer.render(scene, camera);
+          renderer.setRenderTarget(prev);
+        }
+      }
+      try {
         this._tslPipeline.render();
       } catch (err) {
         console.error('[PostProcessingPipeline] TSL pipeline render error — disabling:', err);
