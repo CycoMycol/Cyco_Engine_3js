@@ -228,6 +228,13 @@ export class PostProcessingProperties {
     const getAo = () => getPP()?._aoGtaoParams ?? {};
     const getPd = () => getPP()?._aoPdParams   ?? {};
 
+    const outputSel = select({
+      options: [[0,'Composite'],[4,'AO Only'],[5,'Denoise'],[1,'Diffuse'],[2,'Depth'],[3,'Normal']],
+      value: getAo().output ?? 0,
+      onChange: v => { const pp = getPP(); if (pp) pp.setAoOutputMode(+v); },
+    });
+    container.appendChild(row('Output', outputSel));
+
     const aoSliders = [
       ['Radius',            'radius',           0.01, 1,    0.01 ],
       ['Distance Exp.',     'distanceExponent',  1,    4,    0.01 ],
@@ -278,10 +285,17 @@ export class PostProcessingProperties {
   _buildSaoControls(container, getPP) {
     const getP = () => getPP()?._aoSaoParams ?? {};
 
+    const outputSel = select({
+      options: [[0,'Composite'],[1,'AO Only'],[2,'Normal']],
+      value: getP().output ?? 0,
+      onChange: v => { const pp = getPP(); if (pp) pp.setAoOutputMode(+v); },
+    });
+    container.appendChild(row('Output', outputSel));
+
     const sliders = [
       ['Bias',              'saoBias',            -1,   1,    0.01  ],
       ['Intensity',         'saoIntensity',         0,   1,    0.01  ],
-      ['Scale',             'saoScale',             0,   10,   0.01  ],
+      ['Scale',             'saoScale',             0,   10000, 10   ],
       ['Kernel Radius',     'saoKernelRadius',      1,   100,  1     ],
       ['Min Resolution',    'saoMinResolution',     0,   1,    0.001 ],
       ['Blur Radius',       'saoBlurRadius',        0,   200,  1     ],
@@ -307,10 +321,19 @@ export class PostProcessingProperties {
   _buildSsaoControls(container, getPP) {
     const getP = () => getPP()?._aoSsaoParams ?? {};
 
+    const outputSel = select({
+      options: [[0,'Composite'],[1,'AO Only'],[2,'AO + Blur'],[3,'Depth'],[4,'Normal']],
+      value: getP().output ?? 0,
+      onChange: v => { const pp = getPP(); if (pp) pp.setAoOutputMode(+v); },
+    });
+    container.appendChild(row('Output', outputSel));
+
+    // minDistance / maxDistance are normalised linear depth (0–1).
+    // With camera near=0.1, far=10000 a 1-world-unit step at z=10 ≈ 0.0001.
     const sliders = [
-      ['Kernel Radius', 'kernelRadius', 0,     32,   0.5    ],
-      ['Min Distance',  'minDistance',  0.001, 0.02, 0.0001 ],
-      ['Max Distance',  'maxDistance',  0.01,  0.3,  0.001  ],
+      ['Kernel Radius', 'kernelRadius', 0,       32,    0.5     ],
+      ['Min Distance',  'minDistance',  0,        0.005, 0.00001 ],
+      ['Max Distance',  'maxDistance',  0,        0.05,  0.0001  ],
     ];
     for (const [label, key, mn, mx, step] of sliders) {
       const sl = slider({

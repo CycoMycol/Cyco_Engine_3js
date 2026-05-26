@@ -92,6 +92,7 @@ export class PostProcessingPipeline {
 
     /** GTAO AO material parameters — survive pipeline rebuilds */
     this._aoGtaoParams = {
+      output: 0,
       radius: 0.25, distanceExponent: 1, thickness: 1, distanceFallOff: 1,
       scale: 1, samples: 16, screenSpaceRadius: false,
     };
@@ -102,16 +103,27 @@ export class PostProcessingPipeline {
       radiusExponent: 1, rings: 2, samples: 8,
     };
 
-    /** SAO parameters */
+    /** SAO parameters.
+     *  saoScale must compensate for cameraFar — the SAO shader formula:
+     *  scaledScreenDistance = (saoScale / cameraFar) * viewDistance
+     *  At cameraFar=10000 we need saoScale=1000 to match the three.js example
+     *  (which used cameraFar=10, saoScale=1 giving the same ratio 0.1). */
     this._aoSaoParams = {
-      saoBias: 0.5, saoIntensity: 0.18, saoScale: 1, saoKernelRadius: 100,
+      output: 0,
+      saoBias: 0.5, saoIntensity: 0.18, saoScale: 1000, saoKernelRadius: 100,
       saoMinResolution: 0, saoBlur: true, saoBlurRadius: 8,
       saoBlurStdDev: 4, saoBlurDepthCutoff: 0.01,
     };
 
-    /** SSAO parameters */
+    /** SSAO parameters.
+     *  minDistance / maxDistance are in normalised linear depth space (0–1) via
+     *  viewZToOrthographicDepth(z, near, far).  With camera near=0.1, far=10000
+     *  a 1-world-unit depth step at z=10 ≈ 0.0001 normalised units, so the
+     *  three.js example defaults (minDistance=0.005, maxDistance=0.1) calibrated
+     *  for near=100/far=700 are ~100× too large for our scene scale. */
     this._aoSsaoParams = {
-      kernelRadius: 8, minDistance: 0.005, maxDistance: 0.1,
+      output: 0,
+      kernelRadius: 8, minDistance: 0.00005, maxDistance: 0.001,
     };
 
     this._onVpReady         = this._onVpReady.bind(this);
@@ -207,8 +219,32 @@ export class PostProcessingPipeline {
     if (this._lutTexture) this.lutPass.lut = this._lutTexture;
     this._composer.addPass(this.lutPass);
 
+    // Apply AO debug state: in non-composite output modes, bloom/outlines must be
+    // disabled so the raw debug buffers aren't overwhelmed by bloom/outlines.
+    this._applyAoDebugState();
+
     // Tell ViewportEngine whether the pipeline is active (respects user toggle)
     this.engine.setPipelineActive(this._pipelineEnabled);
+  }
+
+  /**
+   * Disable bloom and outline passes when in an AO debug output mode (non-composite).
+   * In debug modes (AO Only, Depth, Normal, Denoise, Diffuse) the raw AO buffer
+   * is written into the compositor pipeline.  UnrealBloomPass would bloom the bright
+   * white (no-occlusion) regions and completely white-out the debug view, so we
+   * disable it while any non-default output mode is active.
+   */
+  _applyAoDebugState() {
+    const output = this._aoEnabled
+      ? ( this._aoType === 'gtao' ? (this._aoGtaoParams.output ?? 0)
+        : this._aoType === 'sao'  ? (this._aoSaoParams.output  ?? 0)
+        : this._aoType === 'ssao' ? (this._aoSsaoParams.output ?? 0)
+        : 0 )
+      : 0;
+    const isDebug = (output !== 0);
+    if (this.bloomPass)        this.bloomPass.enabled        = !isDebug;
+    if (this.outlinePass)      this.outlinePass.enabled      = !isDebug;
+    if (this.hoverOutlinePass) this.hoverOutlinePass.enabled = !isDebug;
   }
 
   _disposeWebGLPipeline() {
@@ -404,7 +440,32 @@ export class PostProcessingPipeline {
       if (params.kernelRadius !== undefined) this.aoPass.kernelRadius = params.kernelRadius;
       if (params.minDistance  !== undefined) this.aoPass.minDistance  = params.minDistance;
       if (params.maxDistance  !== undefined) this.aoPass.maxDistance  = params.maxDistance;
+      if (params.output       !== undefined) this.aoPass.output       = params.output;
     }
+  }
+
+  /**
+   * Set the debug output mode for the active AO pass (no rebuild needed).
+   * GTAO: 0=Default,1=Diffuse,2=Depth,3=Normal,4=AO,5=Denoise
+   * SAO:  0=Default,1=SAO,2=Normal
+   * SSAO: 0=Default,1=SSAO,2=Blur,3=Depth,4=Normal
+   * @param {number} mode
+   */
+  setAoOutputMode(mode) {
+    const m = +mode;
+    const type = this._aoType;
+    if (type === 'gtao') {
+      this._aoGtaoParams.output = m;
+      if (this.aoPass instanceof GTAOPass) this.aoPass.output = m;
+    } else if (type === 'sao') {
+      this._aoSaoParams.output = m;
+      if (this.aoPass instanceof SAOPass) this.aoPass.params.output = m;
+    } else if (type === 'ssao') {
+      this._aoSsaoParams.output = m;
+      if (this.aoPass instanceof SSAOPass) this.aoPass.output = m;
+    }
+    // Disable bloom/outlines in debug modes so raw buffers aren't overwhelmed
+    this._applyAoDebugState();
   }
 
   /**
@@ -420,7 +481,7 @@ export class PostProcessingPipeline {
     switch (type) {
       case 'gtao': {
         const p = new GTAOPass(scene, camera, w, h);
-        p.output = GTAOPass.OUTPUT.Default;
+        p.output = this._aoGtaoParams.output ?? GTAOPass.OUTPUT.Default;
         p.updateGtaoMaterial(this._aoGtaoParams);
         p.updatePdMaterial(this._aoPdParams);
         this.aoPass = p;
@@ -428,7 +489,10 @@ export class PostProcessingPipeline {
       }
       case 'sao': {
         const p = new SAOPass(scene, camera, new THREE.Vector2(w, h));
-        Object.assign(p.params, this._aoSaoParams);
+        // output is stored as _aoSaoParams.output and maps to p.params.output
+        const { output: _saoOut, ...saoRest } = this._aoSaoParams;
+        Object.assign(p.params, saoRest);
+        p.params.output = this._aoSaoParams.output ?? SAOPass.OUTPUT.Default;
         this.aoPass = p;
         break;
       }
@@ -437,6 +501,15 @@ export class PostProcessingPipeline {
         p.kernelRadius = this._aoSsaoParams.kernelRadius;
         p.minDistance  = this._aoSsaoParams.minDistance;
         p.maxDistance  = this._aoSsaoParams.maxDistance;
+        p.output       = this._aoSsaoParams.output ?? SSAOPass.OUTPUT.Default;
+        // Ensure camera uniforms are current (constructor uses values at creation time)
+        if (p.ssaoMaterial && camera) {
+          const u = p.ssaoMaterial.uniforms;
+          u['cameraNear'].value = camera.near;
+          u['cameraFar'].value  = camera.far;
+          u['cameraProjectionMatrix'].value.copy(camera.projectionMatrix);
+          u['cameraInverseProjectionMatrix'].value.copy(camera.projectionMatrixInverse);
+        }
         this.aoPass = p;
         break;
       }
@@ -456,6 +529,17 @@ export class PostProcessingPipeline {
 
   _onTick() {
     if (!this._composer || !this._pipelineEnabled) return;
+    // Keep SSAO camera uniforms current each frame (projection matrix can change on FOV/aspect updates)
+    if (this.aoPass instanceof SSAOPass && this.aoPass.ssaoMaterial) {
+      const cam = this.engine.camera;
+      if (cam) {
+        const u = this.aoPass.ssaoMaterial.uniforms;
+        u['cameraNear'].value = cam.near;
+        u['cameraFar'].value  = cam.far;
+        u['cameraProjectionMatrix'].value.copy(cam.projectionMatrix);
+        u['cameraInverseProjectionMatrix'].value.copy(cam.projectionMatrixInverse);
+      }
+    }
     try {
       this._composer.render();
     } catch (err) {
