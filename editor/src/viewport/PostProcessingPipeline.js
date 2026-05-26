@@ -126,14 +126,32 @@ export class PostProcessingPipeline {
       kernelRadius: 8, minDistance: 0.00005, maxDistance: 0.001,
     };
 
-    this._onVpReady         = this._onVpReady.bind(this);
-    this._onRendererChanged = this._onRendererChanged.bind(this);
-    this._onTick            = this._onTick.bind(this);
-    this._onResize          = this._onResize.bind(this);
-    this._onSelectNode      = this._onSelectNode.bind(this);
-    this._onDeselectAll     = this._onDeselectAll.bind(this);
-    this._onHoverObject     = this._onHoverObject.bind(this);
-    this._onPpSettings      = this._onPpSettings.bind(this);
+    // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
+    /** @type {import('three/webgpu').RenderPipeline|null} */
+    this._tslPipeline = null;
+
+    /** @type {import('./GTAONode.js').GTAONode|null} — TSL ambient occlusion node */
+    this._tslAoPass = null;
+
+    /** Whether the TSL RenderPipeline is ready to render */
+    this._tslPipelineActive = false;
+
+    /** Pre-built output nodes for live AO output-mode switching */
+    this._tslNodes = null;
+
+    /** Prevents reentrant offscreen-compile calls when multiple children are added at once */
+    this._compilePending = false;
+
+    this._onVpReady           = this._onVpReady.bind(this);
+    this._onRendererChanged   = this._onRendererChanged.bind(this);
+    this._onTick              = this._onTick.bind(this);
+    this._onResize            = this._onResize.bind(this);
+    this._onSelectNode        = this._onSelectNode.bind(this);
+    this._onDeselectAll       = this._onDeselectAll.bind(this);
+    this._onHoverObject       = this._onHoverObject.bind(this);
+    this._onPpSettings        = this._onPpSettings.bind(this);
+    this._onSceneChildAdded   = this._onSceneChildAdded.bind(this);
+    this._onVpTool            = this._onVpTool.bind(this);
 
     window.addEventListener('cyco-vp-ready',          this._onVpReady);
     window.addEventListener('cyco-renderer-changed',  this._onRendererChanged);
@@ -143,6 +161,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-deselect-all',      this._onDeselectAll);
     window.addEventListener('cyco-hover-object',      this._onHoverObject);
     window.addEventListener('cyco-pp-settings',       this._onPpSettings);
+    window.addEventListener('cyco-vp-tool',           this._onVpTool);
   }
 
   // ─── Build pipelines ──────────────────────────────────────────────────────
@@ -261,13 +280,152 @@ export class PostProcessingPipeline {
     this.engine.setPipelineActive(false);
   }
 
-  _buildWebGPUPipeline(renderer, scene, camera) {
-    // WebGPU PostProcessing uses TSL nodes — imported dynamically to avoid
-    // pulling WebGPU code into the WebGL bundle.
-    // Actual implementation deferred to Phase 15 (Future: WebGPU TSL nodes).
-    // For now, WebGPU renderer falls back to direct rendering (no composer).
+  _disposeTslPipeline() {
+    this._tslPipelineActive = false;
+    this._compilePending = false;
+    // Remove scene listener added during _buildWebGPUPipeline
+    this.engine.scene?.removeEventListener('childadded', this._onSceneChildAdded);
+    if (this._tslAoPass) {
+      this._tslAoPass.dispose?.();
+      this._tslAoPass = null;
+    }
+    if (this._tslPipeline) {
+      this._tslPipeline.dispose?.();
+      this._tslPipeline = null;
+    }
+    this._tslNodes = null;
     this.engine.setPipelineActive(false);
-    console.info('[PostProcessingPipeline] WebGPU pipeline — using direct rendering (TSL nodes deferred to Phase 15)');
+  }
+
+  async _buildWebGPUPipeline(renderer, scene, camera) {
+    this._tslPipelineActive = false;
+    try {
+      const webgpuMod = await import('three/webgpu');
+      const { RenderPipeline, TSL } = webgpuMod;
+      const {
+        pass, mrt, normalView, output,
+        vec3, vec4,
+      } = TSL;
+      const { ao } = await import('three/addons/tsl/display/GTAONode.js');
+
+      this._tslPipeline = new RenderPipeline(renderer);
+
+      let outputNode;
+
+      if (this._aoEnabled && this._aoType === 'ao_webgpu') {
+        // ── Single scene pass with MRT: colour + view-space normals ──────────
+        // Official GTAONode approach: one pass outputs both scene colour AND
+        // normals into separate render target attachments.
+        // Using 'output' (the fragment output node) preserves correct scene
+        // colour — do NOT replace it with normals as that causes black geometry.
+        const scenePass = pass(scene, camera);
+        scenePass.setMRT(mrt({
+          output: output,      // standard scene colour — preserved
+          normal: normalView,  // view-space normals for GTAO
+        }));
+
+        const scenePassColor  = scenePass.getTextureNode('output');
+        const scenePassNormal = scenePass.getTextureNode('normal');
+        const scenePassDepth  = scenePass.getTextureNode('depth');
+
+        // ── AO node ──────────────────────────────────────────────────────────
+        this._tslAoPass = ao(scenePassDepth, scenePassNormal, camera);
+
+        const p = this._aoGtaoParams;
+        this._tslAoPass.radius.value           = p.radius          ?? 0.25;
+        this._tslAoPass.distanceExponent.value = p.distanceExponent ?? 1;
+        this._tslAoPass.distanceFallOff.value  = p.distanceFallOff  ?? 1;
+        this._tslAoPass.scale.value            = p.scale            ?? 1;
+        this._tslAoPass.thickness.value        = p.thickness        ?? 1;
+        this._tslAoPass.samples.value          = p.samples          ?? 16;
+        this._tslAoPass.resolutionScale        = 1;
+
+        const aoTex = this._tslAoPass.getTextureNode();
+
+        // Post-multiply composite: scene colour × AO value (darkens occluded areas)
+        const compositeNode = scenePassColor.mul(vec4(vec3(aoTex.r), 1));
+
+        // AO-only diagnostic output (greyscale occlusion map)
+        const aoOnlyNode = vec4(vec3(aoTex.r), 1);
+
+        // Store nodes for output-mode switching (no rebuild needed)
+        this._tslNodes = {
+          composite: compositeNode,
+          aoOnly:    aoOnlyNode,
+        };
+
+        const outputMode = p.output ?? 0;
+        outputNode = outputMode === 4 ? aoOnlyNode : compositeNode;
+      } else {
+        // AO disabled — render scene directly, no post-processing
+        const scenePass = pass(scene, camera);
+        this._tslNodes  = { sceneOnly: scenePass };
+        outputNode      = scenePass;
+      }
+
+      this._tslPipeline.outputNode = outputNode;
+
+      // Pre-warm: render the scene once so all MeshStandardMaterial programs
+      // are compiled in the correct NodeMaterial context.  The TSL RenderPipeline
+      // uses cached compiled programs — without this call newly-added objects
+      // remain invisible on the first frame.  The direct render writes one raw
+      // frame to the canvas but the TSL pipeline overwrites it on the very
+      // next animation frame, so the flash is imperceptible in practice.
+      renderer.render(scene, camera);
+
+      // Subscribe so objects added AFTER the pipeline is built are compiled
+      // before the TSL pipeline tries to render them.
+      scene.removeEventListener('childadded', this._onSceneChildAdded); // guard against double-add
+      scene.addEventListener('childadded', this._onSceneChildAdded);
+
+      this._tslPipelineActive = true;
+      this.engine.setPipelineActive(true);
+
+    } catch (err) {
+      console.error('[PostProcessingPipeline] WebGPU TSL pipeline build failed:', err);
+      this._tslPipelineActive = false;
+      this.engine.setPipelineActive(false);
+    }
+  }
+
+  // ─── Scene child-added: compile new objects for TSL pipeline ─────────────
+
+  /**
+   * Called when THREE.Object3D is added to the scene while the TSL pipeline
+   * is active.  New objects' materials are not automatically compiled for the
+   * TSL RenderPipeline context, so we trigger an offscreen render pass that
+   * forces the renderer to compile the new material programs.
+   */
+  _onSceneChildAdded() {
+    if (!this._tslPipelineActive) return;
+    this._scheduleTslCompile();
+  }
+
+  /**
+   * Schedules a deferred direct render that compiles any uncompiled material
+   * programs (new objects, newly-visible gizmo handles, etc.) in the correct
+   * NodeMaterial context so the TSL RenderPipeline can display them.
+   * Coalesces multiple rapid calls into a single compile using _compilePending.
+   */
+  _scheduleTslCompile() {
+    if (this._compilePending) return;
+    this._compilePending = true;
+    // Defer past the current call stack so the renderer is not in the middle
+    // of a frame when we call render().
+    setTimeout(() => {
+      this._compilePending = false;
+      if (!this._tslPipelineActive) return;
+      const renderer = this.engine.rendererManager?.renderer;
+      const scene    = this.engine.scene;
+      const camera   = this.engine.camera;
+      if (!renderer || !scene || !camera) return;
+      // A direct render compiles the new material in the correct NodeMaterial
+      // context.  The compiled programs are cached and reused by the TSL
+      // RenderPipeline, so the object becomes visible on the very next frame.
+      // This writes one raw frame to the canvas, but the TSL pipeline
+      // overwrites it within the same vsync, so the flash is imperceptible.
+      renderer.render(scene, camera);
+    }, 0);
   }
 
   // ─── Event handlers ───────────────────────────────────────────────────────
@@ -294,12 +452,14 @@ export class PostProcessingPipeline {
     const h = Math.max(1, Math.floor(height));
 
     if (type === 'webgl') {
+      this._disposeTslPipeline();
       this._buildWebGLPipeline(renderer, scene, camera, w, h);
     } else if (type === 'webgpu') {
       this._disposeWebGLPipeline();
-      this._buildWebGPUPipeline(renderer, scene, camera);
+      this._buildWebGPUPipeline(renderer, scene, camera); // async — pipeline activates when ready
     } else {
       // SVG / CSS3D / PathTracer — no post-processing
+      this._disposeTslPipeline();
       this._disposeWebGLPipeline();
       this.engine.setPipelineActive(false);
     }
@@ -410,6 +570,15 @@ export class PostProcessingPipeline {
   updateGtaoParams(params) {
     Object.assign(this._aoGtaoParams, params);
     if (this.aoPass instanceof GTAOPass) this.aoPass.updateGtaoMaterial(params);
+    // Live-update TSL AO uniforms — no pipeline rebuild needed
+    if (this._tslAoPass) {
+      if (params.radius          !== undefined) this._tslAoPass.radius.value          = params.radius;
+      if (params.distanceExponent !== undefined) this._tslAoPass.distanceExponent.value = params.distanceExponent;
+      if (params.distanceFallOff !== undefined) this._tslAoPass.distanceFallOff.value  = params.distanceFallOff;
+      if (params.scale           !== undefined) this._tslAoPass.scale.value            = params.scale;
+      if (params.thickness       !== undefined) this._tslAoPass.thickness.value        = params.thickness;
+      if (params.samples         !== undefined) this._tslAoPass.samples.value          = params.samples;
+    }
   }
 
   /**
@@ -454,6 +623,19 @@ export class PostProcessingPipeline {
   setAoOutputMode(mode) {
     const m = +mode;
     const type = this._aoType;
+
+    // ── WebGPU TSL pipeline: switch output node without rebuilding ────────────
+    if (type === 'ao_webgpu') {
+      this._aoGtaoParams.output = m;
+      if (this._tslPipeline && this._tslNodes) {
+        this._tslPipeline.outputNode =
+          (m === 4) ? (this._tslNodes.aoOnly    ?? this._tslNodes.sceneOnly)
+                    : (this._tslNodes.composite ?? this._tslNodes.sceneOnly);
+        this._tslPipeline.needsUpdate = true;
+      }
+      return;
+    }
+
     if (type === 'gtao') {
       this._aoGtaoParams.output = m;
       if (this.aoPass instanceof GTAOPass) this.aoPass.output = m;
@@ -528,6 +710,18 @@ export class PostProcessingPipeline {
   // ─── Event handlers ───────────────────────────────────────────────────────
 
   _onTick() {
+    // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
+    if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {
+      try {
+        this._tslPipeline.render();
+      } catch (err) {
+        console.error('[PostProcessingPipeline] TSL pipeline render error — disabling:', err);
+        this._disposeTslPipeline();
+      }
+      return;
+    }
+
+    // ── WebGL EffectComposer pipeline ─────────────────────────────────────────
     if (!this._composer || !this._pipelineEnabled) return;
     // Keep SSAO camera uniforms current each frame (projection matrix can change on FOV/aspect updates)
     if (this.aoPass instanceof SSAOPass && this.aoPass.ssaoMaterial) {
@@ -575,13 +769,25 @@ export class PostProcessingPipeline {
   }
 
   _onSelectNode(event) {
-    if (!this.outlinePass) return;
-    const { objects } = event.detail;
-    this.outlinePass.selectedObjects = objects ?? [];
+    if (this.outlinePass) {
+      const { objects } = event.detail;
+      this.outlinePass.selectedObjects = objects ?? [];
+    }
+    // When selection changes with the TSL pipeline active, newly-visible gizmo
+    // handles (TransformControls) may not have compiled shaders yet.  Schedule
+    // a deferred compile so they appear on the very next frame.
+    if (this._tslPipelineActive) this._scheduleTslCompile();
   }
 
   _onDeselectAll() {
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
+  }
+
+  _onVpTool() {
+    // Tool mode changed (e.g. select → translate).  TransformControls may now
+    // show handles that weren't visible during the last compile run, so trigger
+    // a recompile to make them visible on the first frame.
+    if (this._tslPipelineActive) this._scheduleTslCompile();
   }
 
   _onHoverObject(event) {
@@ -618,5 +824,6 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-deselect-all',      this._onDeselectAll);
     window.removeEventListener('cyco-hover-object',      this._onHoverObject);
     window.removeEventListener('cyco-pp-settings',       this._onPpSettings);
+    window.removeEventListener('cyco-vp-tool',           this._onVpTool);
   }
 }

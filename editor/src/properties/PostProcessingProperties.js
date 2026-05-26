@@ -207,14 +207,16 @@ export class PostProcessingProperties {
     const rendType = window.__cyco?.rendererManager?.activeType ?? 'webgl';
 
     if (type === 'ao_webgpu') {
-      const msg = document.createElement('div');
-      msg.style.cssText = 'padding:8px 12px;font-size:11px;color:var(--text-secondary,#888);line-height:1.5;';
       if (rendType !== 'webgpu') {
+        // Wrong renderer — show hint
+        const msg = document.createElement('div');
+        msg.style.cssText = 'padding:8px 12px;font-size:11px;color:var(--text-secondary,#888);line-height:1.5;';
         msg.textContent = 'AO (WebGPU) requires the WebGPU renderer. Switch the renderer type in Renderer → Type to use this mode.';
-      } else {
-        msg.textContent = 'WebGPU AO (TSL-based GTAO) — parameters will be available once the WebGPU post-processing pipeline is activated.';
+        container.appendChild(msg);
+        return;
       }
-      container.appendChild(msg);
+      // WebGPU is active — show GTAO parameter controls.
+      this._buildGtaoControls(container, getPP);
       return;
     }
 

@@ -156,8 +156,9 @@ export class SelectionManager {
     if (!this._active) return;
 
     if (event.buttons & 1) {
-      // Left button held — marquee drag logic
+      // Left button held — marquee drag only when Shift is held; otherwise orbit handles it
       if (this._gizmoDragging) return;
+      if (!event.shiftKey) return; // plain drag = orbit (OrbitControls owns it)
       const dx = event.clientX - this._pointerDown.x;
       const dy = event.clientY - this._pointerDown.y;
       if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {

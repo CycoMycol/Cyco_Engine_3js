@@ -488,15 +488,15 @@ export class ViewportEngine {
 
   _buildControls() {
     const renderer = this.rendererManager.renderer;
-    if (!renderer?.domElement) return;
+    if (!renderer?.domElement || !this.camera) return;
 
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping   = true;
     this.controls.dampingFactor   = 0.05;
     this.controls.mouseButtons    = {
-      LEFT:   null,                  // left-click/drag handled by SelectionManager
+      LEFT:   THREE.MOUSE.ROTATE,   // left-drag to orbit; click-only selection handled by SelectionManager
       MIDDLE: THREE.MOUSE.PAN,
-      RIGHT:  THREE.MOUSE.ROTATE,   // right-drag to orbit
+      RIGHT:  THREE.MOUSE.ROTATE,   // right-drag also orbits
     };
     this.controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
@@ -506,7 +506,7 @@ export class ViewportEngine {
 
   _buildViewHelper() {
     const renderer = this.rendererManager.renderer;
-    if (!renderer?.domElement) return;
+    if (!renderer?.domElement || !this.camera) return;
     this.viewHelper = new ViewHelper(this.camera, renderer.domElement);
   }
 

@@ -25,8 +25,12 @@ export class RendererManager {
     /** @type {HTMLElement|null} */
     this.container = null;
 
-    this._boundOnChange = this._onChangeRequest.bind(this);
+    this._boundOnChange  = this._onChangeRequest.bind(this);
+    this._boundOnVpReady = this._onVpReady.bind(this);
     window.addEventListener('cyco-renderer-change', this._boundOnChange);
+    // Restore saved renderer type after the viewport is fully ready so that
+    // PostProcessingPipeline and other listeners are registered before the switch.
+    window.addEventListener('cyco-vp-ready', this._boundOnVpReady, { once: true });
   }
 
   /**
@@ -66,7 +70,10 @@ export class RendererManager {
     // Dynamic import keeps three.webgpu.min.js out of initial parse
     // WebGPURenderer is a named export (not default) in three/webgpu
     const { WebGPURenderer } = await import('three/webgpu');
-    const renderer = new WebGPURenderer({ antialias: true, forceWebGL: false });
+    // forceWebGL: true uses the WebGL2 backend, which is required for EffectComposer
+    // compatibility (WebGLRenderTarget, post-processing passes, sky ShaderMaterials).
+    // NodeMaterial / TSL support is backend-agnostic and works identically on WebGL2.
+    const renderer = new WebGPURenderer({ antialias: true, forceWebGL: true });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -157,6 +164,9 @@ export class RendererManager {
     this.activeType = resolvedType;
     this.container.appendChild(newRenderer.domElement);
 
+    // Persist the selected renderer type so it survives page refreshes
+    try { localStorage.setItem('cyco:rendererType', resolvedType); } catch (_) {}
+
     this._dispatch('cyco-renderer-changed', { renderer: newRenderer, type: resolvedType });
   }
 
@@ -166,6 +176,16 @@ export class RendererManager {
     if (el && el.parentNode) el.parentNode.removeChild(el);
     if (typeof this.renderer.dispose === 'function') this.renderer.dispose();
     this.renderer = null;
+  }
+
+  /** Restore the renderer type saved in localStorage (runs once after vp-ready). */
+  _onVpReady() {
+    try {
+      const saved = localStorage.getItem('cyco:rendererType');
+      if (saved && saved !== this.activeType) {
+        window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: saved } }));
+      }
+    } catch (_) {}
   }
 
   // ─── Resize ───────────────────────────────────────────────────────────────
@@ -203,12 +223,22 @@ export class RendererManager {
     return this.activeType === 'webgpu';
   }
 
+  /**
+   * Alias for activeType — used by RendererProperties and PostProcessingProperties
+   * to read the current renderer type when building their UI.
+   * @returns {'webgl'|'webgpu'|'svg'|'css3d'|'pathtracer'}
+   */
+  get currentType() {
+    return this.activeType;
+  }
+
   _dispatch(name, detail) {
     window.dispatchEvent(new CustomEvent(name, { detail }));
   }
 
   dispose() {
     window.removeEventListener('cyco-renderer-change', this._boundOnChange);
+    window.removeEventListener('cyco-vp-ready',        this._boundOnVpReady);
     this._disposeActive();
   }
 }
