@@ -493,6 +493,10 @@ export class ViewportEngine {
     this.controls = new OrbitControls(this.camera, renderer.domElement);
     this.controls.enableDamping   = true;
     this.controls.dampingFactor   = 0.05;
+    // Prevent camera from reaching the exact north/south pole where azimuth
+    // rotation becomes degenerate and the orbit appears completely frozen.
+    this.controls.minPolarAngle   = 0.01;             // ~0.57° from top
+    this.controls.maxPolarAngle   = Math.PI - 0.01;  // ~178.9° — never south pole
     this.controls.mouseButtons    = {
       LEFT:   THREE.MOUSE.ROTATE,   // left-drag to orbit; click-only selection handled by SelectionManager
       MIDDLE: THREE.MOUSE.PAN,
@@ -805,12 +809,12 @@ export class ViewportEngine {
     const dist = this.camera.position.distanceTo(this.controls.target);
 
     const snapConfigs = {
-      top:    [0,  dist, 0],
-      bottom: [0, -dist, 0],
-      front:  [0,  0,    dist],
-      back:   [0,  0,   -dist],
-      right:  [dist, 0,  0],
-      left:   [-dist, 0, 0],
+      top:    [0,  dist,    0.001],  // tiny Z offset avoids north-pole lock
+      bottom: [0, -dist,   0.001],  // tiny Z offset avoids south-pole lock
+      front:  [0,  0,      dist],
+      back:   [0,  0,     -dist],
+      right:  [dist, 0,    0],
+      left:   [-dist, 0,   0],
     };
 
     const pos = snapConfigs[view];

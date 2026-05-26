@@ -139,8 +139,13 @@ export class PostProcessingPipeline {
     /** Pre-built output nodes for live AO output-mode switching */
     this._tslNodes = null;
 
-    /** Prevents reentrant offscreen-compile calls when multiple children are added at once */
-    this._compilePending = false;
+    /**
+     * When true, a direct renderer.render() is injected before the next TSL
+     * render to compile any uncompiled materials (new objects, gizmo handles).
+     * The TSL pipeline clears and overwrites it in the same frame, so there
+     * is no user-visible ghost or flash.
+     */
+    this._needsTslCompile = false;
 
     this._onVpReady           = this._onVpReady.bind(this);
     this._onRendererChanged   = this._onRendererChanged.bind(this);
@@ -281,8 +286,8 @@ export class PostProcessingPipeline {
   }
 
   _disposeTslPipeline() {
-    this._tslPipelineActive = false;
-    this._compilePending = false;
+    this._tslPipelineActive  = false;
+    this._needsTslCompile    = false;
     // Remove scene listener added during _buildWebGPUPipeline
     this.engine.scene?.removeEventListener('childadded', this._onSceneChildAdded);
     if (this._tslAoPass) {
@@ -365,13 +370,11 @@ export class PostProcessingPipeline {
 
       this._tslPipeline.outputNode = outputNode;
 
-      // Pre-warm: render the scene once so all MeshStandardMaterial programs
-      // are compiled in the correct NodeMaterial context.  The TSL RenderPipeline
-      // uses cached compiled programs — without this call newly-added objects
-      // remain invisible on the first frame.  The direct render writes one raw
-      // frame to the canvas but the TSL pipeline overwrites it on the very
-      // next animation frame, so the flash is imperceptible in practice.
-      renderer.render(scene, camera);
+      // Flag a compile pass on the first tick so all scene materials are
+      // compiled in the correct NodeMaterial context.  The compile render
+      // happens inside _onTick right before TSL, which then clears and
+      // overwrites it — zero visual artifact.
+      this._needsTslCompile = true;
 
       // Subscribe so objects added AFTER the pipeline is built are compiled
       // before the TSL pipeline tries to render them.
@@ -402,30 +405,13 @@ export class PostProcessingPipeline {
   }
 
   /**
-   * Schedules a deferred direct render that compiles any uncompiled material
-   * programs (new objects, newly-visible gizmo handles, etc.) in the correct
-   * NodeMaterial context so the TSL RenderPipeline can display them.
-   * Coalesces multiple rapid calls into a single compile using _compilePending.
+   * Mark that a compile pass is needed on the next tick.
+   * The compile render (renderer.render) runs inside _onTick immediately
+   * before _tslPipeline.render(), which clears and overwrites it in the same
+   * animation frame — camera position is identical so there is no ghost.
    */
   _scheduleTslCompile() {
-    if (this._compilePending) return;
-    this._compilePending = true;
-    // Defer past the current call stack so the renderer is not in the middle
-    // of a frame when we call render().
-    setTimeout(() => {
-      this._compilePending = false;
-      if (!this._tslPipelineActive) return;
-      const renderer = this.engine.rendererManager?.renderer;
-      const scene    = this.engine.scene;
-      const camera   = this.engine.camera;
-      if (!renderer || !scene || !camera) return;
-      // A direct render compiles the new material in the correct NodeMaterial
-      // context.  The compiled programs are cached and reused by the TSL
-      // RenderPipeline, so the object becomes visible on the very next frame.
-      // This writes one raw frame to the canvas, but the TSL pipeline
-      // overwrites it within the same vsync, so the flash is imperceptible.
-      renderer.render(scene, camera);
-    }, 0);
+    this._needsTslCompile = true;
   }
 
   // ─── Event handlers ───────────────────────────────────────────────────────
@@ -711,8 +697,16 @@ export class PostProcessingPipeline {
 
   _onTick() {
     // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
-    if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {
-      try {
+    if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {      // If new materials need compiling, run a direct render FIRST.
+      // The TSL pipeline renders immediately after with autoClear=true,
+      // erasing the direct render in the same animation frame — no ghost.
+      if (this._needsTslCompile) {
+        this._needsTslCompile = false;
+        const renderer = this.engine.rendererManager?.renderer;
+        const scene    = this.engine.scene;
+        const camera   = this.engine.camera;
+        if (renderer && scene && camera) renderer.render(scene, camera);
+      }      try {
         this._tslPipeline.render();
       } catch (err) {
         console.error('[PostProcessingPipeline] TSL pipeline render error — disabling:', err);
