@@ -147,6 +147,12 @@ export class PostProcessingPipeline {
      */
     this._needsTslCompile = false;
 
+    /** @type {BloomNode|null} — TSL bloom node for WebGPU; live param updates via .strength/.radius/.threshold */
+    this._tslBloomNode = null;
+
+    /** Bloom parameters persisted across pipeline rebuilds (shared by WebGL & TSL) */
+    this._bloomParams = { enabled: true, strength: 0.8, radius: 0.4, threshold: 0.85 };
+
     this._onVpReady           = this._onVpReady.bind(this);
     this._onRendererChanged   = this._onRendererChanged.bind(this);
     this._onTick              = this._onTick.bind(this);
@@ -288,6 +294,7 @@ export class PostProcessingPipeline {
   _disposeTslPipeline() {
     this._tslPipelineActive  = false;
     this._needsTslCompile    = false;
+    this._tslBloomNode       = null;
     // Remove scene listener added during _buildWebGPUPipeline
     this.engine.scene?.removeEventListener('childadded', this._onSceneChildAdded);
     if (this._tslAoPass) {
@@ -308,6 +315,7 @@ export class PostProcessingPipeline {
 
   async _buildWebGPUPipeline(renderer, scene, camera) {
     this._tslPipelineActive = false;
+    this._tslBloomNode = null;
     try {
       const webgpuMod = await import('three/webgpu');
       const { RenderPipeline, TSL } = webgpuMod;
@@ -315,11 +323,15 @@ export class PostProcessingPipeline {
         pass, mrt, normalView, output,
         vec3, vec4,
       } = TSL;
-      const { ao } = await import('three/addons/tsl/display/GTAONode.js');
+      const [{ ao }, { bloom: bloomFn }] = await Promise.all([
+        import('three/addons/tsl/display/GTAONode.js'),
+        import('three/addons/tsl/display/BloomNode.js'),
+      ]);
 
       this._tslPipeline = new RenderPipeline(renderer);
 
       let outputNode;
+      let sceneColorNode; // node representing scene colour, passed to bloom
 
       if (this._aoEnabled && this._aoType === 'ao_webgpu') {
         // ── Single scene pass with MRT: colour + view-space normals ──────────
@@ -366,6 +378,7 @@ export class PostProcessingPipeline {
         };
 
         const outputMode = p.output ?? 0;
+        sceneColorNode = scenePassColor;
         outputNode = outputMode === 4 ? aoOnlyNode : compositeNode;
       } else {
         // AO disabled — render scene directly, no post-processing.
@@ -374,7 +387,18 @@ export class PostProcessingPipeline {
         // breaks graph traversal and produces a black viewport.
         const scenePass = pass(scene, camera);
         this._tslNodes  = { sceneOnly: scenePass };
+        sceneColorNode  = scenePass;
         outputNode      = scenePass;
+      }
+
+      // ── Bloom ──────────────────────────────────────────────────────────────
+      // Always build the bloom node so enabling/disabling is live via
+      // this._tslBloomNode.strength.value without a pipeline rebuild.
+      {
+        const bp = this._bloomParams;
+        const initStrength = (bp.enabled !== false) ? (bp.strength ?? 0.8) : 0;
+        this._tslBloomNode = bloomFn(sceneColorNode, initStrength, bp.radius ?? 0.4, bp.threshold ?? 0.85);
+        outputNode = outputNode.add(this._tslBloomNode);
       }
 
       this._tslPipeline.outputNode = outputNode;
@@ -467,7 +491,8 @@ export class PostProcessingPipeline {
   get pipelineEnabled() { return this._pipelineEnabled; }
   set pipelineEnabled(v) {
     this._pipelineEnabled = !!v;
-    this.engine.setPipelineActive(!!v && !!this._composer);
+    // In WebGPU mode _composer is null — use _tslPipelineActive instead.
+    this.engine.setPipelineActive(!!v && (!!this._composer || this._tslPipelineActive));
   }
 
   /**
@@ -742,7 +767,9 @@ export class PostProcessingPipeline {
       if (this._needsTslCompile) {
         this._needsTslCompile = false;
         if (renderer && scene && camera) {
-          // Allocate a tiny offscreen render target on first use
+          // Allocate a tiny offscreen render target on first use.
+          // WebGLRenderTarget from three.module uses duck-typed interface that
+          // the WebGPU renderer (forceWebGL) accepts — no instanceof check.
           if (!this._compileRT) {
             this._compileRT = new THREE.WebGLRenderTarget(1, 1);
           }
@@ -783,7 +810,12 @@ export class PostProcessingPipeline {
         if (bg?.isColor) {
           renderer.setClearColor(bg, 1);
         } else {
-          renderer.setClearColor(0x000000, 1);
+          // No solid background — clear to transparent so empty canvas areas
+          // (including the ViewHelper gizmo background) show the page CSS
+          // background instead of an opaque black box.
+          // NB: renderer.clear() runs BEFORE _tslPipeline.render(), so the
+          // previous frame is always fully wiped — no ghosting occurs here.
+          renderer.setClearColor(0x000000, 0);
         }
 
         // Explicitly clear the canvas before the TSL composite quad draws.
@@ -929,7 +961,26 @@ export class PostProcessingPipeline {
         if (this.aoPass && prop in this.aoPass) this.aoPass[prop] = value;
         break;
       case 'bloom':
+        // WebGL UnrealBloomPass
         if (this.bloomPass && prop in this.bloomPass) this.bloomPass[prop] = value;
+        // TSL BloomNode (WebGPU) — live uniform updates without pipeline rebuild
+        if (this._tslBloomNode) {
+          if (prop === 'enabled') {
+            this._bloomParams.enabled = value;
+            this._tslBloomNode.strength.value = value
+              ? (this._bloomParams.strength ?? 0.8)
+              : 0;
+          } else if (prop === 'strength') {
+            this._bloomParams.strength = value;
+            if (this._bloomParams.enabled !== false) this._tslBloomNode.strength.value = value;
+          } else if (prop === 'radius') {
+            this._bloomParams.radius = value;
+            this._tslBloomNode.radius.value = value;
+          } else if (prop === 'threshold') {
+            this._bloomParams.threshold = value;
+            this._tslBloomNode.threshold.value = value;
+          }
+        }
         break;
     }
   }

@@ -482,6 +482,14 @@ export class VolumetricClouds {
   _createMesh() {
     const scene = this._vpe?.scene;
     if (!scene) { console.warn('[VolumetricClouds] No scene — skipping create.'); return; }
+
+    // VolumetricClouds uses ShaderMaterial (GLSL) which is not compatible with WebGPU.
+    const renderer = this._vpe?.rendererManager?.renderer;
+    if (renderer?.isWebGPURenderer) {
+      console.warn('[VolumetricClouds] ShaderMaterial clouds are not supported in WebGPU mode. Clouds disabled.');
+      return;
+    }
+
     this._destroyMesh();
 
     const mat = new THREE.ShaderMaterial({
@@ -522,6 +530,7 @@ export class VolumetricClouds {
   _createShadowMesh() {
     const scene = this._vpe?.scene;
     if (!scene) return;
+    if (this._vpe?.rendererManager?.renderer?.isWebGPURenderer) return;
     this._destroyShadowMesh();
 
     const mat = new THREE.ShaderMaterial({

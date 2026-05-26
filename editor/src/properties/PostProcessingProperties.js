@@ -36,19 +36,29 @@ export class PostProcessingProperties {
       return root;
     }
 
-    this._buildEffectComposerSection(root);
-    this._buildBloomSection(root);
-    this._buildOutlineSection(root);
-    this._buildAmbientOcclusionSection(root);
+    const isWebGPU = rendType === 'webgpu';
+
+    this._buildEffectComposerSection(root, isWebGPU);
+    this._buildBloomSection(root, isWebGPU);
+    this._buildOutlineSection(root, isWebGPU);
+    this._buildAmbientOcclusionSection(root, isWebGPU);
     this._buildOutputSection(root);
 
     return root;
   }
   // ── Effect Composer ────────────────────────────────────────────────────────────
 
-  _buildEffectComposerSection(root) {
+  _buildEffectComposerSection(root, isWebGPU) {
     const { el, body } = section('Effect Composer');
     root.appendChild(el);
+
+    if (isWebGPU) {
+      const note = document.createElement('div');
+      note.style.cssText = 'padding:8px 12px;font-size:11px;color:var(--text-secondary,#888);line-height:1.5;';
+      note.textContent = 'Effect Composer uses WebGL. Not available in WebGPU mode.';
+      body.appendChild(note);
+      return;
+    }
 
     // Always look up the pipeline fresh so changes made after a resize/rebuild
     // still reach the live EffectComposer instance.
@@ -65,10 +75,62 @@ export class PostProcessingProperties {
   }
   // ── Bloom ─────────────────────────────────────────────────────────────────
 
-  _buildBloomSection(root) {
-    const { el, body } = section('Bloom (Unreal)');
+  _buildBloomSection(root, isWebGPU) {
+    const { el, body } = section(isWebGPU ? 'Bloom (TSL)' : 'Bloom (Unreal)');
     root.appendChild(el);
 
+    // TSL bloom path (WebGPU)
+    if (isWebGPU) {
+      const getPP = () => window.__cyco?.viewportEngine?.postProcessing;
+      const getParams = () => getPP()?._bloomParams ?? {};
+
+      const dispatch = (overrides) => {
+        const p = getParams();
+        this._dispatch('cyco-pp-bloom-change', { ...p, ...overrides });
+      };
+
+      const enabledCb = checkbox({
+        checked: getParams().enabled !== false,
+        onChange: (v) => {
+          const pp = getPP();
+          if (pp) window.dispatchEvent(new CustomEvent('cyco-pp-settings', { detail: { pass: 'bloom', prop: 'enabled', value: v } }));
+          dispatch({ enabled: v });
+        },
+      });
+      body.appendChild(row('Enabled', enabledCb));
+
+      const threshSlider = slider({
+        value: getParams().threshold ?? 0.85, min: 0, max: 3, step: 0.01,
+        onChange: (v) => {
+          window.dispatchEvent(new CustomEvent('cyco-pp-settings', { detail: { pass: 'bloom', prop: 'threshold', value: v } }));
+          dispatch({ threshold: v });
+        },
+      });
+      body.appendChild(row('Threshold', threshSlider.el));
+
+      const strengthSlider = slider({
+        value: getParams().strength ?? 0.8, min: 0, max: 5, step: 0.01,
+        onChange: (v) => {
+          window.dispatchEvent(new CustomEvent('cyco-pp-settings', { detail: { pass: 'bloom', prop: 'strength', value: v } }));
+          dispatch({ strength: v });
+        },
+      });
+      body.appendChild(row('Strength', strengthSlider.el));
+
+      const radiusSlider = slider({
+        value: getParams().radius ?? 0.4, min: 0, max: 1, step: 0.01,
+        onChange: (v) => {
+          window.dispatchEvent(new CustomEvent('cyco-pp-settings', { detail: { pass: 'bloom', prop: 'radius', value: v } }));
+          dispatch({ radius: v });
+        },
+      });
+      body.appendChild(row('Radius', radiusSlider.el));
+
+      this._bloomSliders = { threshold: threshSlider, strength: strengthSlider, radius: radiusSlider };
+      return;
+    }
+
+    // WebGL UnrealBloomPass path
     // Fresh lookup every time so closures always hit the live pass after any rebuild.
     const getBloom = () => window.__cyco?.viewportEngine?.postProcessing?.bloomPass;
     const bloom = getBloom();
@@ -119,9 +181,17 @@ export class PostProcessingProperties {
 
   // ── Outline ───────────────────────────────────────────────────────────────
 
-  _buildOutlineSection(root) {
+  _buildOutlineSection(root, isWebGPU) {
     const { el, body } = section('Outline');
     root.appendChild(el);
+
+    if (isWebGPU) {
+      const note = document.createElement('div');
+      note.style.cssText = 'padding:8px 12px;font-size:11px;color:var(--text-secondary,#888);line-height:1.5;';
+      note.textContent = 'Outline pass uses WebGL. Not available in WebGPU mode.';
+      body.appendChild(note);
+      return;
+    }
 
     const getOutline = () => window.__cyco?.viewportEngine?.postProcessing?.outlinePass;
     const outlinePass = getOutline();
@@ -154,7 +224,7 @@ export class PostProcessingProperties {
 
   // ── Ambient Occlusion ─────────────────────────────────────────────────────
 
-  _buildAmbientOcclusionSection(root) {
+  _buildAmbientOcclusionSection(root, isWebGPU) {
     const { el, body } = section('Ambient Occlusion');
     root.appendChild(el);
 
@@ -172,6 +242,7 @@ export class PostProcessingProperties {
     body.appendChild(row('Enabled', enabledCb));
 
     // ─ Type dropdown ───────────────────────────────────────────────────────
+    const defaultAoType = isWebGPU ? 'ao_webgpu' : 'gtao';
     const typeSelect = select({
       options: [
         ['gtao',      'GTAO (WebGL)'],
@@ -179,7 +250,7 @@ export class PostProcessingProperties {
         ['ssao',      'SSAO (WebGL)'],
         ['ao_webgpu', 'AO (WebGPU)'],
       ],
-      value: getPP()?._aoType ?? 'gtao',
+      value: getPP()?._aoType ?? defaultAoType,
       onChange: (v) => {
         const pp = getPP();
         if (!pp) return;

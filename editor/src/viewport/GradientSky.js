@@ -110,7 +110,7 @@ void main() {
 
 const SAMPLES = 256;
 
-function buildGradientTex(colorStops) {
+function buildGradientTex(colorStops, existing) {
   const sorted = [...colorStops].sort((a, b) => a.pos - b.pos);
   const data   = new Uint8Array(SAMPLES * 4); // RGBA
 
@@ -180,6 +180,11 @@ function buildGradientTex(colorStops) {
     data[i * 4 + 3] = 255;
   }
 
+  if (existing) {
+    existing.image.data.set(data);
+    existing.needsUpdate = true;
+    return existing;
+  }
   const tex = new THREE.DataTexture(data, SAMPLES, 1, THREE.RGBAFormat);
   tex.needsUpdate = true;
   return tex;
@@ -202,6 +207,8 @@ export class GradientSky {
     this._vpe       = viewportEngine;
     this._mesh      = null;
     this._gradientTex = null;
+    this._tslUniforms = null;
+    this._isWebGPU  = false;
     this._sunLight  = null;
     this._lensflare = null;
     this._enabled   = false;
@@ -256,6 +263,19 @@ export class GradientSky {
     this._enabled = !!v;
     if (v) this._createMesh();
     else   this._destroyMesh();
+  }
+
+  /** Dispatch to WebGL or WebGPU mesh creation based on the active renderer. */
+  _createMesh() {
+    const renderer = this._vpe?.rendererManager?.renderer;
+    if (renderer?.isWebGPURenderer) {
+      this._createMeshWebGPU().catch(err => {
+        console.error('[GradientSky] WebGPU sky failed, falling back to WebGL:', err);
+        this._createMeshWebGL();
+      });
+    } else {
+      this._createMeshWebGL();
+    }
   }
 
   /**
@@ -385,13 +405,33 @@ export class GradientSky {
   }
 
   _rebuildGradientTex() {
-    this._gradientTex?.dispose();
-    this._gradientTex = buildGradientTex(this._p.colorStops);
+    // Update in-place when texture already exists — the TSL TextureNode keeps the same
+    // DataTexture reference, so GPU data is refreshed automatically via needsUpdate.
+    this._gradientTex = buildGradientTex(this._p.colorStops, this._gradientTex ?? undefined);
+    // Sync WebGL ShaderMaterial uniform (no-op for WebGPU path)
     const u = this._mesh?.material?.uniforms;
-    if (u) u.uGradientTex.value = this._gradientTex;
+    if (u?.uGradientTex) u.uGradientTex.value = this._gradientTex;
   }
 
   _pushUniforms() {
+    if (this._tslUniforms) {
+      // WebGPU path: update TSL UniformNode values
+      const t = this._tslUniforms;
+      t.uSkyBrightness.value    = this._skyBrightness();
+      t.uExposure.value         = this._p.exposure;
+      t.uSaturation.value       = this._p.saturation;
+      t.uContrast.value         = this._p.contrast;
+      t.uSunDir.value.copy(this._p.sunDir);
+      t.uSunColor.value.copy(this._p.sunColor);
+      t.uSunVisible.value       = this._sunVisible();
+      t.uSunGlowStrength.value  = this._p.sunGlowStrength;
+      t.uMoonDir.value.copy(this._p.moonDir);
+      t.uMoonColor.value.copy(this._p.moonColor);
+      t.uMoonVisible.value      = this._moonVisible();
+      t.uMoonGlowStrength.value = this._p.moonGlowStrength;
+      return;
+    }
+    // WebGL path: update ShaderMaterial uniforms
     const u = this._mesh?.material?.uniforms;
     if (!u) return;
 
@@ -419,7 +459,7 @@ export class GradientSky {
     this._sunLight.color.set('#fff8e7');
   }
 
-  _createMesh() {
+  _createMeshWebGL() {
     const scene = this._vpe?.scene;
     if (!scene) return;
     this._destroyMesh();
@@ -473,6 +513,108 @@ export class GradientSky {
     if (this._lensflare) scene.add(this._lensflare);
   }
 
+  /** Create the sky mesh using TSL NodeMaterial for WebGPU renderers. */
+  async _createMeshWebGPU() {
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+    this._destroyMesh();
+    this._isWebGPU = true;
+
+    const webgpuMod = await import('three/webgpu');
+    const { MeshNodeMaterial } = webgpuMod;
+    const {
+      Fn, vec2, vec3, vec4, float, clamp, mix, smoothstep, acos,
+      positionLocal, texture, uniform,
+    } = webgpuMod.TSL;
+
+    if (!this._gradientTex) this._rebuildGradientTex();
+
+    // ── TSL uniform nodes ─────────────────────────────────────────────────
+    const uSkyBrightness    = uniform(this._skyBrightness());
+    const uExposure         = uniform(this._p.exposure);
+    const uSaturation       = uniform(this._p.saturation);
+    const uContrast         = uniform(this._p.contrast);
+    const uSunDir           = uniform(this._p.sunDir.clone());
+    const uSunInner         = uniform(SUN_INNER);
+    const uSunOuter         = uniform(SUN_OUTER);
+    const uSunColor         = uniform(this._p.sunColor.clone());
+    const uSunVisible       = uniform(this._sunVisible());
+    const uSunGlowStrength  = uniform(this._p.sunGlowStrength);
+    const uMoonDir          = uniform(this._p.moonDir.clone());
+    const uMoonInner        = uniform(MOON_INNER);
+    const uMoonOuter        = uniform(MOON_OUTER);
+    const uMoonColor        = uniform(this._p.moonColor.clone());
+    const uMoonVisible      = uniform(this._moonVisible());
+    const uMoonGlowStrength = uniform(this._p.moonGlowStrength);
+
+    this._tslUniforms = {
+      uSkyBrightness, uExposure, uSaturation, uContrast,
+      uSunDir, uSunInner, uSunOuter, uSunColor, uSunVisible, uSunGlowStrength,
+      uMoonDir, uMoonInner, uMoonOuter, uMoonColor, uMoonVisible, uMoonGlowStrength,
+    };
+
+    // Capture gradient texture by reference — in-place updates via needsUpdate
+    // are automatically picked up by the TextureNode on the next render frame.
+    const gradTex = this._gradientTex;
+
+    const skyColorNode = Fn(() => {
+      const dir    = positionLocal.normalize();
+      // Map y [-1,+1] → UV [0,1]; clamp away from border pixels
+      const skyT   = dir.y.mul(0.5).add(0.5).clamp(0.001, 0.999);
+      const skyCol = texture(gradTex, vec2(skyT, float(0.5))).rgb.mul(uSkyBrightness).toVar();
+
+      // ── Sun (contributions scale to zero when uSunVisible = 0) ──────────
+      const sunDot  = dir.dot(uSunDir.normalize());
+      const sunAng  = acos(sunDot.clamp(-1.0, 1.0));
+      const sunGlow = sunAng.negate().mul(5.0).exp().mul(uSunGlowStrength).mul(uSunVisible);
+      skyCol.addAssign(uSunColor.mul(sunGlow).mul(0.5));
+      const sunDisc = smoothstep(uSunOuter, uSunInner, sunDot);
+      skyCol.assign(mix(skyCol, uSunColor.min(vec3(1.0)), sunDisc.mul(uSunVisible)));
+
+      // ── Moon ─────────────────────────────────────────────────────────────
+      const moonDot  = dir.dot(uMoonDir.normalize());
+      const moonAng  = acos(moonDot.clamp(-1.0, 1.0));
+      const moonGlow = moonAng.negate().mul(8.0).exp().mul(uMoonGlowStrength).mul(uMoonVisible);
+      skyCol.addAssign(uMoonColor.mul(moonGlow));
+      const moonDisc = smoothstep(uMoonOuter, uMoonInner, moonDot);
+      skyCol.assign(mix(skyCol, uMoonColor, moonDisc.mul(uMoonVisible)));
+
+      // ── Contrast (pivot at 0.5) ───────────────────────────────────────────
+      skyCol.assign(skyCol.sub(0.5).mul(uContrast).add(0.5).clamp(0.0, 2.0));
+
+      // ── Saturation ────────────────────────────────────────────────────────
+      const lum = skyCol.dot(vec3(0.299, 0.587, 0.114));
+      skyCol.assign(mix(vec3(lum), skyCol, uSaturation).max(vec3(0.0)));
+
+      return vec4(skyCol.mul(uExposure), 1.0);
+    })();
+
+    const material = new MeshNodeMaterial({
+      side:       THREE.BackSide,
+      depthTest:  false,
+      depthWrite: false,
+    });
+    material.colorNode = skyColorNode;
+
+    this._mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(450000, 32, 16),
+      material
+    );
+    this._mesh.name = '__cyco_gradient_sky';
+    this._mesh.renderOrder = -1;
+    this._mesh.raycast = () => {};
+    this._mesh.userData._isHelper = true;
+
+    const cam = this._vpe?.camera;
+    if (cam) this._mesh.position.copy(cam.position);
+
+    // Lens flare (WebGL addon — skip gracefully in WebGPU context)
+    try { this._createLensflare(); this._updateLensflare(); } catch (_) {}
+
+    scene.add(this._mesh);
+    if (this._lensflare) try { scene.add(this._lensflare); } catch (_) {}
+  }
+
   _destroyMesh() {
     const scene = this._vpe?.scene;
     if (this._mesh) {
@@ -487,6 +629,8 @@ export class GradientSky {
     }
     this._gradientTex?.dispose();
     this._gradientTex = null;
+    this._tslUniforms = null;
+    this._isWebGPU    = false;
   }
 
   // ── Lens flare ────────────────────────────────────────────────────────────

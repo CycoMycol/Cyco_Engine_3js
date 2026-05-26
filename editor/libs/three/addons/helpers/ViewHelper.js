@@ -202,21 +202,7 @@ class ViewHelper extends Object3D {
 			renderer.getViewport( viewport );
 			renderer.setViewport( x, y, dim, dim );
 
-			// When using WebGPURenderer, renderer.render() starts with a full-canvas
-			// background pass before drawing objects.  Temporarily make the clear
-			// transparent so that pass doesn't overwrite the previously rendered scene.
-			const _prevClearColor = new Color();
-			const _prevClearAlpha = renderer.getClearAlpha();
-			renderer.getClearColor( _prevClearColor );
-			if ( renderer.isWebGPURenderer ) {
-				renderer.setClearColor( 0x000000, 0 );
-			}
-
 			renderer.render( this, orthoCamera );
-
-			if ( renderer.isWebGPURenderer ) {
-				renderer.setClearColor( _prevClearColor, _prevClearAlpha );
-			}
 
 			renderer.setViewport( viewport.x, viewport.y, viewport.z, viewport.w );
 

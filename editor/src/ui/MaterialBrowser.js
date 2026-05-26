@@ -115,6 +115,21 @@ export class MaterialBrowser {
     searchRow.appendChild(searchToggle);
     searchRow.appendChild(this._searchInput);
     searchRow.appendChild(this._applyBtn);
+
+    // Renderer mode badge
+    const updateBadge = () => {
+      const isWebGPU = window.__cyco?.rendererManager?.activeType === 'webgpu';
+      if (!this._rendererBadge) {
+        this._rendererBadge = document.createElement('span');
+        this._rendererBadge.style.cssText = 'background:#c0392b;color:#fff;font-size:9px;padding:2px 5px;border-radius:3px;flex-shrink:0;font-weight:bold;letter-spacing:0.05em;white-space:nowrap;';
+        searchRow.appendChild(this._rendererBadge);
+      }
+      this._rendererBadge.textContent = isWebGPU ? 'WebGPU' : 'WebGL';
+      this._rendererBadge.style.background = isWebGPU ? '#1a6e3c' : '#555';
+    };
+    updateBadge();
+    window.addEventListener('cyco-renderer-changed', updateBadge);
+
     root.appendChild(searchRow);
 
     // Category tabs
