@@ -73,12 +73,21 @@ export class RendererManager {
     // forceWebGL: true uses the WebGL2 backend, which is required for EffectComposer
     // compatibility (WebGLRenderTarget, post-processing passes, sky ShaderMaterials).
     // NodeMaterial / TSL support is backend-agnostic and works identically on WebGL2.
-    const renderer = new WebGPURenderer({ antialias: true, forceWebGL: true });
+    // antialias: false — the TSL post-processing pipeline handles AA externally.
+    // Keeping MSAA enabled on the default canvas framebuffer causes the depth-clear
+    // that ViewHelper issues (renderer.clearDepth) to trigger an MSAA resolve that
+    // overwrites the previously rendered TSL scene on the canvas.
+    const renderer = new WebGPURenderer({ antialias: false, forceWebGL: true, preserveDrawingBuffer: true });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     await renderer.init();
+    // WebGPURenderer defaults clearAlpha=0 (transparent). An opaque clear is
+    // required so that renderer.clear() before the TSL composite blit doesn't
+    // leave alpha=0 in the canvas — which would let the previous frame bleed
+    // through any semi-transparent pixels in the scene pass (ghosting / onion-skin).
+    renderer.setClearColor(0x000000, 1);
     return renderer;
   }
 

@@ -206,6 +206,10 @@ export class ViewportEngine {
       exposure, saturation, contrast,
       lensflareEnabled, lensflareSize, lensflareOpacity,
     } = detail ?? {};
+    console.log(
+      `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  elevation=${elevation}°  azimuth=${azimuth}°` +
+      `  exposure=${exposure ?? 'n/a'}  saturation=${saturation ?? 'n/a'}  showSun=${showSun}  showMoon=${showMoon}`
+    );
     if (!this.scene) return;
 
     if (!enabled) {
@@ -262,6 +266,9 @@ export class ViewportEngine {
   _onFogChange({ detail } = {}) {
     if (!this.scene) return;
     const { type, color = '#aaaaaa', near = 1, far = 1000, density = 0.002 } = detail ?? {};
+    console.log(
+      `[CYCO:ENV] cyco-fog-change  type=${type ?? 'none'}  color=${color}  near=${near}  far=${far}  density=${density}`
+    );
     const c = new THREE.Color(color);
     if (type === 'linear') {
       this.scene.fog = new THREE.Fog(c, near, far);
@@ -275,6 +282,7 @@ export class ViewportEngine {
   /** Load and apply an HDR/EXR environment map. */
   async _onEnvMapChange({ detail } = {}) {
     const { url, isHDR } = detail ?? {};
+    console.log(`[CYCO:ENV] cyco-env-map-change  url=${url}  isHDR=${isHDR}`);
     if (!url || !this.scene) return;
     let renderer = this.rendererManager.renderer;
     if (!renderer) return;
@@ -282,6 +290,7 @@ export class ViewportEngine {
     renderer = renderer._webglRenderer ?? renderer;
     if (!renderer.isWebGLRenderer) {
       console.warn('[ViewportEngine] HDRI env map not supported with current renderer — switch to WebGL first.');
+      console.log('[CYCO:ENV] env map SKIP — not a WebGLRenderer');
       return;
     }
     const pmrem = new THREE.PMREMGenerator(renderer);
@@ -297,8 +306,10 @@ export class ViewportEngine {
       this.scene.environment = envMap;
       this._lastEnvMap = envMap;
       texture.dispose();
+      console.log('[CYCO:ENV] env map loaded ✓  scene.environment set');
     } catch (e) {
       console.warn('[ViewportEngine] env map load failed:', e);
+      console.log('[CYCO:ENV] env map FAILED ✗  ' + e.message);
     } finally {
       pmrem.dispose();
     }
@@ -307,6 +318,7 @@ export class ViewportEngine {
   /** Toggle whether the env map is shown as scene background. */
   _onEnvBgToggle({ detail } = {}) {
     if (!this.scene) return;
+    console.log(`[CYCO:ENV] cyco-env-background-toggle  enabled=${detail?.enabled}  hasLastEnvMap=${!!this._lastEnvMap}`);
     this.scene.background = detail?.enabled ? (this._lastEnvMap ?? null) : null;
   }
 
@@ -317,6 +329,10 @@ export class ViewportEngine {
   _onBackgroundChange({ detail } = {}) {
     if (!this.scene) return;
     const { type, color, topColor, horizonColor, bottomColor } = detail ?? {};
+    console.log(
+      `[CYCO:ENV] cyco-background-change  type=${type}  color=${color ?? 'n/a'}` +
+      `  topColor=${topColor ?? 'n/a'}  horizonColor=${horizonColor ?? 'n/a'}  bottomColor=${bottomColor ?? 'n/a'}`
+    );
 
     // Remove sky if switching away from it
     if (type !== 'sky') {
@@ -363,6 +379,7 @@ export class ViewportEngine {
 
   /** Restore the built-in RoomEnvironment IBL preset. */
   _onEnvPreset({ detail } = {}) {
+    console.log(`[CYCO:ENV] cyco-env-preset  preset=${detail?.preset}`);
     if (detail?.preset === 'room') {
       this._setupIBL();
     }
@@ -473,17 +490,22 @@ export class ViewportEngine {
    * MUST call pmrem.dispose() after use — holds WebGL render targets.
    */
   _setupIBL() {
+    console.log('[CYCO:ENV] _setupIBL() — building RoomEnvironment IBL');
     let renderer = this.rendererManager.renderer;
     if (!renderer) return;
     // PathTracingRenderer wraps an inner WebGLRenderer — use that for IBL
     if (renderer._webglRenderer) renderer = renderer._webglRenderer;
     // PMREMGenerator requires a real WebGLRenderer (not WebGPU/SVG/CSS3D)
-    if (!renderer.isWebGLRenderer) return;
+    if (!renderer.isWebGLRenderer) {
+      console.log('[CYCO:ENV] _setupIBL() SKIP — not a WebGLRenderer');
+      return;
+    }
     const pmrem = new THREE.PMREMGenerator(renderer);
     pmrem.compileEquirectangularShader();
     const envTexture = pmrem.fromScene(new RoomEnvironment()).texture;
     pmrem.dispose(); // prevents GPU memory leak
     this.scene.environment = envTexture;
+    console.log('[CYCO:ENV] _setupIBL() done — scene.environment set  envIntensity=' + this.scene.environmentIntensity);
   }
 
   _buildControls() {
@@ -506,6 +528,34 @@ export class ViewportEngine {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
     };
+
+    // ── Debug: orbit event listeners ─────────────────────────────────────────
+    let _orbitCount = 0;
+    const _camStr = () => {
+      const c = this.camera;
+      const t = this.controls.target;
+      const polar   = (this.controls.getPolarAngle?.()    ?? 0) * 180 / Math.PI;
+      const azimuth = (this.controls.getAzimuthalAngle?.() ?? 0) * 180 / Math.PI;
+      return `cam=(${c.position.x.toFixed(2)},${c.position.y.toFixed(2)},${c.position.z.toFixed(2)})` +
+             `  target=(${t.x.toFixed(2)},${t.y.toFixed(2)},${t.z.toFixed(2)})` +
+             `  polar=${polar.toFixed(1)}°  azimuth=${azimuth.toFixed(1)}°`;
+    };
+    this.controls.addEventListener('start', () => {
+      _orbitCount = 0;
+      console.log(`%c[CYCO:ORBIT] ▶ START  ${_camStr()}`, 'color:#8f8;font-weight:bold');
+    });
+    this.controls.addEventListener('change', () => {
+      if (window.CYCO_DEBUG_RENDER !== true) return;
+      _orbitCount++;
+      if (_orbitCount % 30 !== 1) return; // throttle — every 30th change event
+      console.log(`%c[CYCO:ORBIT] ↺ change #${_orbitCount}  ${_camStr()}`, 'color:#8f8');
+    });
+    this.controls.addEventListener('end', () => {
+      console.log(
+        `%c[CYCO:ORBIT] ■ END (${_orbitCount} changes)  ${_camStr()}`,
+        'color:#8f8;font-weight:bold'
+      );
+    });
   }
 
   _buildViewHelper() {
@@ -729,6 +779,16 @@ export class ViewportEngine {
     this._timer.update(timestamp);
     const delta = this._timer.getDelta();
 
+    // ── Debug instrumentation ─────────────────────────────────────────────────
+    // Enable with: window.CYCO_DEBUG_RENDER = true
+    // Disable with: window.CYCO_DEBUG_RENDER = false
+    if (!this._dbgFrame) this._dbgFrame = 0;
+    this._dbgFrame++;
+    window._cycoDbgFrame = this._dbgFrame;
+    window._cycoDbgCanvasWrites = 0;
+    const _D = window.CYCO_DEBUG_RENDER === true;
+    // ─────────────────────────────────────────────────────────────────────────
+
     // Focus lerp animation
     if (this._focusAnim) {
       this._tickFocusAnim(delta);
@@ -740,6 +800,59 @@ export class ViewportEngine {
     const renderer = this.rendererManager.renderer;
     if (!renderer || !this.scene || !this.camera) return;
 
+    if (_D) {
+      const rt  = renderer.getRenderTarget();
+      const sz  = new THREE.Vector2();
+      renderer.getSize(sz);
+      const cam = this.camera;
+      console.group(
+        `%c[CYCO:VPE] ──── Frame #${this._dbgFrame} ────`,
+        'color:#fc8;font-weight:bold;font-size:11px'
+      );
+      console.log(
+        `%c  [RENDERER] autoClear=${renderer.autoClear}  clearAlpha=${renderer.clearAlpha}` +
+        `  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}  pixelRatio=${renderer.getPixelRatio()}`,
+        'color:#aaa'
+      );
+      console.log(
+        `%c  [CANVAS]   drawingBuffer=${renderer.domElement.width}×${renderer.domElement.height}` +
+        `  css=${renderer.domElement.offsetWidth}×${renderer.domElement.offsetHeight}` +
+        `  logicalSize=${sz.x.toFixed(0)}×${sz.y.toFixed(0)}`,
+        'color:#aaa'
+      );
+      console.log(
+        `%c  [CAMERA]   pos=(${cam.position.x.toFixed(2)},${cam.position.y.toFixed(2)},${cam.position.z.toFixed(2)})` +
+        `  near=${cam.near}  far=${cam.far}  fov=${cam.fov}`,
+        'color:#aaa'
+      );
+      console.log(
+        `%c  [PIPELINE] _pipelineActive=${this._pipelineActive}  hasContactShadows=${!!this.contactShadows}` +
+        `  hasViewHelper=${!!this.viewHelper}  hasClouds=${!!this.cloudSystem}`,
+        'color:#aaa'
+      );
+      // Per-frame light snapshot — throttled to every 120 frames to avoid flooding
+      if (this._dbgFrame % 120 === 1 && this.scene) {
+        const _lights = [];
+        this.scene.traverse(obj => {
+          if (obj.isLight) {
+            const col = obj.color ? `#${obj.color.getHexString()}` : '';
+            const gnd = obj.groundColor ? ` gnd=#${obj.groundColor.getHexString()}` : '';
+            _lights.push(`${obj.type}(i=${obj.intensity?.toFixed(2)} col=${col}${gnd})`);
+          }
+        });
+        console.log(
+          `%c  [LIGHTS]   count=${_lights.length}  [${_lights.join(' | ')}]`,
+          'color:#aaa'
+        );
+        const sc = this.scene;
+        console.log(
+          `%c  [SCENE]    envIntensity=${sc.environmentIntensity}  bg=${sc.background?.constructor?.name ?? sc.background}` +
+          `  fog=${sc.fog?.constructor?.name ?? 'none'}  objs=${sc.children.length}`,
+          'color:#aaa'
+        );
+      }
+    }
+
     // Volumetric clouds update (time + camera follow)
     this.cloudSystem?.update();
     this.cloudSystem2?.update();
@@ -748,24 +861,95 @@ export class ViewportEngine {
     this.gradientSky?.update();
 
     // Contact shadows — renders depth pass + blur before main frame
+    if (_D && this.contactShadows) {
+      const rt = renderer.getRenderTarget();
+      console.log(
+        `%c  [CONTACT-SHADOWS] update() start  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}`,
+        'color:#aaa'
+      );
+    }
     this.contactShadows?.update(renderer, this.scene);
+    if (_D && this.contactShadows) {
+      const rt = renderer.getRenderTarget();
+      console.log(
+        `%c  [CONTACT-SHADOWS] done  RT after=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}` +
+        `  autoClear after=${renderer.autoClear}`,
+        'color:#aaa'
+      );
+    }
 
     // Dispatch tick event for PostProcessingPipeline, ViewportStats, etc.
+    if (_D) console.log('%c  [TICK-EVENT] → dispatching cyco-vp-tick', 'color:#aaa');
     window.dispatchEvent(new CustomEvent('cyco-vp-tick', { detail: { delta } }));
+    if (_D) {
+      const rt = renderer.getRenderTarget();
+      console.log(
+        `%c  [TICK-EVENT] ← done  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}` +
+        `  autoClear=${renderer.autoClear}  canvasWritesSoFar=${window._cycoDbgCanvasWrites}`,
+        'color:#aaa'
+      );
+    }
 
     // Default render — PostProcessingPipeline overrides this via cyco-vp-tick
     // by calling composer.render() instead. If no pipeline is active, render directly.
     if (!this._pipelineActive) {
+      console.warn(
+        `[CYCO:ANOMALY] Frame #${this._dbgFrame} — _pipelineActive=false, rendering direct to canvas (fallback)!`
+      );
       renderer.render(this.scene, this.camera);
+      window._cycoDbgCanvasWrites++;
     }
 
     // ViewHelper renders on top of main frame — must use autoClear=false so it
     // doesn't wipe the already-rendered scene before drawing its axes widget.
     // SVGRenderer and CSS3DRenderer don't have clearDepth() — skip on those.
     if (this.viewHelper && renderer?.domElement instanceof HTMLCanvasElement) {
+      if (_D) console.log(
+        `%c  [VIEWHELPER] render  autoClear: true→false→render→true  RT=CANVAS`,
+        'color:#aaa'
+      );
       renderer.autoClear = false;
-      this.viewHelper.render(renderer);
+
+      // WebGPURenderer.render() overrides the viewport back to full-canvas for its
+      // internal output pass, causing it to overwrite the previously rendered TSL
+      // scene.  Enable scissor test for the ViewHelper's area so that the full-canvas
+      // output pass only writes within the helper region.
+      if (renderer.isWebGPURenderer) {
+        const dom    = renderer.domElement;
+        const dim    = 128;                                   // ViewHelper CSS size
+        const loc    = this.viewHelper.location || { bottom: 20, right: 20 };
+        const right  = loc.right  ?? 20;
+        const bottom = loc.bottom ?? 20;
+        // WebGPURenderer uses y-from-top for setViewport/setScissor (CSS pixels)
+        const scX = dom.offsetWidth  - dim - right;          // CSS x from left = 152
+        const scY = dom.offsetHeight - dim - bottom;         // CSS y from top  = 92
+        renderer.setScissorTest(true);
+        renderer.setScissor(scX, scY, dim, dim);
+        this.viewHelper.render(renderer);
+        renderer.setScissorTest(false);
+      } else {
+        this.viewHelper.render(renderer);
+      }
+
       renderer.autoClear = true;
+      window._cycoDbgCanvasWrites++;
+    }
+
+    // Always check for anomalies (wrong canvas-write count)
+    const _totalWrites = window._cycoDbgCanvasWrites;
+    if (_totalWrites > 2 || _totalWrites === 0) {
+      console.warn(
+        `[CYCO:ANOMALY] Frame #${this._dbgFrame} — canvas writes=${_totalWrites} (expected 2!)` +
+        `  _pipelineActive=${this._pipelineActive}  hasViewHelper=${!!this.viewHelper}`
+      );
+    }
+
+    if (_D) {
+      const color = _totalWrites !== 2 ? 'color:#f44;font-weight:bold' : 'color:#4f4';
+      const label = _totalWrites === 0 ? '⚠ NO canvas writes — pipeline dead?' :
+                    (_totalWrites !== 2 ? `⚠ ${_totalWrites} writes — ANOMALY!` : '✓ OK');
+      console.log(`%c  [SUMMARY] canvasWrites=${_totalWrites}  ${label}`, color);
+      console.groupEnd();
     }
   }
 
@@ -808,6 +992,16 @@ export class ViewportEngine {
     const { view } = event.detail;
     const dist = this.camera.position.distanceTo(this.controls.target);
 
+    {
+      const c = this.camera;
+      const t = this.controls.target;
+      console.log(
+        `[CYCO:CAMERA] snap to '${view}'  dist=${dist.toFixed(2)}` +
+        `  before: cam=(${c.position.x.toFixed(2)},${c.position.y.toFixed(2)},${c.position.z.toFixed(2)})` +
+        `  target=(${t.x.toFixed(2)},${t.y.toFixed(2)},${t.z.toFixed(2)})`
+      );
+    }
+
     const snapConfigs = {
       top:    [0,  dist,    0.001],  // tiny Z offset avoids north-pole lock
       bottom: [0, -dist,   0.001],  // tiny Z offset avoids south-pole lock
@@ -830,6 +1024,14 @@ export class ViewportEngine {
     this.camera.lookAt(center);
     this.controls.update();
     this.controls.enabled = true;
+
+    {
+      const c = this.camera;
+      console.log(
+        `[CYCO:CAMERA] snap done  cam=(${c.position.x.toFixed(2)},${c.position.y.toFixed(2)},${c.position.z.toFixed(2)})` +
+        `  near=${c.near}  far=${c.far}  fov=${c.fov}`
+      );
+    }
   }
 
   // ─── Renderer swap ───────────────────────────────────────────────────────

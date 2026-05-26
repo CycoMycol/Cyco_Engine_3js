@@ -213,7 +213,13 @@ class Lensflare extends Mesh {
 
 		this.onBeforeRender = function ( renderer, scene, camera ) {
 
-			renderer.getCurrentViewport( viewport );
+			// WebGPURenderer does not expose getCurrentViewport — fall back to canvas size
+			if ( typeof renderer.getCurrentViewport === 'function' ) {
+				renderer.getCurrentViewport( viewport );
+			} else {
+				const _sz = renderer.getSize( new Vector2() );
+				viewport.set( 0, 0, _sz.x, _sz.y );
+			}
 
 			const renderTarget = renderer.getRenderTarget();
 			const type = ( renderTarget !== null ) ? renderTarget.texture.type : UnsignedByteType;

@@ -352,7 +352,9 @@ export class PostProcessingPipeline {
         const aoTex = this._tslAoPass.getTextureNode();
 
         // Post-multiply composite: scene colour × AO value (darkens occluded areas)
-        const compositeNode = scenePassColor.mul(vec4(vec3(aoTex.r), 1));
+        // Force alpha=1 on the output — QuadMesh.render() uses autoClear=false, so any
+        // pixel with alpha<1 would let the previous canvas frame bleed through (ghosting).
+        const compositeNode = vec4(scenePassColor.rgb.mul(vec3(aoTex.r)), 1);
 
         // AO-only diagnostic output (greyscale occlusion map)
         const aoOnlyNode = vec4(vec3(aoTex.r), 1);
@@ -366,7 +368,10 @@ export class PostProcessingPipeline {
         const outputMode = p.output ?? 0;
         outputNode = outputMode === 4 ? aoOnlyNode : compositeNode;
       } else {
-        // AO disabled — render scene directly, no post-processing
+        // AO disabled — render scene directly, no post-processing.
+        // Use scenePass directly (not swizzled) so RenderPipeline can traverse
+        // the PassNode and render the scene.  Swizzling (e.g. scenePass.rgb)
+        // breaks graph traversal and produces a black viewport.
         const scenePass = pass(scene, camera);
         this._tslNodes  = { sceneOnly: scenePass };
         outputNode      = scenePass;
@@ -415,6 +420,7 @@ export class PostProcessingPipeline {
    * animation frame — camera position is identical so there is no ghost.
    */
   _scheduleTslCompile() {
+    console.log('[CYCO:COMPILE] _scheduleTslCompile() — materials will compile offscreen next frame');
     this._needsTslCompile = true;
   }
 
@@ -700,37 +706,132 @@ export class PostProcessingPipeline {
   // ─── Event handlers ───────────────────────────────────────────────────────
 
   _onTick() {
+    // ── Debug instrumentation (reads window.CYCO_DEBUG_RENDER set in ViewportEngine._tick) ──
+    const _D  = window.CYCO_DEBUG_RENDER === true;
+    const _fr = window._cycoDbgFrame || '?';
+    // ─────────────────────────────────────────────────────────────────────────
+
     // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
     if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {
+      const renderer = this.engine.rendererManager?.renderer;
+      const scene    = this.engine.scene;
+      const camera   = this.engine.camera;
+
+      if (_D) {
+        const rt = renderer?.getRenderTarget();
+        console.group(
+          `%c  [CYCO:PP] Frame #${_fr} — TSL pipeline`,
+          'color:#8cf;font-weight:bold'
+        );
+        console.log(
+          `%c    [STATE] autoClear=${renderer?.autoClear}  clearAlpha=${renderer?.clearAlpha}` +
+          `  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}`,
+          'color:#aaa'
+        );
+        console.log(
+          `%c    [STATE] _needsTslCompile=${this._needsTslCompile}` +
+          `  _tslPipelineActive=${this._tslPipelineActive}` +
+          `  _pipelineEnabled=${this._pipelineEnabled}` +
+          `  hasAO=${!!this._tslAoPass}`,
+          'color:#aaa'
+        );
+      }
+
       // If new materials need compiling, run a compile pass into an offscreen
       // render target so it never touches the visible canvas — no ghosting.
       if (this._needsTslCompile) {
         this._needsTslCompile = false;
-        const renderer = this.engine.rendererManager?.renderer;
-        const scene    = this.engine.scene;
-        const camera   = this.engine.camera;
         if (renderer && scene && camera) {
           // Allocate a tiny offscreen render target on first use
           if (!this._compileRT) {
             this._compileRT = new THREE.WebGLRenderTarget(1, 1);
           }
           const prev = renderer.getRenderTarget();
+          console.log(
+            `[CYCO:COMPILE] frame #${_fr} — setRenderTarget(1×1)  prev=${prev ? `RT(${prev.width}×${prev.height})` : 'null(CANVAS)'}  canvas NOT written`
+          );
           renderer.setRenderTarget(this._compileRT);
           renderer.render(scene, camera);
           renderer.setRenderTarget(prev);
+          const _rtAfter = renderer.getRenderTarget();
+          console.log(
+            `[CYCO:COMPILE] done  RT restored=${_rtAfter ? `RT(${_rtAfter.width}×${_rtAfter.height})` : 'null(CANVAS)'}`
+          );
         }
       }
+
+      if (_D) {
+        const rt = renderer?.getRenderTarget();
+        console.log(
+          `%c    [TSL-RENDER] → _tslPipeline.render()  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}` +
+          `  autoClear=${renderer?.autoClear}`,
+          'color:#4cf;font-weight:bold'
+        );
+      }
       try {
+        // Ensure we're targeting the canvas (null RT) before clearing and blitting.
+        // A previous operation (e.g. compile pass, contact-shadows) may have left
+        // the renderer pointing at an offscreen RT — clearing that would leave the
+        // canvas untouched and render transparent-black pixels.
+        renderer.setRenderTarget(null);
+
+        // Sync clear colour to the scene background so the canvas background
+        // matches when the TSL PassNode blits transparent pixels (the PassNode
+        // renders objects but leaves empty-space pixels transparent/alpha=0;
+        // the canvas clear colour fills those holes via src-alpha blending).
+        const bg = scene?.background;
+        if (bg?.isColor) {
+          renderer.setClearColor(bg, 1);
+        } else {
+          renderer.setClearColor(0x000000, 1);
+        }
+
+        // Explicitly clear the canvas before the TSL composite quad draws.
+        // QuadMesh.render() sets autoClear=false internally, so without this any
+        // pixel with alpha<1 in the output would blend with the previous frame.
+        renderer.clear();
         this._tslPipeline.render();
+        window._cycoDbgCanvasWrites = (window._cycoDbgCanvasWrites || 0) + 1;
+        if (_D) {
+          const rt = renderer?.getRenderTarget();
+          console.log(
+            `%c    [TSL-RENDER] ✓ done  RT after=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}` +
+            `  → canvas written (quad blit)`,
+            'color:#4cf'
+          );
+        }
       } catch (err) {
+        if (_D) console.log('%c    [TSL-RENDER] ✗ threw — disabling pipeline', 'color:#f44', err);
         console.error('[PostProcessingPipeline] TSL pipeline render error — disabling:', err);
         this._disposeTslPipeline();
       }
+      if (_D) console.groupEnd();
       return;
     }
 
     // ── WebGL EffectComposer pipeline ─────────────────────────────────────────
-    if (!this._composer || !this._pipelineEnabled) return;
+    if (!this._composer || !this._pipelineEnabled) {
+      if (_D) console.log(
+        `%c  [CYCO:PP] Frame #${_fr} — SKIP (composer=${!!this._composer}` +
+        ` pipelineEnabled=${this._pipelineEnabled}` +
+        ` tslActive=${this._tslPipelineActive})`,
+        'color:#888'
+      );
+      return;
+    }
+
+    if (_D) {
+      const renderer = this.engine.rendererManager?.renderer;
+      const rt = renderer?.getRenderTarget();
+      console.group(
+        `%c  [CYCO:PP] Frame #${_fr} — WebGL EffectComposer`,
+        'color:#c8f;font-weight:bold'
+      );
+      console.log(
+        `%c    [STATE] autoClear=${renderer?.autoClear}  RT=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}`,
+        'color:#aaa'
+      );
+    }
     // Keep SSAO camera uniforms current each frame (projection matrix can change on FOV/aspect updates)
     if (this.aoPass instanceof SSAOPass && this.aoPass.ssaoMaterial) {
       const cam = this.engine.camera;
@@ -742,12 +843,25 @@ export class PostProcessingPipeline {
         u['cameraInverseProjectionMatrix'].value.copy(cam.projectionMatrixInverse);
       }
     }
+    if (_D) console.log('%c    [COMPOSER] → composer.render()', 'color:#c8f;font-weight:bold');
     try {
       this._composer.render();
+      window._cycoDbgCanvasWrites = (window._cycoDbgCanvasWrites || 0) + 1;
+      if (_D) {
+        const renderer = this.engine.rendererManager?.renderer;
+        const rt = renderer?.getRenderTarget();
+        console.log(
+          `%c    [COMPOSER] ✓ done  RT after=${rt ? `RT(${rt.width}×${rt.height})` : 'null→CANVAS'}` +
+          `  → canvas written`,
+          'color:#c8f'
+        );
+      }
     } catch (err) {
+      if (_D) console.log('%c    [COMPOSER] ✗ threw — falling back', 'color:#f44', err);
       console.error('[PostProcessingPipeline] Composer render error — falling back to direct rendering:', err);
       this._disposeWebGLPipeline(); // clears _composer and sets pipelineActive = false
     }
+    if (_D) console.groupEnd();
   }
 
   _onResize(event) {
