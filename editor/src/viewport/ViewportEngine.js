@@ -76,6 +76,10 @@ export class ViewportEngine {
     this._resizeObserver = null;
     this._container = null;
 
+    /** Secondary WebGLRenderer + canvas for the ViewHelper gizmo overlay (WebGPU mode) */
+    this._helperOverlayRenderer = null;
+    this._helperOverlayCanvas   = null;
+
     // ── event bindings ──
     this._onRendererChanged    = this._onRendererChanged.bind(this);
     this._onFocus               = this._onFocus.bind(this);
@@ -559,9 +563,52 @@ export class ViewportEngine {
   }
 
   _buildViewHelper() {
+    this._disposeHelperOverlay();
     const renderer = this.rendererManager.renderer;
     if (!renderer?.domElement || !this.camera) return;
     this.viewHelper = new ViewHelper(this.camera, renderer.domElement);
+    if (renderer.isWebGPURenderer) this._buildHelperOverlay();
+  }
+
+  /**
+   * In WebGPU mode the WebGPU renderer's internal output-blit overwrites the main
+   * scene in the ViewHelper region, producing a black box.  Fix: render the gizmo
+   * to a tiny overlay <canvas> using a secondary plain WebGLRenderer whose canvas
+   * is absolutely positioned over the viewport container.  The secondary canvas has
+   * alpha=true so transparent pixels show the main scene beneath it.
+   */
+  _buildHelperOverlay() {
+    const container = this._container;
+    if (!container) return;
+
+    if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
+
+    const dim = 128;
+
+    // Let Three.js create and size the canvas — avoids setPixelRatio/setSize conflicts.
+    const helperRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
+    helperRenderer.setPixelRatio(window.devicePixelRatio || 1);
+    helperRenderer.setSize(dim, dim);
+    helperRenderer.setClearColor(0x000000, 0);
+    helperRenderer.autoClear = false;
+
+    const overlayCanvas = helperRenderer.domElement;
+    Object.assign(overlayCanvas.style, {
+      position: 'absolute', bottom: '0', right: '0',
+      width: `${dim}px`, height: `${dim}px`,
+      pointerEvents: 'none', zIndex: '10',
+    });
+    container.appendChild(overlayCanvas);
+
+    this._helperOverlayRenderer = helperRenderer;
+    this._helperOverlayCanvas   = overlayCanvas;
+  }
+
+  _disposeHelperOverlay() {
+    this._helperOverlayRenderer?.dispose();
+    this._helperOverlayCanvas?.remove();
+    this._helperOverlayRenderer = null;
+    this._helperOverlayCanvas   = null;
   }
 
   _buildLoadingOverlay(container) {
@@ -900,47 +947,46 @@ export class ViewportEngine {
       window._cycoDbgCanvasWrites++;
     }
 
-    // ViewHelper renders on top of main frame — must use autoClear=false so it
-    // doesn't wipe the already-rendered scene before drawing its axes widget.
-    // SVGRenderer and CSS3DRenderer don't have clearDepth() — skip on those.
+    // ViewHelper renders on top of main frame.
+    // In WebGPU mode: render to an isolated overlay canvas (secondary plain
+    // WebGLRenderer with alpha:true) — avoids the WebGPU output-blit overwriting
+    // the main scene in the helper region.
+    // In WebGL mode: render directly with autoClear=false so axes draw on top.
     if (this.viewHelper && renderer?.domElement instanceof HTMLCanvasElement) {
-      if (_D) console.log(
-        `%c  [VIEWHELPER] render  autoClear: true→false→render→true  RT=CANVAS`,
-        'color:#aaa'
-      );
-      renderer.autoClear = false;
-
-      // WebGPURenderer.render() overrides the viewport back to full-canvas for its
-      // internal output pass, causing it to overwrite the previously rendered TSL
-      // scene.  Enable scissor test for the ViewHelper's area so that the full-canvas
-      // output pass only writes within the helper region.
-      if (renderer.isWebGPURenderer) {
-        const dom    = renderer.domElement;
-        const dim    = 128;                                   // ViewHelper CSS size
-        const loc    = this.viewHelper.location || { bottom: 20, right: 20 };
-        const right  = loc.right  ?? 20;
-        const bottom = loc.bottom ?? 20;
-        // WebGPURenderer uses y-from-top for setViewport/setScissor (CSS pixels)
-        const scX = dom.offsetWidth  - dim - right;          // CSS x from left = 152
-        const scY = dom.offsetHeight - dim - bottom;         // CSS y from top  = 92
-        renderer.setScissorTest(true);
-        renderer.setScissor(scX, scY, dim, dim);
-        this.viewHelper.render(renderer);
-        renderer.setScissorTest(false);
+      if (renderer.isWebGPURenderer && this._helperOverlayRenderer) {
+        // ── WebGPU: overlay canvas approach ──────────────────────────────────
+        const hr = this._helperOverlayRenderer;
+        hr.clear();                                // transparent-clear overlay
+        // Force location to (left=0, bottom=0) so the ViewHelper fills the
+        // 128×128 overlay canvas exactly, then restore after render.
+        const loc = this.viewHelper.location;
+        const savedLeft   = loc.left;
+        const savedBottom = loc.bottom;
+        const savedRight  = loc.right;
+        loc.left   = 0;
+        loc.bottom = 0;
+        loc.right  = null;
+        this.viewHelper.render(hr);
+        loc.left   = savedLeft;
+        loc.bottom = savedBottom;
+        loc.right  = savedRight;
       } else {
+        // ── WebGL (or WebGPU overlay not ready): direct render ────────────────
+        renderer.autoClear = false;
         this.viewHelper.render(renderer);
+        renderer.autoClear = true;
+        window._cycoDbgCanvasWrites++;
       }
-
-      renderer.autoClear = true;
-      window._cycoDbgCanvasWrites++;
     }
 
-    // Always check for anomalies (wrong canvas-write count)
-    const _totalWrites = window._cycoDbgCanvasWrites;
-    if (_totalWrites > 2 || _totalWrites === 0) {
+    // Anomaly check: 1 write in WebGPU mode (overlay skips main canvas), 2 in WebGL
+    const _totalWrites   = window._cycoDbgCanvasWrites;
+    const _expectedWrites = renderer?.isWebGPURenderer ? 1 : 2;
+    if (_totalWrites > _expectedWrites || _totalWrites === 0) {
       console.warn(
-        `[CYCO:ANOMALY] Frame #${this._dbgFrame} — canvas writes=${_totalWrites} (expected 2!)` +
-        `  _pipelineActive=${this._pipelineActive}  hasViewHelper=${!!this.viewHelper}`
+        `[CYCO:ANOMALY] Frame #${this._dbgFrame} — canvas writes=${_totalWrites}` +
+        ` (expected ${_expectedWrites})  _pipelineActive=${this._pipelineActive}` +
+        `  hasViewHelper=${!!this.viewHelper}`
       );
     }
 
@@ -1092,6 +1138,7 @@ export class ViewportEngine {
     if (this._rafId !== null) cancelAnimationFrame(this._rafId);
     this._resizeObserver?.disconnect();
     this.controls?.dispose();
+    this._disposeHelperOverlay();
     if (this._onContextMenu) {
       document.removeEventListener('contextmenu', this._onContextMenu);
     }
