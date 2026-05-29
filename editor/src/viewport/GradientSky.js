@@ -270,8 +270,8 @@ export class GradientSky {
     const renderer = this._vpe?.rendererManager?.renderer;
     if (renderer?.isWebGPURenderer) {
       this._createMeshWebGPU().catch(err => {
-        console.error('[GradientSky] WebGPU sky failed, falling back to WebGL:', err);
-        this._createMeshWebGL();
+        console.error('[GradientSky] WebGPU sky failed, trying node-compatible fallback:', err);
+        this._createMeshWebGPUFallback();
       });
     } else {
       this._createMeshWebGL();
@@ -459,6 +459,55 @@ export class GradientSky {
     this._sunLight.color.set('#fff8e7');
   }
 
+  /**
+   * Last-resort WebGPU fallback: MeshBasicNodeMaterial with a simple gradient texture lookup.
+   * Called only if the full TSL sky node fails to build.
+   */
+  async _createMeshWebGPUFallback() {
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+    this._destroyMesh();
+    this._isWebGPU = true;
+
+    try {
+      const webgpuMod = await import('three/webgpu');
+      const { MeshBasicNodeMaterial } = webgpuMod;
+      const { Fn, vec2, vec4, float, positionLocal, texture, uniform, cameraFar } = webgpuMod.TSL;
+
+      if (!this._gradientTex) this._rebuildGradientTex();
+      const gradTex = this._gradientTex;
+      const uExposure = uniform(this._p.exposure);
+      this._tslUniforms = { uExposure, uSkyBrightness: { value: this._skyBrightness() }, uSaturation: { value: 1 }, uContrast: { value: 1 }, uSunDir: { value: this._p.sunDir.clone() }, uSunColor: { value: this._p.sunColor.clone() }, uSunVisible: { value: 0 }, uSunGlowStrength: { value: 0 }, uMoonDir: { value: this._p.moonDir.clone() }, uMoonColor: { value: this._p.moonColor.clone() }, uMoonVisible: { value: 0 }, uMoonGlowStrength: { value: 0 } };
+
+      const colorNode = Fn(() => {
+        const dir  = positionLocal.normalize();
+        const skyT = dir.y.mul(0.5).add(0.5).clamp(0.001, 0.999);
+        const col  = texture(gradTex, vec2(skyT, float(0.5))).rgb;
+        return vec4(col.mul(uExposure), 1.0);
+      })();
+
+      const mat = new MeshBasicNodeMaterial({ side: THREE.BackSide, depthTest: false, depthWrite: false });
+      mat.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
+      mat.colorNode = colorNode;
+
+      this._mesh = new THREE.Mesh(new THREE.SphereGeometry(450000, 32, 16), mat);
+      this._mesh.name = '__cyco_gradient_sky';
+      this._mesh.renderOrder = -1;
+      this._mesh.raycast = () => {};
+      this._mesh.userData._isHelper = true;
+
+      const cam = this._vpe?.camera;
+      if (cam) this._mesh.position.copy(cam.position);
+
+      try { this._createLensflare(); this._updateLensflare(); } catch (_) {}
+      scene.add(this._mesh);
+      if (this._lensflare) try { scene.add(this._lensflare); } catch (_) {}
+      console.log('[GradientSky] WebGPU fallback sky created (gradient only).');
+    } catch (err2) {
+      console.error('[GradientSky] WebGPU fallback also failed:', err2);
+    }
+  }
+
   _createMeshWebGL() {
     const scene = this._vpe?.scene;
     if (!scene) return;
@@ -521,10 +570,10 @@ export class GradientSky {
     this._isWebGPU = true;
 
     const webgpuMod = await import('three/webgpu');
-    const { MeshNodeMaterial } = webgpuMod;
+    const { MeshBasicNodeMaterial } = webgpuMod;
     const {
       Fn, vec2, vec3, vec4, float, clamp, mix, smoothstep, acos,
-      positionLocal, texture, uniform,
+      positionLocal, texture, uniform, cameraFar,
     } = webgpuMod.TSL;
 
     if (!this._gradientTex) this._rebuildGradientTex();
@@ -589,11 +638,14 @@ export class GradientSky {
       return vec4(skyCol.mul(uExposure), 1.0);
     })();
 
-    const material = new MeshNodeMaterial({
+    const material = new MeshBasicNodeMaterial({
       side:       THREE.BackSide,
       depthTest:  false,
       depthWrite: false,
     });
+    // Scale vertices to 99% of camera far plane so the huge sphere isn't
+    // frustum-clipped (WebGL did this via gl_Position.z = gl_Position.w).
+    material.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
     material.colorNode = skyColorNode;
 
     this._mesh = new THREE.Mesh(
