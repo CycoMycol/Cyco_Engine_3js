@@ -200,18 +200,24 @@ const SUN_OUTER = Math.cos(THREE.MathUtils.degToRad(2.5));
 const MOON_INNER = Math.cos(THREE.MathUtils.degToRad(1.2));
 const MOON_OUTER = Math.cos(THREE.MathUtils.degToRad(2.0));
 
+// Reusable Vector3 scratch objects — avoids per-frame heap allocation in update()
+const _tmpV3a = new THREE.Vector3();
+const _tmpV3b = new THREE.Vector3();
+const _tmpV3c = new THREE.Vector3();
+
 // ── GradientSky class ─────────────────────────────────────────────────────────
 
 export class GradientSky {
   constructor(viewportEngine) {
-    this._vpe       = viewportEngine;
-    this._mesh      = null;
-    this._gradientTex = null;
-    this._tslUniforms = null;
-    this._isWebGPU  = false;
-    this._sunLight  = null;
-    this._lensflare = null;
-    this._enabled   = false;
+    this._vpe             = viewportEngine;
+    this._mesh            = null;
+    this._gradientTex     = null;
+    this._tslUniforms     = null;
+    this._isWebGPU        = false;
+    this._sunLight        = null;
+    this._lensflare       = null;   // Three.js Lensflare (WebGL only)
+    this._lensflareSprites = null;  // Sprite array for WebGPU lensflare
+    this._enabled         = false;
 
     this._p = {
       elevation:          30,
@@ -331,6 +337,8 @@ export class GradientSky {
     if (!this._mesh) return;
     const cam = this._vpe?.camera;
     if (cam) this._mesh.position.copy(cam.position);
+    // Drive WebGPU sprite lensflare positions — must happen every frame
+    if (this._isWebGPU && cam) this._updateLensflareWebGPU(cam);
   }
 
   dispose() {
@@ -385,6 +393,11 @@ export class GradientSky {
     const mPhi   = THREE.MathUtils.degToRad(90 + elevation);
     const mTheta = THREE.MathUtils.degToRad((azimuth + 180) % 360);
     this._p.moonDir.setFromSphericalCoords(1, mPhi, mTheta);
+
+    // Keep derived scalar values current so reference() nodes pick them up next frame.
+    this._p._skyBrightness = this._skyBrightness();
+    this._p._sunVisible    = this._sunVisible();
+    this._p._moonVisible   = this._moonVisible();
   }
 
   _skyBrightness() {
@@ -414,23 +427,10 @@ export class GradientSky {
   }
 
   _pushUniforms() {
-    if (this._tslUniforms) {
-      // WebGPU path: update TSL UniformNode values
-      const t = this._tslUniforms;
-      t.uSkyBrightness.value    = this._skyBrightness();
-      t.uExposure.value         = this._p.exposure;
-      t.uSaturation.value       = this._p.saturation;
-      t.uContrast.value         = this._p.contrast;
-      t.uSunDir.value.copy(this._p.sunDir);
-      t.uSunColor.value.copy(this._p.sunColor);
-      t.uSunVisible.value       = this._sunVisible();
-      t.uSunGlowStrength.value  = this._p.sunGlowStrength;
-      t.uMoonDir.value.copy(this._p.moonDir);
-      t.uMoonColor.value.copy(this._p.moonColor);
-      t.uMoonVisible.value      = this._moonVisible();
-      t.uMoonGlowStrength.value = this._p.moonGlowStrength;
-      return;
-    }
+    // WebGPU path: reference() nodes read directly from this._p each render frame —
+    // no manual uniform push needed. _updateDirs() keeps derived values current.
+    if (this._isWebGPU) return;
+
     // WebGL path: update ShaderMaterial uniforms
     const u = this._mesh?.material?.uniforms;
     if (!u) return;
@@ -571,35 +571,33 @@ export class GradientSky {
     const webgpuMod = await import('three/webgpu');
     const { MeshBasicNodeMaterial } = webgpuMod;
     const {
-      Fn, vec2, vec3, vec4, float, clamp, mix, smoothstep, acos,
-      positionLocal, positionGeometry, texture, uniform, cameraFar,
+      Fn, vec2, vec3, vec4, float, mix, smoothstep, acos,
+      positionLocal, positionGeometry, texture, uniform, reference, cameraFar,
     } = webgpuMod.TSL;
 
     if (!this._gradientTex) this._rebuildGradientTex();
 
-    // ── TSL uniform nodes ─────────────────────────────────────────────────
-    const uSkyBrightness    = uniform(this._skyBrightness());
-    const uExposure         = uniform(this._p.exposure);
-    const uSaturation       = uniform(this._p.saturation);
-    const uContrast         = uniform(this._p.contrast);
-    const uSunDir           = uniform(this._p.sunDir.clone());
-    const uSunInner         = uniform(SUN_INNER);
-    const uSunOuter         = uniform(SUN_OUTER);
-    const uSunColor         = uniform(this._p.sunColor.clone());
-    const uSunVisible       = uniform(this._sunVisible());
-    const uSunGlowStrength  = uniform(this._p.sunGlowStrength);
-    const uMoonDir          = uniform(this._p.moonDir.clone());
-    const uMoonInner        = uniform(MOON_INNER);
-    const uMoonOuter        = uniform(MOON_OUTER);
-    const uMoonColor        = uniform(this._p.moonColor.clone());
-    const uMoonVisible      = uniform(this._moonVisible());
-    const uMoonGlowStrength = uniform(this._p.moonGlowStrength);
+    // ── TSL reference nodes (auto-read from this._p on every render frame) ───
+    // Using reference() instead of uniform() means parameter changes in this._p
+    // are automatically picked up without any manual dirty-flag management.
+    const rSkyBrightness    = reference('_skyBrightness',  'float', this._p);
+    const rExposure         = reference('exposure',        'float', this._p);
+    const rSaturation       = reference('saturation',      'float', this._p);
+    const rContrast         = reference('contrast',        'float', this._p);
+    const rSunDir           = reference('sunDir',          'vec3',  this._p);
+    const rSunColor         = reference('sunColor',        'color', this._p);
+    const rSunVisible       = reference('_sunVisible',     'float', this._p);
+    const rSunGlowStrength  = reference('sunGlowStrength', 'float', this._p);
+    const rMoonDir          = reference('moonDir',         'vec3',  this._p);
+    const rMoonColor        = reference('moonColor',       'color', this._p);
+    const rMoonVisible      = reference('_moonVisible',    'float', this._p);
+    const rMoonGlowStrength = reference('moonGlowStrength','float', this._p);
 
-    this._tslUniforms = {
-      uSkyBrightness, uExposure, uSaturation, uContrast,
-      uSunDir, uSunInner, uSunOuter, uSunColor, uSunVisible, uSunGlowStrength,
-      uMoonDir, uMoonInner, uMoonOuter, uMoonColor, uMoonVisible, uMoonGlowStrength,
-    };
+    // ── Static uniform nodes (angle constants — never change) ─────────────
+    const uSunInner  = uniform(SUN_INNER);
+    const uSunOuter  = uniform(SUN_OUTER);
+    const uMoonInner = uniform(MOON_INNER);
+    const uMoonOuter = uniform(MOON_OUTER);
 
     // Capture gradient texture by reference — in-place updates via needsUpdate
     // are automatically picked up by the TextureNode on the next render frame.
@@ -612,32 +610,32 @@ export class GradientSky {
       const dir    = positionGeometry.normalize();
       // Map y [-1,+1] → UV [0,1]; clamp away from border pixels
       const skyT   = dir.y.mul(0.5).add(0.5).clamp(0.001, 0.999);
-      const skyCol = texture(gradTex, vec2(skyT, float(0.5))).rgb.mul(uSkyBrightness).toVar();
+      const skyCol = texture(gradTex, vec2(skyT, float(0.5))).rgb.mul(rSkyBrightness).toVar();
 
-      // ── Sun (contributions scale to zero when uSunVisible = 0) ──────────
-      const sunDot  = dir.dot(uSunDir.normalize());
+      // ── Sun (contributions scale to zero when rSunVisible = 0) ──────────
+      const sunDot  = dir.dot(rSunDir.normalize());
       const sunAng  = acos(sunDot.clamp(-1.0, 1.0));
-      const sunGlow = sunAng.negate().mul(5.0).exp().mul(uSunGlowStrength).mul(uSunVisible);
-      skyCol.addAssign(uSunColor.mul(sunGlow).mul(0.5));
+      const sunGlow = sunAng.negate().mul(5.0).exp().mul(rSunGlowStrength).mul(rSunVisible);
+      skyCol.addAssign(rSunColor.mul(sunGlow).mul(0.5));
       const sunDisc = smoothstep(uSunOuter, uSunInner, sunDot);
-      skyCol.assign(mix(skyCol, uSunColor.min(vec3(1.0)), sunDisc.mul(uSunVisible)));
+      skyCol.assign(mix(skyCol, rSunColor.min(vec3(1.0)), sunDisc.mul(rSunVisible)));
 
       // ── Moon ─────────────────────────────────────────────────────────────
-      const moonDot  = dir.dot(uMoonDir.normalize());
+      const moonDot  = dir.dot(rMoonDir.normalize());
       const moonAng  = acos(moonDot.clamp(-1.0, 1.0));
-      const moonGlow = moonAng.negate().mul(8.0).exp().mul(uMoonGlowStrength).mul(uMoonVisible);
-      skyCol.addAssign(uMoonColor.mul(moonGlow));
+      const moonGlow = moonAng.negate().mul(8.0).exp().mul(rMoonGlowStrength).mul(rMoonVisible);
+      skyCol.addAssign(rMoonColor.mul(moonGlow));
       const moonDisc = smoothstep(uMoonOuter, uMoonInner, moonDot);
-      skyCol.assign(mix(skyCol, uMoonColor, moonDisc.mul(uMoonVisible)));
+      skyCol.assign(mix(skyCol, rMoonColor, moonDisc.mul(rMoonVisible)));
 
       // ── Contrast (pivot at 0.5) ───────────────────────────────────────────
-      skyCol.assign(skyCol.sub(0.5).mul(uContrast).add(0.5).clamp(0.0, 2.0));
+      skyCol.assign(skyCol.sub(0.5).mul(rContrast).add(0.5).clamp(0.0, 2.0));
 
       // ── Saturation ────────────────────────────────────────────────────────
       const lum = skyCol.dot(vec3(0.299, 0.587, 0.114));
-      skyCol.assign(mix(vec3(lum), skyCol, uSaturation).max(vec3(0.0)));
+      skyCol.assign(mix(vec3(lum), skyCol, rSaturation).max(vec3(0.0)));
 
-      return vec4(skyCol.mul(uExposure), 1.0);
+      return vec4(skyCol.mul(rExposure), 1.0);
     })();
 
     const material = new MeshBasicNodeMaterial({
@@ -662,10 +660,11 @@ export class GradientSky {
     const cam = this._vpe?.camera;
     if (cam) this._mesh.position.copy(cam.position);
 
-    // Lensflare uses renderer.renderBufferDirect() which is WebGL-only —
-    // skip it entirely under the WebGPU renderer to avoid crashing the pipeline.
-
     scene.add(this._mesh);
+
+    // Build WebGPU-native sprite-based lensflare (Three.js Lensflare addon uses
+    // renderer.renderBufferDirect() which doesn't exist on WebGPURenderer).
+    this._createLensflareWebGPU(scene);
   }
 
   _destroyMesh() {
@@ -680,6 +679,14 @@ export class GradientSky {
       scene?.remove(this._lensflare);
       this._lensflare = null;
     }
+    if (this._lensflareSprites?.length) {
+      for (const sprite of this._lensflareSprites) {
+        scene?.remove(sprite);
+        sprite.material.map?.dispose();
+        sprite.material.dispose();
+      }
+      this._lensflareSprites = null;
+    }
     this._gradientTex?.dispose();
     this._gradientTex = null;
     this._tslUniforms = null;
@@ -687,6 +694,118 @@ export class GradientSky {
   }
 
   // ── Lens flare ────────────────────────────────────────────────────────────
+
+  /**
+   * WebGPU-compatible lens flare using THREE.Sprite objects positioned in
+   * screen space each frame. Avoids renderer.renderBufferDirect() which is
+   * WebGL-only and crashes the TSL pipeline.
+   */
+  _createLensflareWebGPU(scene) {
+    // Each element: sizeScale relative to lensflareSize, dist along sun→center axis
+    // (dist=0 = at sun, dist=1 = at screen center, dist>1 = past center)
+    const ELEMS = [
+      { sizeScale: 1.00, dist: 0.00, texType: 'radial', sunTint: true  },
+      { sizeScale: 0.40, dist: 0.00, texType: 'burst',  sunTint: true  },
+      { sizeScale: 0.12, dist: 0.60, texType: 'ring',   sunTint: false },
+      { sizeScale: 0.15, dist: 0.75, texType: 'ring',   sunTint: false },
+      { sizeScale: 0.10, dist: 0.90, texType: 'ring',   sunTint: false },
+      { sizeScale: 0.20, dist: 1.00, texType: 'ring',   sunTint: false },
+    ];
+
+    this._lensflareSprites = [];
+    for (const el of ELEMS) {
+      const texSize = el.texType === 'radial' ? 256 : el.texType === 'burst' ? 128 : 64;
+      const tex = this._makeFlareTexture(texSize, el.texType);
+      const mat = new THREE.SpriteMaterial({
+        map:         tex,
+        transparent: true,
+        depthTest:   false,
+        depthWrite:  false,
+        blending:    THREE.AdditiveBlending,
+      });
+      const sprite = new THREE.Sprite(mat);
+      sprite.renderOrder     = 999;
+      sprite.frustumCulled   = false;
+      sprite.userData._dist      = el.dist;
+      sprite.userData._sizeScale = el.sizeScale;
+      sprite.userData._sunTint   = el.sunTint;
+      sprite.userData._isHelper  = true;
+      sprite.visible = false;
+      this._lensflareSprites.push(sprite);
+      scene.add(sprite);
+    }
+  }
+
+  /**
+   * Reposition WebGPU lensflare sprites each frame along the sun→screen-centre
+   * axis in clip space, then unproject to world space at a fixed depth in front
+   * of the camera. Called from update() every tick.
+   */
+  _updateLensflareWebGPU(camera) {
+    if (!this._lensflareSprites?.length || !camera) return;
+    const p   = this._p;
+    const vis = this._sunVisible();
+    const show = p.lensflareEnabled && vis > 0;
+
+    if (!show) {
+      this._lensflareSprites.forEach(s => { s.visible = false; });
+      return;
+    }
+
+    // Project sun world position → NDC
+    const sunWorld = _tmpV3a
+      .copy(p.sunDir).normalize()
+      .multiplyScalar(camera.far * 0.8)
+      .add(camera.position);
+    const sunNDC = _tmpV3b.copy(sunWorld).project(camera);
+
+    // Hide if sun is behind the camera
+    if (sunNDC.z > 1.0) {
+      this._lensflareSprites.forEach(s => { s.visible = false; });
+      return;
+    }
+
+    const renderer = this._vpe?.rendererManager?.renderer;
+    const canvas   = renderer?.domElement;
+    const vpH      = canvas?.clientHeight || 600;
+
+    // Projection matrix elements (column-major): [0]=fx/aspect, [5]=fy=1/tan(fovY/2)
+    const pe   = camera.projectionMatrix.elements;
+    const DIST = Math.max(camera.near * 80, 0.5); // depth to place sprites
+
+    // 1 pixel in world units at distance DIST:
+    //   half-viewport-height in world = DIST / pe[5]
+    //   → worldPerPixel = 2 * DIST / (pe[5] * vpH)
+    const worldPerPx = 2 * DIST / (pe[5] * vpH);
+
+    this._lensflareSprites.forEach(sprite => {
+      const d         = sprite.userData._dist;
+      const sizeScale = sprite.userData._sizeScale;
+      const sunTint   = sprite.userData._sunTint;
+
+      // Interpolate NDC from sun toward screen centre (0,0)
+      const ndcX = sunNDC.x * (1 - d);
+      const ndcY = sunNDC.y * (1 - d);
+
+      // Convert NDC + desired depth to camera-local space:
+      //   NDC.x = pe[0] * camX / (-camZ)  →  camX = ndcX * DIST / pe[0]
+      //   NDC.y = pe[5] * camY / (-camZ)  →  camY = ndcY * DIST / pe[5]
+      const worldPos = _tmpV3c.set(
+        ndcX * DIST / pe[0],
+        ndcY * DIST / pe[5],
+        -DIST,
+      ).applyMatrix4(camera.matrixWorld);
+
+      sprite.position.copy(worldPos);
+
+      const worldSize = p.lensflareSize * sizeScale * worldPerPx;
+      sprite.scale.set(worldSize, worldSize, 1);
+
+      sprite.material.opacity = p.lensflareOpacity * vis;
+      if (sunTint) sprite.material.color.copy(p.sunColor);
+      sprite.visible = true;
+    });
+  }
 
   /** Build procedural flare textures and create the Lensflare object. */
   _createLensflare() {

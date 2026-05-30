@@ -79,6 +79,7 @@ export class EnvironmentProperties {
         }
       },
     });
+    this._typeSelect = typeSelect;
     body.appendChild(row('Type', typeSelect));
 
     // Solid color
@@ -151,7 +152,25 @@ export class EnvironmentProperties {
       this._fireSkyChange(autoEnable ? true : (enabledCb?.checked ?? false));
     };
 
-    const enabledCb = checkbox({ checked: !!ve?.skyEnabled, onChange: () => _fire() });
+    const enabledCb = checkbox({
+      checked: !!ve?.skyEnabled,
+      onChange: () => {
+        if (enabledCb.checked) {
+          // Switch background type to Sky
+          if (this._typeSelect) {
+            this._typeSelect.value = 'sky';
+            this._typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        } else {
+          // Uncheck — if currently on sky, revert to solid
+          if (this._typeSelect?.value === 'sky') {
+            this._typeSelect.value = 'solid';
+            this._typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        _fire();
+      },
+    });
     this._skyEnabledCb = enabledCb;
     body.appendChild(row('Show Sky', enabledCb));
 

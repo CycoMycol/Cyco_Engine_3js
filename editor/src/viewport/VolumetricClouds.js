@@ -330,6 +330,8 @@ export class VolumetricClouds {
     this._mesh       = null;
     this._shadowMesh = null;
     this._t0         = performance.now();
+    this._isWebGPU   = false;  // true once WebGPU renderer detected
+    this._tslTime    = 0;      // updated in update(); read by reference() nodes
 
     this._p = {
       enabled:             false,
@@ -415,10 +417,13 @@ export class VolumetricClouds {
     const phi   = THREE.MathUtils.degToRad(90 - elevation);
     const theta = THREE.MathUtils.degToRad(azimuth);
     this._p.sunDir.setFromSphericalCoords(1, phi, theta);
-    if (this._mesh?.material?.uniforms)
-      this._mesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
-    if (this._shadowMesh?.material?.uniforms)
-      this._shadowMesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
+    // WebGPU: reference() auto-reads this._p.sunDir each frame — no push needed.
+    if (!this._isWebGPU) {
+      if (this._mesh?.material?.uniforms)
+        this._mesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
+      if (this._shadowMesh?.material?.uniforms)
+        this._shadowMesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
+    }
   }
 
   /**
@@ -443,8 +448,10 @@ export class VolumetricClouds {
     const wasAnimated = this._p.animated;
     this._p.animated = !!v;
     if (v && !wasAnimated) {
-      // Resume: shift _t0 so uTime continues from where it was frozen
-      const frozenT = this._mesh?.material?.uniforms?.uTime?.value ?? 0;
+      // Resume: shift _t0 so time continues from where it was frozen
+      const frozenT = this._isWebGPU
+        ? this._tslTime
+        : (this._mesh?.material?.uniforms?.uTime?.value ?? 0);
       this._t0 = performance.now() - frozenT * 1000;
     }
   }
@@ -454,9 +461,14 @@ export class VolumetricClouds {
     if (!this._mesh) return;
     if (this._p.animated) {
       const t = (performance.now() - this._t0) * 0.001;
-      this._mesh.material.uniforms.uTime.value = t;
-      if (this._shadowMesh)
-        this._shadowMesh.material.uniforms.uTime.value = t;
+      if (this._isWebGPU) {
+        this._tslTime = t;  // reference() nodes auto-read this each frame
+      } else {
+        if (this._mesh?.material?.uniforms)
+          this._mesh.material.uniforms.uTime.value = t;
+        if (this._shadowMesh?.material?.uniforms)
+          this._shadowMesh.material.uniforms.uTime.value = t;
+      }
     }
 
     const cam = this._vpe?.camera;
@@ -483,10 +495,10 @@ export class VolumetricClouds {
     const scene = this._vpe?.scene;
     if (!scene) { console.warn('[VolumetricClouds] No scene — skipping create.'); return; }
 
-    // VolumetricClouds uses ShaderMaterial (GLSL) which is not compatible with WebGPU.
+    // Route to WebGPU TSL implementation when running under WebGPURenderer.
     const renderer = this._vpe?.rendererManager?.renderer;
     if (renderer?.isWebGPURenderer) {
-      console.warn('[VolumetricClouds] ShaderMaterial clouds are not supported in WebGPU mode. Clouds disabled.');
+      this._createMeshWebGPU();
       return;
     }
 
@@ -530,7 +542,10 @@ export class VolumetricClouds {
   _createShadowMesh() {
     const scene = this._vpe?.scene;
     if (!scene) return;
-    if (this._vpe?.rendererManager?.renderer?.isWebGPURenderer) return;
+    if (this._vpe?.rendererManager?.renderer?.isWebGPURenderer) {
+      this._createShadowMeshWebGPU();
+      return;
+    }
     this._destroyShadowMesh();
 
     const mat = new THREE.ShaderMaterial({
@@ -588,6 +603,7 @@ export class VolumetricClouds {
   }
 
   _pushUniforms() {
+    if (this._isWebGPU) return;  // reference() nodes auto-read this._p each frame
     if (!this._mesh?.material?.uniforms) return;
     const u = this._mesh.material.uniforms;
     u.uCoverage.value            = this._p.coverage;
@@ -606,6 +622,7 @@ export class VolumetricClouds {
   }
 
   _pushShadowUniforms() {
+    if (this._isWebGPU) return;  // reference() nodes auto-read this._p each frame
     if (!this._shadowMesh?.material?.uniforms) return;
     const u = this._shadowMesh.material.uniforms;
     u.uCoverage.value       = this._p.coverage;
@@ -618,5 +635,324 @@ export class VolumetricClouds {
     u.uShadowStrength.value = this._p.shadowStrength;
     u.uMorphSpeed.value     = this._p.morphSpeed;
     u.uSunDir.value.copy(this._p.sunDir);
+  }
+
+  // ── WebGPU TSL implementations ────────────────────────────────────────────
+
+  /**
+   * Build a TSL NodeMaterial cloud mesh for WebGPU/WebGL2 renderers.
+   * Translates the GLSL ray-marcher into a Three.js TSL node graph so the
+   * PostProcessingPipeline (which requires NodeMaterials) can render it.
+   */
+  async _createMeshWebGPU() {
+    const scene = this._vpe?.scene;
+    if (!scene) { console.warn('[VolumetricClouds] No scene for WebGPU clouds.'); return; }
+    this._destroyMesh();
+    this._isWebGPU = true;
+
+    try {
+      const webgpuMod = await import('three/webgpu');
+      const { MeshBasicNodeMaterial } = webgpuMod;
+      const {
+        Fn, Loop, Break, If, Discard,
+        float, vec3, vec4,
+        positionWorld, cameraPosition, reference,
+        clamp, smoothstep, mix, normalize, dot, length, abs, max, min,
+        exp, sin, cos,
+        mx_fractal_noise_float,
+      } = webgpuMod.TSL;
+
+      // ── Reference nodes — auto-read from this / this._p every render frame ──
+      const rTime       = reference('_tslTime',            'float', this);
+      const rCoverage   = reference('coverage',            'float', this._p);
+      const rDensity    = reference('density',             'float', this._p);
+      const rScale      = reference('scale',               'float', this._p);
+      const rWindSpeed  = reference('windSpeed',           'float', this._p);
+      const rWindAngle  = reference('windAngle',           'float', this._p);
+      const rMorphSpeed = reference('morphSpeed',          'float', this._p);
+      const rSunDir     = reference('sunDir',              'vec3',  this._p);
+      const rSunColor   = reference('sunColor',            'color', this._p);
+      const rSkyHorizon = reference('skyHorizon',          'color', this._p);
+      const rSkyZenith  = reference('skyZenith',           'color', this._p);
+      const rCloudBase  = reference('cloudBase',           'float', this._p);
+      const rCloudTop   = reference('cloudTop',            'float', this._p);
+      const rBloomBrt   = reference('bloomBrightness',     'float', this._p);
+      const rBloomThr   = reference('cloudBloomThreshold', 'float', this._p);
+
+      // ── Cloud density: FBM via MaterialX fractal noise ────────────────────
+      const cloudDensityFn = Fn(([p]) => {
+        // Height fraction in slab: 0 = cloudBase, 1 = cloudTop
+        const h = clamp(
+          p.y.sub(rCloudBase).div(max(rCloudTop.sub(rCloudBase), float(0.001))),
+          float(0), float(1)
+        );
+        // Rounded tops, fade at base
+        const profile = smoothstep(float(0.0), float(0.15), h)
+          .mul(smoothstep(float(1.0), float(0.4), h));
+
+        // Noise space: scale + wind drift
+        const sp  = p.div(rScale);
+        const sp2 = sp.add(
+          vec3(cos(rWindAngle), float(0), sin(rWindAngle))
+            .mul(rTime).mul(rWindSpeed).mul(float(0.3))
+        );
+
+        // mx_fractal_noise_float returns ~[-sum_amps, +sum_amps] (signed).
+        // Shift to [0, 1] with * 0.5 + 0.5 to match the original unsigned FBM.
+        const base = mx_fractal_noise_float(sp2.mul(float(0.55)), 6, 2.0, 0.5)
+          .mul(float(0.5)).add(float(0.5));
+
+        const morphOff = vec3(
+          float(4.7).add(rTime.mul(rMorphSpeed).mul(float(1.5))),
+          float(9.1),
+          float(2.3).sub(rTime.mul(rMorphSpeed).mul(float(1.1)))
+        );
+        const detail = mx_fractal_noise_float(
+          sp2.mul(float(2.4)).add(morphOff), 3, 2.0, 0.5
+        ).mul(float(0.5)).add(float(0.5)).mul(float(0.28));
+
+        const d = base.add(detail).sub(float(1.0).sub(rCoverage.mul(float(0.95))));
+        return max(float(0), d).mul(profile).mul(rDensity).mul(float(2.5));
+      });
+
+      // ── Light march: soft sun shadowing through slab ──────────────────────
+      const lightMarchFn = Fn(([pos]) => {
+        const shadow = float(0).toVar();
+        const lmStep = rCloudTop.sub(rCloudBase).mul(float(0.18));
+        Loop(4, ({ i }) => {
+          shadow.addAssign(
+            cloudDensityFn(pos.add(rSunDir.mul(float(i).add(float(1)).mul(lmStep))))
+          );
+        });
+        return exp(shadow.negate().mul(lmStep).mul(float(0.22)));
+      });
+
+      // ── Main ray-march fragment color ─────────────────────────────────────
+      const colorNode = Fn(() => {
+        If(rCoverage.lessThan(float(0.04)), () => { Discard(); });
+
+        const ro = cameraPosition;
+        const rd = normalize(positionWorld.sub(ro));
+
+        // Discard near-horizontal rays; fade used per sample below
+        const horizonFade = smoothstep(float(0.30), float(0.75), abs(rd.y));
+        If(horizonFade.lessThan(float(0.001)), () => { Discard(); });
+
+        const elevScale = clamp(abs(rd.y).mul(float(2.0)), float(0.0), float(1.0));
+
+        // Infinite-slab intersection
+        const invRdY = float(1.0).div(rd.y);
+        const tBase  = rCloudBase.sub(ro.y).mul(invRdY);
+        const tTop   = rCloudTop.sub(ro.y).mul(invRdY);
+        const tNear  = min(tBase, tTop);
+        const tFar   = max(tBase, tTop);
+        If(tFar.lessThanEqual(float(0.0)).or(tNear.greaterThanEqual(tFar)), () => { Discard(); });
+
+        const tStart = max(tNear, float(0.001)).toVar();
+        const tEnd   = tFar.toVar();
+
+        const STEPS = 48;
+        const stepSz = min(tEnd.sub(tStart).div(float(STEPS)), float(10.0)).toVar();
+        tEnd.assign(min(tEnd, tStart.add(stepSz.mul(float(STEPS)))));
+
+        const transmit  = float(1.0).toVar();
+        const scattered = vec3(0, 0, 0).toVar();
+        const hit       = float(0).toVar();
+
+        Loop(STEPS, ({ i }) => {
+          const t   = tStart.add(float(i).mul(stepSz));
+          If(t.greaterThan(tEnd), () => { Break(); });
+
+          const pos = ro.add(rd.mul(t));
+
+          // Horizontal distance fade prevents hard box boundary edge
+          const hDist    = length(pos.xz.sub(ro.xz));
+          const distFade = float(1.0).sub(smoothstep(float(650.0), float(870.0), hDist));
+
+          const d = cloudDensityFn(pos)
+            .mul(elevScale).mul(horizonFade).mul(distFade).toVar();
+
+          If(d.greaterThan(float(0.001)), () => {
+            hit.assign(float(1));
+
+            const ext  = d.mul(stepSz);
+            const beer = exp(ext.negate().mul(float(0.9)));
+
+            const sunAtten = lightMarchFn(pos);
+
+            // Vertical sky-color ambient
+            const hFrac = clamp(
+              pos.y.sub(rCloudBase).div(max(rCloudTop.sub(rCloudBase), float(0.001))),
+              float(0), float(1)
+            );
+            const ambient = mix(rSkyHorizon.rgb, rSkyZenith.rgb, hFrac).mul(float(0.3));
+
+            // Forward-scatter silver lining
+            const cosA    = dot(rd, rSunDir);
+            const phase   = float(0.5).add(cosA.mul(float(0.45)));
+            const cloudLit = rSunColor.rgb
+              .mul(sunAtten)
+              .mul(float(0.65).add(phase.mul(float(0.35))))
+              .add(ambient).toVar();
+
+            // Powder effect: subtle darkening on first contact
+            const powder = float(1.0).sub(exp(d.negate().mul(stepSz).mul(float(1.5))));
+            cloudLit.mulAssign(mix(float(1.0), powder.mul(float(1.8)), float(0.35)));
+
+            scattered.addAssign(cloudLit.mul(transmit).mul(float(1.0).sub(beer)));
+            transmit.mulAssign(beer);
+
+            If(transmit.lessThan(float(0.005)), () => { Break(); });
+          });
+        });
+
+        If(hit.lessThan(float(0.5)), () => { Discard(); });
+
+        const alpha = clamp(float(1.0).sub(transmit), float(0.0), float(1.0));
+        If(alpha.lessThan(float(0.005)), () => { Discard(); });
+
+        // Pre-multiplied → per-channel colour
+        const cloudColor = scattered.div(max(alpha, float(0.01))).toVar();
+
+        // Per-cloud bloom threshold filter
+        const lum = dot(cloudColor, vec3(float(0.2126), float(0.7152), float(0.0722)));
+        If(lum.lessThan(rBloomThr), () => { cloudColor.assign(vec3(0, 0, 0)); });
+        cloudColor.mulAssign(rBloomBrt);
+
+        return vec4(cloudColor, alpha);
+      })();
+
+      const mat = new MeshBasicNodeMaterial({
+        transparent: true,
+        depthWrite:  false,
+        depthTest:   !!this._p.skyMode,
+        side:        THREE.BackSide,
+      });
+      mat.colorNode = colorNode;
+      // Push every cloud fragment to depth 1.0 (far plane) so opaque objects
+      // always appear in front when depthTest is enabled (sky-layer mode).
+      if (this._p.skyMode) mat.depthNode = float(1.0);
+
+      const geo = new THREE.BoxGeometry(1800, 1800, 1800);
+      this._mesh = new THREE.Mesh(geo, mat);
+      this._mesh.name          = '__cyco_clouds';
+      this._mesh.raycast       = () => {};
+      this._mesh.frustumCulled = false;
+      this._mesh.renderOrder   = 1;
+      scene.add(this._mesh);
+
+      console.log('[VolumetricClouds] WebGPU TSL cloud mesh ready.');
+    } catch (err) {
+      console.error('[VolumetricClouds] WebGPU cloud mesh creation failed:', err);
+      this._isWebGPU = false;
+    }
+  }
+
+  /**
+   * Build a TSL NodeMaterial shadow plane for WebGPU/WebGL2 renderers.
+   * Marches upward from each ground fragment toward the sun and accumulates
+   * cloud density to produce a multiply-blended shadow on the ground.
+   */
+  async _createShadowMeshWebGPU() {
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+    this._destroyShadowMesh();
+
+    try {
+      const webgpuMod = await import('three/webgpu');
+      const { MeshBasicNodeMaterial } = webgpuMod;
+      const {
+        Fn, Loop, If, Discard,
+        float, vec3, vec4,
+        positionWorld, reference,
+        clamp, smoothstep, max, min, exp, sin, cos,
+        mx_fractal_noise_float,
+      } = webgpuMod.TSL;
+
+      const rTime       = reference('_tslTime',       'float', this);
+      const rCoverage   = reference('coverage',       'float', this._p);
+      const rDensity    = reference('density',        'float', this._p);
+      const rScale      = reference('scale',          'float', this._p);
+      const rWindSpeed  = reference('windSpeed',      'float', this._p);
+      const rWindAngle  = reference('windAngle',      'float', this._p);
+      const rMorphSpeed = reference('morphSpeed',     'float', this._p);
+      const rSunDir     = reference('sunDir',         'vec3',  this._p);
+      const rCloudBase  = reference('cloudBase',      'float', this._p);
+      const rCloudTop   = reference('cloudTop',       'float', this._p);
+      const rShadowStr  = reference('shadowStrength', 'float', this._p);
+
+      // Fast 3-octave density (shadow pass does not need full 6-octave detail)
+      const cloudDensityFastFn = Fn(([p]) => {
+        const h = clamp(
+          p.y.sub(rCloudBase).div(max(rCloudTop.sub(rCloudBase), float(0.001))),
+          float(0), float(1)
+        );
+        const profile = smoothstep(float(0.0), float(0.15), h)
+          .mul(smoothstep(float(1.0), float(0.4), h));
+
+        const sp  = p.div(rScale);
+        const sp2 = sp.add(
+          vec3(cos(rWindAngle), float(0), sin(rWindAngle))
+            .mul(rTime).mul(rWindSpeed).mul(float(0.3))
+        );
+        const v = mx_fractal_noise_float(sp2.mul(float(0.55)), 3, 2.0, 0.5)
+          .mul(float(0.5)).add(float(0.5));
+        const d = v.sub(float(1.0).sub(rCoverage.mul(float(0.95))));
+        return max(float(0), d).mul(profile).mul(rDensity).mul(float(2.5));
+      });
+
+      const colorNode = Fn(() => {
+        // No shadow when sun below horizon or clouds off
+        If(rCoverage.lessThan(float(0.04)).or(rSunDir.y.lessThan(float(0.04))), () => {
+          Discard();
+        });
+
+        const worldPos      = positionWorld;
+        const shadowDensity = float(0).toVar();
+        const slabH         = max(rCloudTop.sub(rCloudBase), float(1.0));
+        const stepSz        = slabH.div(float(8));
+
+        Loop(8, ({ i }) => {
+          const y = rCloudBase.add(float(i).add(float(0.5)).mul(stepSz));
+          const t = y.sub(worldPos.y).div(max(rSunDir.y, float(0.001)));
+          shadowDensity.addAssign(
+            cloudDensityFastFn(worldPos.add(rSunDir.mul(t))).mul(stepSz)
+          );
+        });
+
+        const shadow   = float(1.0).sub(exp(shadowDensity.negate().mul(float(0.8))));
+        const darkness = shadow.mul(rShadowStr);
+        If(darkness.lessThan(float(0.01)), () => { Discard(); });
+
+        const brightness = float(1.0).sub(darkness);
+        return vec4(brightness, brightness, brightness, float(1.0));
+      })();
+
+      const mat = new MeshBasicNodeMaterial({
+        transparent:   true,
+        depthWrite:    false,
+        depthTest:     false,
+        blending:      THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc:      THREE.DstColorFactor,
+        blendDst:      THREE.ZeroFactor,
+      });
+      mat.colorNode = colorNode;
+
+      const geo  = new THREE.PlaneGeometry(12000, 12000);
+      const mesh = new THREE.Mesh(geo, mat);
+      mesh.rotation.x    = -Math.PI / 2;
+      mesh.position.y    = this._p.shadowPlaneY;
+      mesh.name          = '__cyco_cloud_shadow';
+      mesh.raycast       = () => {};
+      mesh.frustumCulled = false;
+      mesh.renderOrder   = 3;
+      this._shadowMesh   = mesh;
+      scene.add(this._shadowMesh);
+
+      console.log('[VolumetricClouds] WebGPU TSL shadow mesh ready.');
+    } catch (err) {
+      console.error('[VolumetricClouds] WebGPU shadow mesh creation failed:', err);
+    }
   }
 }
