@@ -18,10 +18,8 @@ import { GradientEditor } from '../ui/GradientEditor.js';
 export class EnvironmentProperties {
   constructor() {
     this._solidColor  = '#1a1a1a';
-    this._gradTop     = '#87ceeb';
-    this._gradHorizon = '#d4a56a';
-    this._gradBottom  = '#4a3b2a';
     this._skyEnabledCb = null; // cross-reference set by _buildSkySection
+    this._bgGradEditor = null; // set by _buildBackgroundSection
     this._element = this._build();
   }
 
@@ -95,22 +93,23 @@ export class EnvironmentProperties {
     const solidRow = row('Color', solidColorSw.el);
     body.appendChild(solidRow);
 
-    // Gradient colors
-    const topColorSw = colorSwatch({ color: this._gradTop, onChange: (c) => {
-      this._gradTop = c; this._dispatchBackground('gradient');
-    }});
-    const horizColorSw = colorSwatch({ color: this._gradHorizon, onChange: (c) => {
-      this._gradHorizon = c; this._dispatchBackground('gradient');
-    }});
-    const botColorSw = colorSwatch({ color: this._gradBottom, onChange: (c) => {
-      this._gradBottom = c; this._dispatchBackground('gradient');
-    }});
-    const gradTopRow  = row('Top Color',     topColorSw.el);
-    const gradHorRow  = row('Horizon Color', horizColorSw.el);
-    const gradBotRow  = row('Bottom Color',  botColorSw.el);
-    body.appendChild(gradTopRow);
-    body.appendChild(gradHorRow);
-    body.appendChild(gradBotRow);
+    // Gradient editor (replaces 3 fixed colour pickers)
+    const gradWrap = document.createElement('div');
+    gradWrap.style.cssText = 'padding:4px 4px 6px;';
+    this._bgGradEditor = new GradientEditor({
+      colorStops: [
+        { pos: 0.0, color: '#87ceeb', blend: 0 },
+        { pos: 0.5, color: '#d4a56a', blend: 0 },
+        { pos: 1.0, color: '#4a3b2a', blend: 0 },
+      ],
+      opacityStops: [
+        { pos: 0.0, opacity: 1 },
+        { pos: 1.0, opacity: 1 },
+      ],
+      onChange: () => this._dispatchBackground('gradient'),
+    });
+    gradWrap.appendChild(this._bgGradEditor.element);
+    body.appendChild(gradWrap);
 
     // HDRI show-as-background toggle
     const hdriBgCb = checkbox({
@@ -123,24 +122,17 @@ export class EnvironmentProperties {
     body.appendChild(hdriRow);
 
     const _showRows = (type) => {
-      solidRow.style.display   = type === 'solid'    ? '' : 'none';
-      gradTopRow.style.display = type === 'gradient' ? '' : 'none';
-      gradHorRow.style.display = type === 'gradient' ? '' : 'none';
-      gradBotRow.style.display = type === 'gradient' ? '' : 'none';
-      hdriRow.style.display    = type === 'hdri'     ? '' : 'none';
+      solidRow.style.display = type === 'solid'    ? '' : 'none';
+      gradWrap.style.display = type === 'gradient' ? '' : 'none';
+      hdriRow.style.display  = type === 'hdri'     ? '' : 'none';
     };
     _showRows(initType);
   }
 
   _dispatchBackground(type) {
+    const { colorStops, opacityStops } = this._bgGradEditor?.data ?? { colorStops: [], opacityStops: [] };
     window.dispatchEvent(new CustomEvent('cyco-background-change', {
-      detail: {
-        type,
-        color:        this._solidColor,
-        topColor:     this._gradTop,
-        horizonColor: this._gradHorizon,
-        bottomColor:  this._gradBottom,
-      }
+      detail: { type, color: this._solidColor, colorStops, opacityStops },
     }));
   }
 

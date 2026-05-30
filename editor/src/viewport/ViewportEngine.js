@@ -219,8 +219,11 @@ export class ViewportEngine {
     if (!enabled) {
       this.gradientSky?.setEnabled(false);
       this.skyEnabled = false;
-      if (!(this.scene.background instanceof THREE.Color)) {
-        this.scene.background = new THREE.Color(0x1a1a1a);
+      // Only fall back to solid colour when the current bg type isn't gradient/hdri
+      if (this._bgType !== 'gradient' && this._bgType !== 'hdri') {
+        if (!(this.scene.background instanceof THREE.Color)) {
+          this.scene.background = new THREE.Color(0x1a1a1a);
+        }
       }
       return;
     }
@@ -332,11 +335,11 @@ export class ViewportEngine {
    */
   _onBackgroundChange({ detail } = {}) {
     if (!this.scene) return;
-    const { type, color, topColor, horizonColor, bottomColor } = detail ?? {};
-    console.log(
-      `[CYCO:ENV] cyco-background-change  type=${type}  color=${color ?? 'n/a'}` +
-      `  topColor=${topColor ?? 'n/a'}  horizonColor=${horizonColor ?? 'n/a'}  bottomColor=${bottomColor ?? 'n/a'}`
-    );
+    const { type, color, colorStops = [] } = detail ?? {};
+    console.log(`[CYCO:ENV] cyco-background-change  type=${type}  stops=${colorStops.length}`);
+
+    // Track type so _onSkyChange knows not to overwrite a gradient/hdri background
+    this._bgType = type;
 
     // Remove sky if switching away from it
     if (type !== 'sky') {
@@ -345,37 +348,108 @@ export class ViewportEngine {
       this.skyEnabled = false;
     }
 
+    // Dispose previous gradient texture to free GPU memory
+    if (this._bgGradTex) {
+      this._bgGradTex.dispose();
+      this._bgGradTex = null;
+    }
+
     if (type === 'solid') {
       this.scene.background = new THREE.Color(color ?? '#1a1a1a');
     } else if (type === 'gradient') {
-      this.scene.background = this._makeGradientTexture(
-        topColor    ?? '#87ceeb',
-        horizonColor ?? '#d4a56a',
-        bottomColor ?? '#4a3b2a'
-      );
+      this._bgGradTex = this._makeGradientTexture(colorStops);
+      this.scene.background = this._bgGradTex;
     } else if (type === 'hdri') {
-      // Show last loaded env map as background, or fallback to solid
       this.scene.background = this._lastEnvMap ?? new THREE.Color(0x1a1a1a);
     } else if (type === 'sky') {
-      // Sky background handled by _onSkyChange; just ensure background is null
-      // so the sky shader is composited correctly
       this.scene.background = null;
     }
   }
 
-  /** Build a 2-stop gradient canvas texture (top → horizon → bottom). */
-  _makeGradientTexture(topColor, horizonColor, bottomColor) {
-    const w = 2, h = 256;
+  /**
+   * Build a tall canvas texture from GradientEditor colorStops.
+   * Supports multi-stop gradients with per-stop Gaussian blend softening.
+   * Works in both WebGL and WebGPU renderers.
+   * @param {Array<{pos:number,color:string,blend?:number}>} colorStops
+   * @returns {THREE.CanvasTexture}
+   */
+  _makeGradientTexture(colorStops) {
+    const h = 512;
     const canvas = document.createElement('canvas');
-    canvas.width  = w;
+    canvas.width  = 2;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    const grad = ctx.createLinearGradient(0, 0, 0, h);
-    grad.addColorStop(0.0,  topColor);
-    grad.addColorStop(0.5,  horizonColor);
-    grad.addColorStop(1.0,  bottomColor);
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, w, h);
+
+    const stops = Array.isArray(colorStops) && colorStops.length
+      ? [...colorStops].sort((a, b) => a.pos - b.pos)
+      : [{ pos: 0, color: '#87ceeb' }, { pos: 0.5, color: '#d4a56a' }, { pos: 1, color: '#4a3b2a' }];
+
+    const hasBlend = stops.some(s => (s.blend ?? 0) > 0.001);
+
+    if (!hasBlend) {
+      // Fast path: native canvas gradient
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      stops.forEach(s => { try { grad.addColorStop(s.pos, s.color); } catch {} });
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 2, h);
+    } else {
+      // Per-pixel path with Gaussian blur for blend softening
+      const parse = hex => {
+        const n = parseInt(hex.replace('#', ''), 16);
+        return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+      };
+      const linear = new Float32Array(h * 3);
+      for (let y = 0; y < h; y++) {
+        const t = y / (h - 1);
+        let r, g, b;
+        if (t <= stops[0].pos) {
+          [r, g, b] = parse(stops[0].color);
+        } else if (t >= stops[stops.length - 1].pos) {
+          [r, g, b] = parse(stops[stops.length - 1].color);
+        } else {
+          let s0 = stops[0], s1 = stops[stops.length - 1];
+          for (let j = 0; j < stops.length - 1; j++) {
+            if (t >= stops[j].pos && t <= stops[j + 1].pos) { s0 = stops[j]; s1 = stops[j + 1]; break; }
+          }
+          const rawT = (t - s0.pos) / (s1.pos - s0.pos + 1e-9);
+          const [r0, g0, b0] = parse(s0.color);
+          const [r1, g1, b1] = parse(s1.color);
+          r = r0 + (r1 - r0) * rawT; g = g0 + (g1 - g0) * rawT; b = b0 + (b1 - b0) * rawT;
+        }
+        linear[y * 3] = r; linear[y * 3 + 1] = g; linear[y * 3 + 2] = b;
+      }
+      const output = linear.slice();
+      for (let si = 0; si < stops.length - 1; si++) {
+        const s0 = stops[si], s1 = stops[si + 1];
+        const bAmt = Math.max(s0.blend ?? 0, s1.blend ?? 0);
+        if (bAmt < 0.001) continue;
+        const y0 = Math.round(s0.pos * (h - 1));
+        const y1 = Math.round(s1.pos * (h - 1));
+        const radius = Math.ceil(bAmt * Math.max(y1 - y0, 1) * 8.0);
+        const sigma  = radius / 2.5 + 1;
+        for (let y = Math.max(0, y0 - radius); y <= Math.min(h - 1, y1 + radius); y++) {
+          let sr = 0, sg = 0, sb = 0, sw = 0;
+          for (let dy = -radius; dy <= radius; dy++) {
+            const ny = Math.max(0, Math.min(h - 1, y + dy));
+            const wk = Math.exp(-0.5 * (dy / sigma) ** 2);
+            sr += wk * linear[ny * 3]; sg += wk * linear[ny * 3 + 1]; sb += wk * linear[ny * 3 + 2]; sw += wk;
+          }
+          if (sw > 0) { output[y * 3] = sr / sw; output[y * 3 + 1] = sg / sw; output[y * 3 + 2] = sb / sw; }
+        }
+      }
+      const imgData = ctx.createImageData(2, h);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < 2; x++) {
+          const pi = (y * 2 + x) * 4;
+          imgData.data[pi]     = Math.round(output[y * 3]);
+          imgData.data[pi + 1] = Math.round(output[y * 3 + 1]);
+          imgData.data[pi + 2] = Math.round(output[y * 3 + 2]);
+          imgData.data[pi + 3] = 255;
+        }
+      }
+      ctx.putImageData(imgData, 0, 0);
+    }
+
     const tex = new THREE.CanvasTexture(canvas);
     tex.needsUpdate = true;
     return tex;
