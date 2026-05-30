@@ -264,10 +264,10 @@ export class SceneManager {
 
   // ─── Material events ─────────────────────────────────────────────────────
 
-  _onApplyMaterial(event) {
+  async _onApplyMaterial(event) {
     const { preset, targetObjects } = event.detail ?? {};
     if (!preset || !targetObjects?.length) return;
-    const mat = this._createMaterial(preset);
+    const mat = await this._createMaterial(preset);
     for (const obj of targetObjects) {
       if (obj.material) {
         Array.isArray(obj.material)
@@ -282,10 +282,10 @@ export class SceneManager {
     }
   }
 
-  _onPreviewMaterial(event) {
+  async _onPreviewMaterial(event) {
     const { preset, targetObjects } = event.detail ?? {};
     if (!preset || !targetObjects?.length) return;
-    const mat = this._createMaterial(preset);
+    const mat = await this._createMaterial(preset);
     for (const obj of targetObjects) {
       if (!this._previewCache.has(obj)) {
         this._previewCache.set(obj, obj.material);
@@ -301,7 +301,16 @@ export class SceneManager {
     this._previewCache.clear();
   }
 
-  _createMaterial(preset) {
+  async _createMaterial(preset) {
+    // NodeMaterial presets provide an async factory function
+    if (typeof preset.factory === 'function') {
+      try {
+        return await preset.factory();
+      } catch (e) {
+        console.warn('[SceneManager] NodeMaterial factory failed, using fallback:', e);
+        return new THREE.MeshStandardMaterial({ color: '#888888' });
+      }
+    }
     const THREE_TYPES = {
       MeshStandardMaterial: THREE.MeshStandardMaterial,
       MeshPhysicalMaterial: THREE.MeshPhysicalMaterial,

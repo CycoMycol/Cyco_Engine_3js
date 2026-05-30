@@ -23,6 +23,7 @@ export const MATERIAL_CATEGORIES = [
   'Emissive',
   'Special',
   'Shader',
+  'Node Materials',
 ];
 
 export const MATERIALS = [
@@ -133,55 +134,129 @@ export const MATERIALS = [
   { id: 'matcap-metal',    name: 'Matcap Metal',    category: 'Special', type: 'MeshMatcapMaterial', params: { color: '#aaaaaa' }, preview: '#aaaaaa' },
   { id: 'points-cloud',    name: 'Points Cloud',    category: 'Special', type: 'PointsMaterial', params: { color: '#ffffff', size: 0.05 }, preview: '#ffffff' },
 
-  // ── GLSL Shader ───────────────────────────────────────────────────────────
+  // ── Node Materials (TSL — WebGL & WebGPU compatible) ─────────────────────
   {
-    id: 'gradient-uv', name: 'UV Gradient', category: 'Shader', type: 'ShaderMaterial',
-    params: {
-      vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `varying vec2 vUv; void main() { gl_FragColor = vec4(vUv.x, vUv.y, 1.0 - vUv.x, 1.0); }`,
+    id: 'gradient-uv', name: 'UV Gradient', category: 'Shader', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshBasicNodeMaterial }, { uv, vec4 }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshBasicNodeMaterial();
+      const uvCoord = uv();
+      mat.colorNode = vec4(uvCoord.x, uvCoord.y, uvCoord.x.oneMinus(), 1);
+      return mat;
     },
     preview: 'linear-gradient(135deg,#ff8800,#0088ff)',
   },
   {
-    id: 'fresnel-glow', name: 'Fresnel Glow', category: 'Shader', type: 'ShaderMaterial',
-    params: {
-      vertexShader: `
-        varying vec3 vNormal; varying vec3 vViewPos;
-        void main() {
-          vNormal = normalize(normalMatrix * normal);
-          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
-          vViewPos = -mvPosition.xyz;
-          gl_Position = projectionMatrix * mvPosition;
-        }`,
-      fragmentShader: `
-        varying vec3 vNormal; varying vec3 vViewPos;
-        uniform vec3 glowColor;
-        void main() {
-          float f = dot(normalize(vViewPos), normalize(vNormal));
-          float rim = 1.0 - clamp(f, 0.0, 1.0);
-          gl_FragColor = vec4(glowColor * rim * rim, rim);
-        }`,
-      uniforms: { glowColor: { value: [0.2, 0.8, 1.0] } },
-      transparent: true,
+    id: 'fresnel-glow', name: 'Fresnel Glow', category: 'Shader', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshBasicNodeMaterial }, { normalView, positionViewDirection, dot, vec3, vec4 }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshBasicNodeMaterial();
+      mat.transparent = true;
+      mat.depthWrite = false;
+      mat.side = 2; // DoubleSide
+      const rim = dot(positionViewDirection, normalView).clamp().oneMinus();
+      const glowColor = vec3(0.2, 0.8, 1.0);
+      mat.colorNode = vec4(glowColor.mul(rim.mul(rim)), rim);
+      return mat;
     },
     preview: 'linear-gradient(135deg,#0088ff,#00ffff)',
   },
   {
-    id: 'rainbow', name: 'Rainbow Spectrum', category: 'Shader', type: 'ShaderMaterial',
-    params: {
-      vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-      fragmentShader: `
-        varying vec2 vUv;
-        vec3 hsv2rgb(vec3 c) {
-          vec4 K = vec4(1.0, 2.0/3.0, 1.0/3.0, 3.0);
-          vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
-          return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
-        }
-        void main() {
-          gl_FragColor = vec4(hsv2rgb(vec3(vUv.x, 1.0, 1.0)), 1.0);
-        }`,
+    id: 'rainbow', name: 'Rainbow Spectrum', category: 'Shader', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshBasicNodeMaterial }, { uv, vec4, fract, abs, float }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshBasicNodeMaterial();
+      const h = uv().x;
+      // HSV→RGB: hue-only (S=1, V=1) using the standard formula
+      const r = abs(fract(h.add(1.0)).mul(6.0).sub(3.0)).sub(1.0).clamp();
+      const g = abs(fract(h.add(float(2 / 3))).mul(6.0).sub(3.0)).sub(1.0).clamp();
+      const b = abs(fract(h.add(float(1 / 3))).mul(6.0).sub(3.0)).sub(1.0).clamp();
+      mat.colorNode = vec4(r, g, b, 1.0);
+      return mat;
     },
     preview: 'linear-gradient(90deg,red,orange,yellow,green,blue,violet)',
+  },
+
+  // ── Node Materials (from webgpu_tsl_graph example) ────────────────────────
+  // mat_1-physical : MeshPhysicalNodeMaterial — gold clearcoat with full PBR
+  {
+    id: 'node-physical', name: 'Node Physical', category: 'Node Materials', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshPhysicalNodeMaterial }, { vec3, float, normalWorld, positionViewDirection, dot, mix }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshPhysicalNodeMaterial();
+      mat.color.set(0xD4A820);
+      mat.metalness = 1.0;
+      mat.roughness = 0.15;
+      mat.clearcoat = 1.0;
+      mat.clearcoatRoughness = 0.05;
+      mat.side = 2;
+      return mat;
+    },
+    preview: '#D4A820',
+  },
+  // mat_2-standard : MeshStandardNodeMaterial — copper with emissive rim glow
+  {
+    id: 'node-standard', name: 'Node Standard', category: 'Node Materials', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshStandardNodeMaterial }, { normalWorld, positionViewDirection, dot, vec3, vec4, color }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshStandardNodeMaterial();
+      mat.color.set(0xB87333);
+      mat.metalness = 0.9;
+      mat.roughness = 0.3;
+      mat.side = 2;
+      // Add a subtle warm emissive rim
+      const rim = dot(positionViewDirection, normalWorld).clamp().oneMinus().pow(2);
+      mat.emissiveNode = vec3(0.4, 0.15, 0.0).mul(rim);
+      return mat;
+    },
+    preview: '#B87333',
+  },
+  // mat_3-phong : MeshPhongNodeMaterial — deep blue with specular highlight
+  {
+    id: 'node-phong', name: 'Node Phong', category: 'Node Materials', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshPhongNodeMaterial }] = await Promise.all([
+        import('three/webgpu'),
+      ]);
+      const mat = new MeshPhongNodeMaterial();
+      mat.color.set(0x0033AA);
+      mat.specular.set(0x88AAFF);
+      mat.shininess = 120;
+      mat.side = 2;
+      return mat;
+    },
+    preview: '#0033AA',
+  },
+  // mat_4-basic : MeshBasicNodeMaterial — world-space normal visualisation
+  {
+    id: 'node-basic', name: 'Node Basic (Normals)', category: 'Node Materials', type: 'NodeMaterial',
+    factory: async () => {
+      const [{ MeshBasicNodeMaterial }, { normalWorld, vec4 }] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const mat = new MeshBasicNodeMaterial();
+      // Map world normals (-1..1) to colours (0..1)
+      mat.colorNode = vec4(normalWorld.add(1).div(2), 1);
+      mat.side = 2;
+      return mat;
+    },
+    preview: 'linear-gradient(135deg,#ff8080,#80ff80,#8080ff)',
   },
 ];
 

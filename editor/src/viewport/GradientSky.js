@@ -626,7 +626,15 @@ export class GradientSky {
     this._destroyMesh();
     this._isWebGPU = true;
 
+    // Generation guard: if a newer call starts before this one resolves the
+    // import, this call bails out cleanly after the await rather than racing
+    // to add a second sky mesh / lensflare set to the scene.
+    this._webGPUSkyGen = (this._webGPUSkyGen ?? 0) + 1;
+    const myGen = this._webGPUSkyGen;
+
     const webgpuMod = await import('three/webgpu');
+
+    if (this._webGPUSkyGen !== myGen) return; // superseded — bail out
     const { MeshBasicNodeMaterial } = webgpuMod;
     const {
       Fn, vec2, vec3, vec4, float, mix, smoothstep, acos,

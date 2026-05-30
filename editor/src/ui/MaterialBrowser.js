@@ -12,8 +12,17 @@
 import * as THREE from 'three';
 import { MATERIALS, MATERIAL_CATEGORIES, getMaterialsByCategory } from './MaterialLibrary.js';
 
-/** Create a Three.js material from a preset config */
-function createMaterialFromPreset(preset) {
+/** Create a Three.js material from a preset config. Returns a Promise. */
+async function createMaterialFromPreset(preset) {
+  // NodeMaterial presets provide an async factory function
+  if (typeof preset.factory === 'function') {
+    try {
+      return await preset.factory();
+    } catch (e) {
+      console.warn('[MaterialBrowser] NodeMaterial factory failed, using fallback:', e);
+      return new THREE.MeshStandardMaterial({ color: '#888888' });
+    }
+  }
   const THREE_TYPES = {
     MeshStandardMaterial: THREE.MeshStandardMaterial,
     MeshPhysicalMaterial: THREE.MeshPhysicalMaterial,
@@ -197,68 +206,6 @@ export class MaterialBrowser {
     window.addEventListener('cyco-renderer-changed', updateBadge);
 
     root.appendChild(toolbar);
-
-    // ── Environment Reflection row ─────────────────────────────────────────
-    const envRow = document.createElement('div');
-    envRow.style.cssText = 'display:flex;align-items:center;gap:5px;padding:4px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;background:var(--bg-primary,#1a1a1a);';
-
-    const envLabel = document.createElement('span');
-    envLabel.textContent = 'Reflect:';
-    envLabel.style.cssText = 'font-size:10px;color:var(--text-secondary,#888);flex-shrink:0;white-space:nowrap;';
-    envRow.appendChild(envLabel);
-
-    const envSelect = document.createElement('select');
-    envSelect.title = 'Environment reflection preset — sets what materials reflect';
-    envSelect.style.cssText = [
-      'flex:1', 'min-width:0',
-      'background:var(--bg-secondary,#252525)',
-      'border:1px solid var(--border-color,#333)',
-      'color:var(--text-primary,#e0e0e0)',
-      'border-radius:4px', 'padding:2px 5px',
-      'font-size:11px', 'cursor:pointer',
-    ].join(';');
-    const ENV_OPTIONS = [
-      { value: 'room',     label: 'Room (Default)' },
-      { value: 'studio',   label: 'Studio White'   },
-      { value: 'sunny',    label: 'Sunny Midday'    },
-      { value: 'golden',   label: 'Golden Hour'     },
-      { value: 'overcast', label: 'Overcast Sky'    },
-      { value: 'night',    label: 'Night Sky'       },
-    ];
-    for (const opt of ENV_OPTIONS) {
-      const o = document.createElement('option');
-      o.value = opt.value; o.textContent = opt.label;
-      envSelect.appendChild(o);
-    }
-    envSelect.addEventListener('change', () => {
-      window.dispatchEvent(new CustomEvent('cyco-env-preset', { detail: { preset: envSelect.value } }));
-    });
-    envRow.appendChild(envSelect);
-
-    const intLabel = document.createElement('span');
-    intLabel.textContent = 'Int:';
-    intLabel.style.cssText = 'font-size:10px;color:var(--text-secondary,#888);flex-shrink:0;';
-    envRow.appendChild(intLabel);
-
-    const intInput = document.createElement('input');
-    intInput.type = 'number'; intInput.min = '0'; intInput.max = '5'; intInput.step = '0.1'; intInput.value = '1.0';
-    intInput.title = 'Environment map intensity — how strongly materials reflect the env map';
-    intInput.style.cssText = [
-      'width:46px', 'background:var(--bg-secondary,#252525)',
-      'border:1px solid var(--border-color,#333)',
-      'color:var(--text-primary,#e0e0e0)',
-      'border-radius:4px', 'padding:2px 5px',
-      'font-size:11px', 'text-align:center',
-    ].join(';');
-    intInput.addEventListener('change', () => {
-      const v = parseFloat(intInput.value);
-      if (!isNaN(v)) {
-        window.dispatchEvent(new CustomEvent('cyco-env-intensity', { detail: { intensity: v } }));
-      }
-    });
-    envRow.appendChild(intInput);
-
-    root.appendChild(envRow);
 
     // Grid ─────────────────────────────────────────────────────────────────
     this._grid = document.createElement('div');

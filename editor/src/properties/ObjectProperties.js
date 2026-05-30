@@ -187,6 +187,44 @@ export class ObjectProperties {
       body.appendChild(row('Side', sideEl));
     }
 
+    // Environment reflection — preset (scene-level) + per-material intensity
+    {
+      const envSel = document.createElement('select');
+      envSel.className = 'ce-prop-select';
+      envSel.style.cssText = 'width:100%;background:#2a2a2a;color:#ccc;border:1px solid #444;border-radius:3px;padding:2px 4px;font-size:11px;';
+      [
+        ['Room (Default)', 'room'],
+        ['Studio White',   'studio'],
+        ['Sunny Midday',   'sunny'],
+        ['Golden Hour',    'golden'],
+        ['Overcast Sky',   'overcast'],
+        ['Night Sky',      'night'],
+      ].forEach(([label, val]) => {
+        const opt = document.createElement('option');
+        opt.value = val; opt.textContent = label;
+        envSel.appendChild(opt);
+      });
+      // Reflect the current scene preset if stored
+      const curPreset = window.__cyco?.viewportEngine?._currentEnvPreset ?? 'room';
+      envSel.value = curPreset;
+      envSel.addEventListener('change', () => {
+        window.dispatchEvent(new CustomEvent('cyco-env-preset', { detail: { preset: envSel.value } }));
+        if (window.__cyco?.viewportEngine) window.__cyco.viewportEngine._currentEnvPreset = envSel.value;
+      });
+      body.appendChild(row('Env Reflection', envSel));
+    }
+
+    // Scene-level environment intensity — how strongly the env map illuminates all materials
+    {
+      const curIntensity = window.__cyco?.viewportEngine?.scene?.environmentIntensity ?? 1;
+      const s = slider({ value: curIntensity, min: 0, max: 5, step: 0.05,
+        onChange: (v) => {
+          window.dispatchEvent(new CustomEvent('cyco-env-intensity', { detail: { intensity: v } }));
+        },
+      });
+      body.appendChild(row('Env Intensity', s.el));
+    }
+
     // Flip normals — reverses every vertex normal so inside-out meshes render correctly
     if (obj.isMesh || obj.isSkinnedMesh) {
       const flipBtn = document.createElement('button');
