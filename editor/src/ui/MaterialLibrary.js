@@ -54,9 +54,9 @@ export const MATERIALS = [
   // ── PBR Physical (MeshPhysicalMaterial) ──────────────────────────────────
   { id: 'clear-glass',   name: 'Clear Glass',   category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#cce8ff', transmission: 1, thickness: 0.5, roughness: 0, transparent: true, opacity: 1, side: 2 }, preview: '#cce8ff' },
   { id: 'frosted-glass', name: 'Frosted Glass', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#d0e8ff', transmission: 0.9, roughness: 0.3, transparent: true, opacity: 1, side: 2 }, preview: '#d0e8ff' },
-  { id: 'car-paint-red', name: 'Car Paint Red', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#CC0000', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.2, roughness: 0.3, side: 2 }, preview: '#CC0000' },
-  { id: 'car-paint-blue', name: 'Car Paint Blue', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#002299', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.2, roughness: 0.3, side: 2 }, preview: '#002299' },
-  { id: 'car-paint-black', name: 'Car Paint Black', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#111111', clearcoat: 1, clearcoatRoughness: 0.02, metalness: 0.3, roughness: 0.1, side: 2 }, preview: '#111111' },
+  { id: 'car-paint-red', name: 'Car Paint Red', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#CC0000', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.9, roughness: 0.3, side: 2 }, preview: '#CC0000' },
+  { id: 'car-paint-blue', name: 'Car Paint Blue', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#0055EE', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.9, roughness: 0.3, side: 2 }, preview: '#0055EE' },
+  { id: 'car-paint-black', name: 'Car Paint Black', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#111111', clearcoat: 1, clearcoatRoughness: 0.02, metalness: 0.9, roughness: 0.1, side: 2 }, preview: '#111111' },
   { id: 'water-surface', name: 'Water Surface', category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#4488cc', transmission: 0.95, roughness: 0, transparent: true, opacity: 1, side: 2 }, preview: '#4488cc' },
   { id: 'velvet-red',    name: 'Velvet Red',    category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#8B0000', sheen: 1, sheenRoughness: 0.3, roughness: 0.8, metalness: 0, side: 2 }, preview: '#8B0000' },
   { id: 'ice',           name: 'Ice',           category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#D0F0FF', transmission: 0.5, roughness: 0.05, transparent: true, opacity: 1, side: 2 }, preview: '#D0F0FF' },
@@ -65,6 +65,28 @@ export const MATERIALS = [
   { id: 'soap-bubble',   name: 'Soap Bubble',   category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#ffffff', iridescence: 1, transmission: 0.8, roughness: 0, transparent: true, opacity: 0.9, side: 2 }, preview: 'linear-gradient(135deg,#ff80ff,#80ffff)' },
   { id: 'holographic',   name: 'Holographic',   category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#aaaaff', iridescence: 1, metalness: 0.9, roughness: 0, side: 2 }, preview: 'linear-gradient(135deg,#ff00ff,#00ffff)' },
   { id: 'rubber-black',  name: 'Rubber Black',  category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#1a1a1a', roughness: 0.9, metalness: 0, side: 2 }, preview: '#1a1a1a' },
+
+  // ── Car Paint Extended ────────────────────────────────────────────────────
+  { id: 'car-paint-white',   name: 'Car Paint White',   category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#F5F5F5', clearcoat: 1, clearcoatRoughness: 0.03, metalness: 0.9, roughness: 0.25, side: 2 }, preview: '#F5F5F5' },
+  { id: 'car-paint-green',   name: 'Car Paint Green',   category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#1A7A30', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.9, roughness: 0.3, side: 2 }, preview: '#1A7A30' },
+  { id: 'car-paint-silver',  name: 'Car Paint Silver',  category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#B0B8C0', clearcoat: 1, clearcoatRoughness: 0.03, metalness: 1.0, roughness: 0.2, side: 2 }, preview: '#B0B8C0' },
+  { id: 'car-paint-gold',    name: 'Car Paint Gold',    category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#D4A820', clearcoat: 0.8, clearcoatRoughness: 0.05, metalness: 1.0, roughness: 0.15, side: 2 }, preview: '#D4A820' },
+  { id: 'car-paint-orange',  name: 'Car Paint Orange',  category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#DD6600', clearcoat: 1, clearcoatRoughness: 0.04, metalness: 0.9, roughness: 0.3, side: 2 }, preview: '#DD6600' },
+  { id: 'car-paint-purple',  name: 'Car Paint Purple',  category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#7722CC', clearcoat: 1, clearcoatRoughness: 0.05, metalness: 0.9, roughness: 0.3, side: 2 }, preview: '#7722CC' },
+
+  // ── Metals Extended ───────────────────────────────────────────────────────
+  { id: 'platinum',          name: 'Platinum',          category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#E5E4E2', clearcoat: 0.5, clearcoatRoughness: 0.02, metalness: 1.0, roughness: 0.05, side: 2 }, preview: '#E5E4E2' },
+  { id: 'titanium',          name: 'Titanium',          category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#878681', metalness: 1.0, roughness: 0.35, side: 2 }, preview: '#878681' },
+  { id: 'gun-metal',         name: 'Gun Metal',         category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#2C3539', metalness: 1.0, roughness: 0.2, side: 2 }, preview: '#2C3539' },
+  { id: 'anodized-blue',     name: 'Anodized Blue',     category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#1144CC', metalness: 1.0, roughness: 0.15, side: 2 }, preview: '#1144CC' },
+  { id: 'anodized-red',      name: 'Anodized Red',      category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#CC1122', metalness: 1.0, roughness: 0.15, side: 2 }, preview: '#CC1122' },
+  { id: 'liquid-metal',      name: 'Liquid Metal',      category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#888899', metalness: 1.0, roughness: 0.0, side: 2 }, preview: '#888899' },
+
+  // ── Clearcoat / Lacquer ───────────────────────────────────────────────────
+  { id: 'lacquer-red',       name: 'Lacquer Red',       category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#CC1100', clearcoat: 1.0, clearcoatRoughness: 0.0, metalness: 0, roughness: 0.1, side: 2 }, preview: '#CC1100' },
+  { id: 'lacquer-blue',      name: 'Lacquer Blue',      category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#0044BB', clearcoat: 1.0, clearcoatRoughness: 0.0, metalness: 0, roughness: 0.1, side: 2 }, preview: '#0044BB' },
+  { id: 'lacquer-black',     name: 'Lacquer Black',     category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#080808', clearcoat: 1.0, clearcoatRoughness: 0.0, metalness: 0, roughness: 0.05, side: 2 }, preview: '#080808' },
+  { id: 'lacquer-white',     name: 'Lacquer White',     category: 'PBR Physical', type: 'MeshPhysicalMaterial', params: { color: '#F0F0F0', clearcoat: 1.0, clearcoatRoughness: 0.0, metalness: 0, roughness: 0.05, side: 2 }, preview: '#F0F0F0' },
 
   // ── Phong / Lambert ───────────────────────────────────────────────────────
   { id: 'shiny-plastic-white', name: 'Shiny Plastic White', category: 'Phong / Lambert', type: 'MeshPhongMaterial', params: { color: '#ffffff', shininess: 100, specular: '#ffffff', side: 2 }, preview: '#f8f8f8' },

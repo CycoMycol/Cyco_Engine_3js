@@ -92,6 +92,7 @@ export class ViewportEngine {
     this._onEnvBgToggle         = this._onEnvBgToggle.bind(this);
     this._onBackgroundChange    = this._onBackgroundChange.bind(this);
     this._onEnvPreset           = this._onEnvPreset.bind(this);
+    this._onEnvIntensity        = this._onEnvIntensity.bind(this);
     this._onLoadingStart        = this._onLoadingStart.bind(this);
     this._onLoadingProgress     = this._onLoadingProgress.bind(this);
     this._onLoadingDone         = this._onLoadingDone.bind(this);
@@ -108,6 +109,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-env-background-toggle',   this._onEnvBgToggle);
     window.addEventListener('cyco-background-change',       this._onBackgroundChange);
     window.addEventListener('cyco-env-preset',              this._onEnvPreset);
+    window.addEventListener('cyco-env-intensity',           this._onEnvIntensity);
     window.addEventListener('cyco-loading-start',           this._onLoadingStart);
     window.addEventListener('cyco-loading-progress',        this._onLoadingProgress);
     window.addEventListener('cyco-loading-done',            this._onLoadingDone);
@@ -331,15 +333,28 @@ export class ViewportEngine {
     if (!url || !this.scene) return;
     let renderer = this.rendererManager.renderer;
     if (!renderer) return;
-    // PMREMGenerator requires a real WebGLRenderer — use inner renderer for PathTracer wrapper
+    // PathTracingRenderer wraps an inner WebGLRenderer — use that
     renderer = renderer._webglRenderer ?? renderer;
-    if (!renderer.isWebGLRenderer) {
-      console.warn('[ViewportEngine] HDRI env map not supported with current renderer — switch to WebGL first.');
-      console.log('[CYCO:ENV] env map SKIP — not a WebGLRenderer');
+
+    let PMREMGen;
+    if (renderer.isWebGLRenderer) {
+      PMREMGen = THREE.PMREMGenerator;
+    } else if (renderer.isWebGPURenderer) {
+      try {
+        const mod = await import('three/webgpu');
+        PMREMGen = mod.PMREMGenerator;
+      } catch (e) {
+        console.warn('[ViewportEngine] HDRI env map not supported with current renderer:', e);
+        return;
+      }
+    } else {
+      console.warn('[ViewportEngine] HDRI env map not supported with current renderer — switch to WebGL/WebGPU first.');
       return;
     }
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    pmrem.compileEquirectangularShader();
+    const pmrem = new PMREMGen(renderer);
+    if (typeof pmrem.compileEquirectangularShader === 'function') {
+      pmrem.compileEquirectangularShader();
+    }
     try {
       const { RGBELoader } = await import('three/addons/loaders/RGBELoader.js');
       const { EXRLoader }  = await import('three/addons/loaders/EXRLoader.js');
@@ -493,11 +508,38 @@ export class ViewportEngine {
     return tex;
   }
 
-  /** Restore the built-in RoomEnvironment IBL preset. */
+  /** Restore or switch the env map preset. */
   _onEnvPreset({ detail } = {}) {
-    console.log(`[CYCO:ENV] cyco-env-preset  preset=${detail?.preset}`);
-    if (detail?.preset === 'room') {
+    const preset = detail?.preset;
+    console.log(`[CYCO:ENV] cyco-env-preset  preset=${preset}`);
+    if (preset === 'room') {
       this._setupIBL();
+      return;
+    }
+    // Sky presets — build gradient env map directly without touching the sky render mesh
+    const SKY_PRESETS = {
+      'sunny':     { top: '#87CEEB', mid: '#d0e8ff', bot: '#c8daf0' },
+      'golden':    { top: '#3a3a6a', mid: '#e07040', bot: '#f0a060' },
+      'overcast':  { top: '#888888', mid: '#aaaaaa', bot: '#bbbbbb' },
+      'night':     { top: '#000010', mid: '#000020', bot: '#050520' },
+      'studio':    { top: '#cccccc', mid: '#e0e0e0', bot: '#aaaaaa' },
+    };
+    const stops = SKY_PRESETS[preset];
+    if (stops) {
+      const colorStops = [
+        { pos: 0,   color: stops.bot },
+        { pos: 0.5, color: stops.mid },
+        { pos: 1,   color: stops.top },
+      ];
+      const renderer = this.rendererManager.renderer;
+      if (renderer) this._buildSkyEnvMap(colorStops, renderer);
+    }
+  }
+
+  /** Set scene environment intensity. */
+  _onEnvIntensity({ detail } = {}) {
+    if (this.scene && detail?.intensity !== undefined) {
+      this.scene.environmentIntensity = Math.max(0, Math.min(5, detail.intensity));
     }
   }
 
@@ -529,12 +571,26 @@ export class ViewportEngine {
    * Build a simple equirectangular env map from the sky gradient colour stops
    * and apply it to scene.environment so metallic/glass materials reflect the sky.
    * @param {Array<{pos:number,color:string}>} colorStops
-   * @param {THREE.WebGLRenderer} renderer
+   * @param {THREE.WebGLRenderer|WebGPURenderer} renderer
    */
-  _buildSkyEnvMap(colorStops, renderer) {
-    // PMREMGenerator requires a real WebGLRenderer — skip for WebGPU/SVG/CSS3D
+  async _buildSkyEnvMap(colorStops, renderer) {
     const glRenderer = renderer?._webglRenderer ?? renderer;
-    if (!glRenderer?.isWebGLRenderer) return;
+    let PMREMGen;
+    if (glRenderer?.isWebGLRenderer) {
+      PMREMGen = THREE.PMREMGenerator;
+    } else if (glRenderer?.isWebGPURenderer || renderer?.isWebGPURenderer) {
+      const actualRenderer = renderer?.isWebGPURenderer ? renderer : glRenderer;
+      try {
+        const mod = await import('three/webgpu');
+        PMREMGen = mod.PMREMGenerator;
+        // For WebGPU path, re-assign glRenderer reference used below
+        Object.defineProperty(this, '_skyEnvMapGPURenderer', { value: actualRenderer, configurable: true });
+      } catch { return; }
+    } else {
+      return;
+    }
+    // Resolve the renderer to use for PMREMGenerator
+    const pmremRenderer = PMREMGen === THREE.PMREMGenerator ? glRenderer : (this._skyEnvMapGPURenderer ?? renderer);
     try {
       const w = 512, h = 256;
       const canvas = document.createElement('canvas');
@@ -554,8 +610,10 @@ export class ViewportEngine {
       tex.mapping    = THREE.EquirectangularReflectionMapping;
       tex.colorSpace = THREE.SRGBColorSpace;
 
-      const pmrem  = new THREE.PMREMGenerator(glRenderer);
-      pmrem.compileEquirectangularShader();
+      const pmrem  = new PMREMGen(pmremRenderer);
+      if (typeof pmrem.compileEquirectangularShader === 'function') {
+        pmrem.compileEquirectangularShader();
+      }
       const envTex = pmrem.fromEquirectangular(tex).texture;
       pmrem.dispose();
       tex.dispose();
@@ -588,8 +646,9 @@ export class ViewportEngine {
     this.axesHelper.raycast = () => {};
     this.axesHelper.userData._isHelper = true;
     this.scene.add(this.gridHelper, this.axesHelper);
-    // Reduce IBL contribution so directional light shadows remain visible
-    this.scene.environmentIntensity = 0.4;
+    // IBL intensity: 1.0 ensures metallic/glass materials show full reflections.
+    // Directional shadows stay visible because they are multiplicative on top of IBL.
+    this.scene.environmentIntensity = 1.0;
   }
 
   _makeGrid(size, divisions) {
@@ -605,23 +664,43 @@ export class ViewportEngine {
    * IBL setup via PMREMGenerator.
    * MUST call pmrem.dispose() after use — holds WebGL render targets.
    */
-  _setupIBL() {
+  async _setupIBL() {
     console.log('[CYCO:ENV] _setupIBL() — building RoomEnvironment IBL');
     let renderer = this.rendererManager.renderer;
     if (!renderer) return;
     // PathTracingRenderer wraps an inner WebGLRenderer — use that for IBL
     if (renderer._webglRenderer) renderer = renderer._webglRenderer;
-    // PMREMGenerator requires a real WebGLRenderer (not WebGPU/SVG/CSS3D)
-    if (!renderer.isWebGLRenderer) {
-      console.log('[CYCO:ENV] _setupIBL() SKIP — not a WebGLRenderer');
+
+    let PMREMGen;
+    if (renderer.isWebGLRenderer) {
+      PMREMGen = THREE.PMREMGenerator;
+    } else if (renderer.isWebGPURenderer) {
+      // WebGPURenderer (even forceWebGL) uses its own PMREMGenerator from three/webgpu
+      try {
+        const mod = await import('three/webgpu');
+        PMREMGen = mod.PMREMGenerator;
+      } catch (e) {
+        console.warn('[CYCO:ENV] _setupIBL() SKIP — could not load WebGPU PMREMGenerator:', e);
+        return;
+      }
+    } else {
+      console.log('[CYCO:ENV] _setupIBL() SKIP — unsupported renderer type');
       return;
     }
-    const pmrem = new THREE.PMREMGenerator(renderer);
-    pmrem.compileEquirectangularShader();
-    const envTexture = pmrem.fromScene(new RoomEnvironment()).texture;
-    pmrem.dispose(); // prevents GPU memory leak
-    this.scene.environment = envTexture;
-    console.log('[CYCO:ENV] _setupIBL() done — scene.environment set  envIntensity=' + this.scene.environmentIntensity);
+
+    try {
+      const pmrem = new PMREMGen(renderer);
+      // compileEquirectangularShader() is a WebGL-only pre-warm — skip on WebGPU
+      if (typeof pmrem.compileEquirectangularShader === 'function') {
+        pmrem.compileEquirectangularShader();
+      }
+      const envTexture = pmrem.fromScene(new RoomEnvironment()).texture;
+      pmrem.dispose();
+      this.scene.environment = envTexture;
+      console.log('[CYCO:ENV] _setupIBL() done — scene.environment set  envIntensity=' + this.scene.environmentIntensity);
+    } catch (e) {
+      console.warn('[ViewportEngine] IBL setup failed:', e);
+    }
   }
 
   _buildControls() {
@@ -1296,6 +1375,8 @@ export class ViewportEngine {
     window.removeEventListener('cyco-fog-change',               this._onFogChange);
     window.removeEventListener('cyco-env-map-change',           this._onEnvMapChange);
     window.removeEventListener('cyco-env-background-toggle',    this._onEnvBgToggle);
+    window.removeEventListener('cyco-env-preset',               this._onEnvPreset);
+    window.removeEventListener('cyco-env-intensity',            this._onEnvIntensity);
     window.removeEventListener('cyco-loading-start',            this._onLoadingStart);
     window.removeEventListener('cyco-loading-progress',         this._onLoadingProgress);
     window.removeEventListener('cyco-loading-done',             this._onLoadingDone);
