@@ -330,8 +330,20 @@ export class EnvironmentProperties {
     });
     flareSec.addRow(row('Style', lensflareStyleSelect));
 
+    const lensflareColorSw = colorSwatch({
+      color: _skyP ? ('#' + (_skyP.lensflareColor?.getHexString?.() ?? 'fff8e7')) : '#fff8e7',
+      onChange: () => _fire(),
+    });
+    flareSec.addRow(row('Color', lensflareColorSw.el));
+
+    const lensflareColorIntensitySlider = slider({
+      value: _skyP?.lensflareColorIntensity ?? 1.5, min: 0, max: 5, step: 0.1,
+      onChange: () => _fire(),
+    });
+    flareSec.addRow(row('Color Intensity', lensflareColorIntensitySlider.el));
+
     const lensflareSizeSlider = slider({
-      value: _skyP?.lensflareSize ?? 300, min: 50, max: 1200, step: 10,
+      value: _skyP?.lensflareSize ?? 150, min: 20, max: 500, step: 5,
       onChange: () => _fire(),
     });
     const _sizeRow = row('Size', lensflareSizeSlider.el);
@@ -368,20 +380,53 @@ export class EnvironmentProperties {
     });
     const _brightnessRow = row('Brightness', lensflareBrightnessSlider.el);
 
+    const lensflareRingThicknessSlider = slider({
+      value: _skyP?.lensflareRingThickness ?? 0.12, min: 0.02, max: 0.50, step: 0.01,
+      onChange: () => _fire(),
+    });
+    const _ringThicknessRow = row('Ring Thickness', lensflareRingThicknessSlider.el);
+
+    const lensflareRingFillSlider = slider({
+      value: _skyP?.lensflareRingFill ?? 0, min: 0, max: 1, step: 0.05,
+      onChange: () => _fire(),
+    });
+    const _ringFillRow = row('Ring Fill', lensflareRingFillSlider.el);
+
+    const lensflareRingSizeSlider = slider({
+      value: _skyP?.lensflareRingSize ?? 40, min: 5, max: 200, step: 5,
+      onChange: () => _fire(),
+    });
+    const _ringSizeRow = row('Ring Size', lensflareRingSizeSlider.el);
+
+    const lensflareRingOpacitySlider = slider({
+      value: _skyP?.lensflareRingOpacity ?? 0.7, min: 0, max: 1, step: 0.05,
+      onChange: () => _fire(),
+    });
+    const _ringOpacityRow = row('Ring Opacity', lensflareRingOpacitySlider.el);
+
     // Add all per-style rows to section (initially hidden)
     flareSec.addRow(_intensityRow);
     flareSec.addRow(_ghostRow);
     flareSec.addRow(_streakRow);
     flareSec.addRow(_brightnessRow);
+    flareSec.addRow(_ringThicknessRow);
+    flareSec.addRow(_ringFillRow);
+    flareSec.addRow(_ringSizeRow);
+    flareSec.addRow(_ringOpacityRow);
 
     /** Show/hide per-style rows based on the current style selection. */
     const _updateFlareStyleRows = () => {
       const styleVal = lensflareStyleSelect.value ?? 'classic';
-      _intensityRow.style.display  = styleVal === 'cinematic'  ? '' : 'none';
-      _ghostRow.style.display      = styleVal === 'cinematic'  ? '' : 'none';
-      _streakRow.style.display     = styleVal === 'anamorphic' ? '' : 'none';
-      _brightnessRow.style.display = styleVal === 'natural'    ? '' : 'none';
-      _sizeRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
+      _intensityRow.style.display      = styleVal === 'cinematic'  ? '' : 'none';
+      _ghostRow.style.display          = styleVal === 'cinematic'  ? '' : 'none';
+      _streakRow.style.display         = styleVal === 'anamorphic' ? '' : 'none';
+      _brightnessRow.style.display     = styleVal === 'natural'    ? '' : 'none';
+      _sizeRow.style.display           = styleVal === 'anamorphic' ? 'none' : '';
+      // Ring controls hidden for anamorphic (uses streaks not rings)
+      _ringThicknessRow.style.display  = styleVal === 'anamorphic' ? 'none' : '';
+      _ringFillRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
+      _ringSizeRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
+      _ringOpacityRow.style.display    = styleVal === 'anamorphic' ? 'none' : '';
     };
     _updateFlareStyleRows();
 
@@ -393,8 +438,11 @@ export class EnvironmentProperties {
       showSunCb, sunColorSw, sunGlowSlider,
       showMoonCb, moonColorSw, moonGlowSlider,
       lensflareEnabledCb, lensflareSizeSlider, lensflareOpacitySlider,
-      lensflareStyleSelect, lensflareIntensitySlider, lensflareGhostCountSlider,
+      lensflareStyleSelect, lensflareColorSw, lensflareColorIntensitySlider,
+      lensflareIntensitySlider, lensflareGhostCountSlider,
       lensflareStreakLengthSlider, lensflareBrightnessSlider,
+      lensflareRingThicknessSlider, lensflareRingFillSlider,
+      lensflareRingSizeSlider, lensflareRingOpacitySlider,
     };
   }
 
@@ -426,10 +474,16 @@ export class EnvironmentProperties {
         lensflareSize:         parseFloat(s.lensflareSizeSlider.input.value),
         lensflareOpacity:      parseFloat(s.lensflareOpacitySlider.input.value),
         lensflareStyle:        s.lensflareStyleSelect?.value ?? 'classic',
+        lensflareColor:        s.lensflareColorSw.el.style.getPropertyValue('--sw-color') || '#fff8e7',
+        lensflareColorIntensity: parseFloat(s.lensflareColorIntensitySlider.input.value),
         lensflareIntensity:    parseFloat(s.lensflareIntensitySlider.input.value),
         lensflareGhostCount:   parseFloat(s.lensflareGhostCountSlider.input.value),
         lensflareStreakLength:  parseFloat(s.lensflareStreakLengthSlider.input.value),
         lensflareBrightness:   parseFloat(s.lensflareBrightnessSlider.input.value),
+        lensflareRingThickness: parseFloat(s.lensflareRingThicknessSlider.input.value),
+        lensflareRingFill:       parseFloat(s.lensflareRingFillSlider.input.value),
+        lensflareRingSize:       parseFloat(s.lensflareRingSizeSlider.input.value),
+        lensflareRingOpacity:    parseFloat(s.lensflareRingOpacitySlider.input.value),
       }
     }));
   }

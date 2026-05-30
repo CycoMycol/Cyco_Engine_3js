@@ -36,14 +36,38 @@ export class RendererManager {
   /**
    * Initialise the default WebGL renderer inside the given container element.
    * Must be called once from ViewportEngine.init().
+   *
+   * If the WebGL context fails on the first attempt (can happen in VS Code's
+   * WebView2 if the GPU process hasn't fully released contexts from the previous
+   * page load), this retries up to two more times with a short delay.
+   *
    * @param {HTMLElement} container
    * @param {number} width
    * @param {number} height
-   * @returns {THREE.WebGLRenderer}
+   * @returns {Promise<THREE.WebGLRenderer>}
    */
-  init(container, width, height) {
+  async init(container, width, height) {
     this.container = container;
-    this.renderer = this._createWebGL(width, height);
+
+    const MAX_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 400;
+    let lastErr;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        this.renderer = this._createWebGL(width, height);
+        break; // success
+      } catch (err) {
+        lastErr = err;
+        if (attempt < MAX_ATTEMPTS) {
+          console.warn(`[RendererManager] WebGL context creation failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${RETRY_DELAY_MS}ms…`, err.message);
+          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        }
+      }
+    }
+    if (!this.renderer) {
+      throw lastErr; // all attempts exhausted — propagate for caller to handle
+    }
+
     container.appendChild(this.renderer.domElement);
     this._dispatch('cyco-renderer-ready', { renderer: this.renderer, type: this.activeType });
     return this.renderer;

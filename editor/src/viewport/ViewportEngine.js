@@ -121,14 +121,24 @@ export class ViewportEngine {
    * Also called automatically via 'cyco-viewport-container-ready' event from CenterPanel.
    * @param {HTMLElement} container  The element that hosts the canvas.
    */
-  init(container) {
+  async init(container) {
     this._container = container;
     const { width, height } = container.getBoundingClientRect();
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
 
-    // Init renderer
-    this.rendererManager.init(container, w, h);
+    // Init renderer (async — retries up to 3× if context creation is blocked)
+    try {
+      await this.rendererManager.init(container, w, h);
+    } catch (err) {
+      console.error('[ViewportEngine] Failed to create WebGL renderer after all retries:', err.message);
+      // Show user-visible error in the container
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e07228;font-size:14px;padding:20px;text-align:center;';
+      msg.textContent = 'Unable to initialise WebGL. Please reload the page.';
+      container.appendChild(msg);
+      return;
+    }
 
     // Build scene + camera
     this._buildScene(w, h);
@@ -224,7 +234,8 @@ export class ViewportEngine {
       showMoon = true, moonColor, moonGlowStrength,
       exposure, saturation, contrast,
       lensflareEnabled, lensflareSize, lensflareOpacity,
-      lensflareStyle, lensflareIntensity, lensflareGhostCount, lensflareStreakLength, lensflareBrightness,
+      lensflareStyle, lensflareColor, lensflareColorIntensity, lensflareIntensity, lensflareGhostCount, lensflareStreakLength, lensflareBrightness,
+      lensflareRingThickness, lensflareRingFill, lensflareRingSize, lensflareRingOpacity,
     } = detail ?? {};
     console.log(
       `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  elevation=${elevation}°  azimuth=${azimuth}°` +
@@ -262,6 +273,12 @@ export class ViewportEngine {
     if (lensflareGhostCount   !== undefined) params.lensflareGhostCount   = lensflareGhostCount;
     if (lensflareStreakLength  !== undefined) params.lensflareStreakLength  = lensflareStreakLength;
     if (lensflareBrightness   !== undefined) params.lensflareBrightness   = lensflareBrightness;
+    if (lensflareColor) params.lensflareColor = lensflareColor;
+    if (lensflareColorIntensity !== undefined) params.lensflareColorIntensity = lensflareColorIntensity;
+    if (lensflareRingThickness  !== undefined) params.lensflareRingThickness  = lensflareRingThickness;
+    if (lensflareRingFill        !== undefined) params.lensflareRingFill        = lensflareRingFill;
+    if (lensflareRingSize        !== undefined) params.lensflareRingSize        = lensflareRingSize;
+    if (lensflareRingOpacity     !== undefined) params.lensflareRingOpacity     = lensflareRingOpacity;
 
     this.gradientSky.setEnabled(true);
     this.gradientSky.setParams(params);
@@ -858,23 +875,31 @@ export class ViewportEngine {
   }
 
   _buildContextMenu(container) {
-    // Track right-mousedown position so we can distinguish a click from a drag.
-    // If the mouse moved > 4 px between mousedown and contextmenu, it was an orbit
-    // drag and we should NOT show the context menu.
+    // _didDrag: set true whenever the right button is held and the mouse moves > 4 px.
+    // Cleared on every right mousedown so each click starts fresh.
+    // The contextmenu event suppresses the menu (and clears the flag) if a drag occurred.
+    let _didDrag = false;
     let _rdX = 0, _rdY = 0;
     this._onRightMousedown = (e) => {
-      if (e.button === 2) { _rdX = e.clientX; _rdY = e.clientY; }
+      if (e.button === 2) { _rdX = e.clientX; _rdY = e.clientY; _didDrag = false; }
+    };
+    this._onMousemoveCtx = (e) => {
+      // e.buttons bit 2 = right button held
+      if ((e.buttons & 2) && !_didDrag) {
+        if (Math.hypot(e.clientX - _rdX, e.clientY - _rdY) > 4) _didDrag = true;
+      }
     };
     document.addEventListener('mousedown', this._onRightMousedown);
+    document.addEventListener('mousemove', this._onMousemoveCtx);
 
     this._onContextMenu = (e) => {
       // Only handle right-click on the viewport canvas
       const canvas = this.rendererManager.renderer?.domElement;
-      if (!canvas || !canvas.contains(e.target) && e.target !== canvas) return;
+      if (!canvas || (!canvas.contains(e.target) && e.target !== canvas)) return;
       e.preventDefault();
 
-      // If mouse dragged more than 4 px this was an orbit drag — skip menu
-      if (Math.hypot(e.clientX - _rdX, e.clientY - _rdY) > 4) return;
+      // If right button was dragged, this was an orbit/pan — skip menu
+      if (_didDrag) { _didDrag = false; return; }
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
@@ -1181,6 +1206,7 @@ export class ViewportEngine {
     const { container } = event.detail;
     if (!container) return;
     if (this._container === container) return; // same element, nothing to do
+    if (this._initPending) return; // init already in progress, ignore duplicate event
 
     // Remove placeholder label in the new container
     const lbl = container.querySelector('#cyco-viewport-placeholder-label');
@@ -1211,7 +1237,8 @@ export class ViewportEngine {
     }
 
     // First-time initialisation
-    this.init(container);
+    this._initPending = true;
+    this.init(container).finally(() => { this._initPending = false; });
   }
 
   _onRendererChanged(event) {
@@ -1252,6 +1279,12 @@ export class ViewportEngine {
     this._disposeHelperOverlay();
     if (this._onContextMenu) {
       document.removeEventListener('contextmenu', this._onContextMenu);
+    }
+    if (this._onRightMousedown) {
+      document.removeEventListener('mousedown', this._onRightMousedown);
+    }
+    if (this._onMousemoveCtx) {
+      document.removeEventListener('mousemove', this._onMousemoveCtx);
     }
 
     window.removeEventListener('cyco-renderer-changed',         this._onRendererChanged);

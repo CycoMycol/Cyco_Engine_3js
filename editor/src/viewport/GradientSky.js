@@ -244,13 +244,19 @@ export class GradientSky {
       saturation:         1.0,
       contrast:           1.0,
       lensflareEnabled:      true,
-      lensflareSize:         300,
+      lensflareSize:         150,
       lensflareOpacity:      0.7,
       lensflareStyle:        'classic', // 'classic'|'natural'|'cinematic'|'anamorphic'|'subtle'
       lensflareIntensity:    1.0,       // cinematic: strength multiplier
       lensflareGhostCount:   4,         // cinematic: ghost ring count
       lensflareStreakLength:  1.0,      // anamorphic: horizontal streak scale
       lensflareBrightness:   1.2,       // natural: brightness boost
+      lensflareColor:        new THREE.Color(1.0, 0.97, 0.90),  // user-controlled flare tint
+      lensflareColorIntensity: 1.5,     // color baking + HDR brightness multiplier (0–5)
+      lensflareRingThickness:  0.12,    // ring stroke width as fraction of ring radius
+      lensflareRingFill:       0,       // inner fill radius 0=hollow ring, 1=full disc
+      lensflareRingSize:       40,      // ring ghost pixel size (independent from sun glow size)
+      lensflareRingOpacity:    0.7,     // ring ghost opacity (independent from sun glow opacity)
       sunDir:             new THREE.Vector3(),
       moonDir:            new THREE.Vector3(),
     };
@@ -326,6 +332,20 @@ export class GradientSky {
     if (opts.lensflareGhostCount   !== undefined) p.lensflareGhostCount   = opts.lensflareGhostCount;
     if (opts.lensflareStreakLength  !== undefined) p.lensflareStreakLength  = opts.lensflareStreakLength;
     if (opts.lensflareBrightness   !== undefined) p.lensflareBrightness   = opts.lensflareBrightness;
+    // Capture old hex BEFORE setting new color so we can detect actual changes
+    const _prevColorHex = p.lensflareColor.getHexString();
+    if (opts.lensflareColor) p.lensflareColor.set(opts.lensflareColor);
+    // Only rebuild textures when color hex or colorIntensity actually changed value
+    const _colorChanged = (opts.lensflareColor !== undefined && p.lensflareColor.getHexString() !== _prevColorHex) ||
+                          (opts.lensflareColorIntensity !== undefined && opts.lensflareColorIntensity !== p.lensflareColorIntensity);
+    const _ringChanged  = (opts.lensflareRingThickness !== undefined && opts.lensflareRingThickness !== p.lensflareRingThickness) ||
+                          (opts.lensflareRingFill       !== undefined && opts.lensflareRingFill       !== p.lensflareRingFill) ||
+                          (opts.lensflareRingSize        !== undefined && opts.lensflareRingSize        !== p.lensflareRingSize);
+    if (opts.lensflareColorIntensity !== undefined) p.lensflareColorIntensity = opts.lensflareColorIntensity;
+    if (opts.lensflareRingThickness  !== undefined) p.lensflareRingThickness  = opts.lensflareRingThickness;
+    if (opts.lensflareRingFill       !== undefined) p.lensflareRingFill       = opts.lensflareRingFill;
+    if (opts.lensflareRingSize       !== undefined) p.lensflareRingSize       = opts.lensflareRingSize;
+    if (opts.lensflareRingOpacity    !== undefined) p.lensflareRingOpacity    = opts.lensflareRingOpacity;
     const _styleChanged = opts.lensflareStyle !== undefined && opts.lensflareStyle !== p.lensflareStyle;
     const _ghostChanged = opts.lensflareGhostCount !== undefined && opts.lensflareGhostCount !== p.lensflareGhostCount;
     if (opts.lensflareStyle        !== undefined) p.lensflareStyle        = opts.lensflareStyle;
@@ -344,8 +364,8 @@ export class GradientSky {
     this._pushUniforms();
     this._updateSunLight();
 
-    // Recreate flare when style or ghost-count changes, otherwise live-update
-    if (_styleChanged || _ghostChanged) {
+    // Recreate flare when style, ghost-count, ring texture, or color baking params change
+    if (_styleChanged || _ghostChanged || _ringChanged || _colorChanged) {
       this._destroyFlares();
       this._createFlares();
     } else {
@@ -363,6 +383,15 @@ export class GradientSky {
       if (this._lensflareMesh) {
         this._lensflareMesh.position
           .copy(this._p.sunDir).multiplyScalar(450000)
+          .add(cam.position);
+      }
+      // WebGL Lensflare occlusion quad MUST be within the camera frustum (< far plane).
+      // Keep it at half the far distance in the sun direction so the depth test works.
+      if (this._lensflare) {
+        const safeDist = (cam.far ?? 10000) * 0.5;
+        this._lensflare.position
+          .copy(this._p.sunDir)
+          .multiplyScalar(safeDist)
           .add(cam.position);
       }
     }
@@ -780,50 +809,11 @@ export class GradientSky {
   }
 
   /**
-   * WebGPU "natural" style — uses LensflareMesh for proper GPU-native occlusion + visibility.
-   * Falls back to classic sprites if import fails.
+   * WebGPU "natural" style — enhanced sprite set with soft warm glow.
+   * Uses the sprite system for consistent, reliable rendering in all backends.
    */
-  async _createLensflareNaturalWebGPU(scene) {
-    try {
-      const { LensflareMesh, LensflareElement: LFE } =
-        await import('three/addons/objects/LensflareMesh.js');
-      const lensflare = new LensflareMesh();
-      lensflare.userData._isHelper = true;
-
-      const p          = this._p;
-      const brightness = p.lensflareBrightness ?? 1.2;
-      const size       = p.lensflareSize * brightness;
-      const c          = new THREE.Color(p.sunColor);
-
-      const glowTex  = this._makeFlareTexture(256, 'radial');
-      const ringTex  = this._makeFlareTexture(64,  'ring');
-      const burstTex = this._makeFlareTexture(128, 'burst');
-      // sRGB color space required for correct WebGPU rendering
-      glowTex.colorSpace  = THREE.SRGBColorSpace;
-      ringTex.colorSpace  = THREE.SRGBColorSpace;
-      burstTex.colorSpace = THREE.SRGBColorSpace;
-
-      lensflare.addElement(new LFE(glowTex,  size,        0,    c));
-      lensflare.addElement(new LFE(burstTex, size * 0.35, 0));
-      lensflare.addElement(new LFE(ringTex,  50,  0.50));
-      lensflare.addElement(new LFE(ringTex,  70,  0.65));
-      lensflare.addElement(new LFE(ringTex,  40,  0.80));
-      lensflare.addElement(new LFE(ringTex, 100,  0.95));
-      lensflare.addElement(new LFE(ringTex,  60,  1.10));
-
-      // Place at sun (camera-relative; kept in sync every frame in update())
-      const cam = this._vpe?.camera;
-      lensflare.position
-        .copy(p.sunDir).multiplyScalar(450000)
-        .add(cam ? cam.position : new THREE.Vector3());
-
-      this._lensflareMesh = lensflare;
-      scene.add(lensflare);
-      console.log('[GradientSky] LensflareMesh (natural) created ✓');
-    } catch (err) {
-      console.warn('[GradientSky] LensflareMesh failed — using sprite fallback:', err);
-      this._createLensflareSpritesWebGPU(scene, 'natural');
-    }
+  _createLensflareNaturalWebGPU(scene) {
+    this._createLensflareSpritesWebGPU(scene, 'natural');
   }
 
   /** WebGPU anamorphic style — wide horizontal streak sprites. */
@@ -863,6 +853,7 @@ export class GradientSky {
       sprite.userData._sizeScale  = Math.max(el.sizeScaleX, el.sizeScaleY);
       sprite.userData._sunTint    = el.sunTint;
       sprite.userData._isHelper   = true;
+      if (el.ringAbsPx !== undefined) sprite.userData._ringAbsPx = el.ringAbsPx;
       sprite.visible = false;
       this._lensflareSprites.push(sprite);
       scene.add(sprite);
@@ -886,29 +877,45 @@ export class GradientSky {
       for (let i = 0; i < ghosts; i++) {
         const d = 0.3 + (i / ghosts) * 0.85;
         const s = 0.08 + 0.05 * Math.abs(Math.sin(i * 2.3));
-        ELEMS.push({ sizeScale: s, dist: d, texType: 'ring', sunTint: false });
+        const ringAbsPx = Math.round(12 + Math.abs(Math.sin(i * 2.3)) * 20 + 8);
+        ELEMS.push({ sizeScale: s, dist: d, texType: 'ring', sunTint: false, ringAbsPx });
       }
-      ELEMS.push({ sizeScale: 0.30, dist: 1.25, texType: 'radial', sunTint: false });
+      ELEMS.push({ sizeScale: 0.30, dist: 1.25, texType: 'radial', sunTint: false, ringAbsPx: 55 });
     } else if (style === 'subtle') {
       ELEMS = [
         { sizeScale: 0.80, dist: 0.00, texType: 'radial', sunTint: true },
       ];
+    } else if (style === 'natural') {
+      const brightness = p.lensflareBrightness ?? 1.2;
+      ELEMS = [
+        { sizeScale: 1.00 * brightness, dist: 0.00, texType: 'radial', sunTint: true  },
+        { sizeScale: 0.45 * brightness, dist: 0.00, texType: 'burst',  sunTint: true  },
+        { sizeScale: 0.10, dist: 0.50, texType: 'ring', sunTint: false, ringAbsPx: 20  },
+        { sizeScale: 0.13, dist: 0.65, texType: 'ring', sunTint: false, ringAbsPx: 26  },
+        { sizeScale: 0.08, dist: 0.80, texType: 'ring', sunTint: false, ringAbsPx: 16  },
+        { sizeScale: 0.18, dist: 0.95, texType: 'ring', sunTint: false, ringAbsPx: 36  },
+        { sizeScale: 0.09, dist: 1.10, texType: 'ring', sunTint: false, ringAbsPx: 18  },
+      ];
     } else {
-      // classic / natural-fallback
+      // classic
       ELEMS = [
         { sizeScale: 1.00, dist: 0.00, texType: 'radial', sunTint: true  },
         { sizeScale: 0.40, dist: 0.00, texType: 'burst',  sunTint: true  },
-        { sizeScale: 0.12, dist: 0.60, texType: 'ring',   sunTint: false },
-        { sizeScale: 0.15, dist: 0.75, texType: 'ring',   sunTint: false },
-        { sizeScale: 0.10, dist: 0.90, texType: 'ring',   sunTint: false },
-        { sizeScale: 0.20, dist: 1.00, texType: 'ring',   sunTint: false },
+        { sizeScale: 0.12, dist: 0.60, texType: 'ring', sunTint: false, ringAbsPx: 20  },
+        { sizeScale: 0.15, dist: 0.75, texType: 'ring', sunTint: false, ringAbsPx: 28  },
+        { sizeScale: 0.10, dist: 0.90, texType: 'ring', sunTint: false, ringAbsPx: 18  },
+        { sizeScale: 0.20, dist: 1.00, texType: 'ring', sunTint: false, ringAbsPx: 42  },
       ];
     }
 
     this._lensflareSprites = [];
+    const bake = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
     for (const el of ELEMS) {
       const texSize = el.texType === 'radial' ? 256 : el.texType === 'burst' ? 128 : 64;
-      const tex     = this._makeFlareTexture(texSize, el.texType);
+      // Bake user color into radial/burst textures so bloom blooms the correct color
+      const tex = el.sunTint
+        ? this._makeFlareTexture(texSize, el.texType, p.lensflareColor, bake)
+        : this._makeFlareTexture(texSize, el.texType);
       const mat     = new THREE.SpriteMaterial({
         map: tex, transparent: true,
         depthTest: false, depthWrite: false,
@@ -923,6 +930,7 @@ export class GradientSky {
       sprite.userData._sizeScaleY = el.sizeScale;
       sprite.userData._sunTint    = el.sunTint;
       sprite.userData._isHelper   = true;
+      if (el.ringAbsPx !== undefined) sprite.userData._ringAbsPx = el.ringAbsPx;
       sprite.visible = false;
       this._lensflareSprites.push(sprite);
       scene.add(sprite);
@@ -1011,12 +1019,23 @@ export class GradientSky {
 
       sprite.position.copy(worldPos);
 
-      const worldSizeX = p.lensflareSize * sizeScaleX * intensity * worldPerPx;
-      const worldSizeY = p.lensflareSize * sizeScaleY * intensity * worldPerPx;
-      sprite.scale.set(worldSizeX, worldSizeY, 1);
-
-      sprite.material.opacity = p.lensflareOpacity * vis;
-      if (sunTint) sprite.material.color.copy(p.sunColor);
+      const ringAbsPx = sprite.userData._ringAbsPx;
+      if (ringAbsPx !== undefined) {
+        // Ring ghost: independent size from sun glow, independent opacity
+        const ringScale = (p.lensflareRingSize ?? 40) / 40;
+        const worldSize = ringAbsPx * ringScale * worldPerPx;
+        sprite.scale.set(worldSize, worldSize, 1);
+        sprite.material.color.setScalar(1);
+        sprite.material.opacity = (p.lensflareRingOpacity ?? 0.7) * vis;
+      } else {
+        // Sun glow/burst: size from lensflareSize, HDR color intensity for bloom
+        const worldSizeX = p.lensflareSize * sizeScaleX * intensity * worldPerPx;
+        const worldSizeY = p.lensflareSize * sizeScaleY * intensity * worldPerPx;
+        sprite.scale.set(worldSizeX, worldSizeY, 1);
+        // Color is baked into the texture; set material to white so texture color shows accurately.
+        if (sunTint) sprite.material.color.setScalar(1.0);
+        sprite.material.opacity = (p.lensflareOpacity ?? 0.7) * vis;
+      }
       sprite.visible = true;
     });
   }
@@ -1036,57 +1055,63 @@ export class GradientSky {
   _buildClassicWebGL() {
     this._lensflare = new Lensflare();
     this._lensflare.userData._isHelper = true;
-    const glowTex  = this._makeFlareTexture(256, 'radial');
+    const p    = this._p;
+    const bake = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
+    const glowTex  = this._makeFlareTexture(256, 'radial', p.lensflareColor, bake);
     const ringTex  = this._makeFlareTexture(64,  'ring');
-    const burstTex = this._makeFlareTexture(128, 'burst');
-    const p = this._p;
-    const c = new THREE.Color(p.sunColor);
-    this._lensflare.addElement(new LensflareElement(glowTex,  p.lensflareSize,       0,    c));
-    this._lensflare.addElement(new LensflareElement(burstTex, p.lensflareSize * 0.4, 0));
-    this._lensflare.addElement(new LensflareElement(ringTex,  60,  0.60));
-    this._lensflare.addElement(new LensflareElement(ringTex,  80,  0.75));
-    this._lensflare.addElement(new LensflareElement(ringTex,  50,  0.90));
-    this._lensflare.addElement(new LensflareElement(ringTex, 120,  1.00));
+    const burstTex = this._makeFlareTexture(128, 'burst', p.lensflareColor, bake);
+    const c         = p.lensflareColor.clone();
+    const ringScale = (p.lensflareRingSize ?? 40) / 40;
+    this._lensflare.addElement(new LensflareElement(glowTex,  p.lensflareSize,             0,    c));
+    this._lensflare.addElement(new LensflareElement(burstTex, p.lensflareSize * 0.4,       0));
+    this._lensflare.addElement(new LensflareElement(ringTex,  20  * ringScale, 0.60));
+    this._lensflare.addElement(new LensflareElement(ringTex,  28  * ringScale, 0.75));
+    this._lensflare.addElement(new LensflareElement(ringTex,  18  * ringScale, 0.90));
+    this._lensflare.addElement(new LensflareElement(ringTex,  42  * ringScale, 1.00));
   }
 
   _buildNaturalWebGL() {
     this._lensflare = new Lensflare();
     this._lensflare.userData._isHelper = true;
-    const glowTex  = this._makeFlareTexture(256, 'radial');
+    const p          = this._p;
+    const bake       = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
+    const glowTex  = this._makeFlareTexture(256, 'radial', p.lensflareColor, bake);
     const ringTex  = this._makeFlareTexture(64,  'ring');
-    const burstTex = this._makeFlareTexture(128, 'burst');
+    const burstTex = this._makeFlareTexture(128, 'burst', p.lensflareColor, bake);
     // SRGBColorSpace for correct color reproduction (per three.js WebGPU example)
     glowTex.colorSpace  = THREE.SRGBColorSpace;
     ringTex.colorSpace  = THREE.SRGBColorSpace;
     burstTex.colorSpace = THREE.SRGBColorSpace;
-    const p          = this._p;
     const brightness = p.lensflareBrightness ?? 1.2;
     const size       = p.lensflareSize * brightness;
-    const c          = new THREE.Color(p.sunColor);
-    this._lensflare.addElement(new LensflareElement(glowTex,  size,        0,    c));
-    this._lensflare.addElement(new LensflareElement(burstTex, size * 0.35, 0));
-    this._lensflare.addElement(new LensflareElement(ringTex,  50,  0.50));
-    this._lensflare.addElement(new LensflareElement(ringTex,  70,  0.65));
-    this._lensflare.addElement(new LensflareElement(ringTex,  40,  0.80));
-    this._lensflare.addElement(new LensflareElement(ringTex, 100,  0.95));
-    this._lensflare.addElement(new LensflareElement(ringTex,  60,  1.10));
+    const c         = p.lensflareColor.clone();
+    const ringScale = (p.lensflareRingSize ?? 40) / 40;
+    this._lensflare.addElement(new LensflareElement(glowTex,  size,              0,    c));
+    this._lensflare.addElement(new LensflareElement(burstTex, size * 0.35,       0));
+    this._lensflare.addElement(new LensflareElement(ringTex,  20  * ringScale, 0.50));
+    this._lensflare.addElement(new LensflareElement(ringTex,  26  * ringScale, 0.65));
+    this._lensflare.addElement(new LensflareElement(ringTex,  16  * ringScale, 0.80));
+    this._lensflare.addElement(new LensflareElement(ringTex,  36  * ringScale, 0.95));
+    this._lensflare.addElement(new LensflareElement(ringTex,  18  * ringScale, 1.10));
   }
 
   _buildCinematicWebGL() {
     this._lensflare = new Lensflare();
     this._lensflare.userData._isHelper = true;
-    const glowTex  = this._makeFlareTexture(256, 'radial');
-    const ringTex  = this._makeFlareTexture(64,  'ring');
-    const burstTex = this._makeFlareTexture(128, 'burst');
     const p         = this._p;
+    const bake      = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
     const intensity = p.lensflareIntensity ?? 1.0;
     const ghosts    = Math.max(2, Math.min(10, Math.round(p.lensflareGhostCount ?? 4)));
-    const c         = new THREE.Color(p.sunColor);
+    const c         = p.lensflareColor.clone();
+    const glowTex   = this._makeFlareTexture(256, 'radial', p.lensflareColor, bake);
+    const burstTex  = this._makeFlareTexture(128, 'burst', p.lensflareColor, bake);
+    const ringTex   = this._makeFlareTexture(64,  'ring');
+    const ringScale = (p.lensflareRingSize ?? 40) / 40;
     this._lensflare.addElement(new LensflareElement(glowTex,  p.lensflareSize * 1.5 * intensity, 0, c));
     this._lensflare.addElement(new LensflareElement(burstTex, p.lensflareSize * 0.6 * intensity, 0));
     for (let i = 0; i < ghosts; i++) {
       const d    = 0.3 + (i / ghosts) * 0.85;
-      const size = 30 + Math.abs(Math.sin(i * 2.3)) * 50 + 20;
+      const size = (12 + Math.abs(Math.sin(i * 2.3)) * 20 + 8) * ringScale;
       this._lensflare.addElement(new LensflareElement(ringTex, size, d));
     }
     this._lensflare.addElement(new LensflareElement(glowTex, p.lensflareSize * 0.25 * intensity, 1.25));
@@ -1096,25 +1121,28 @@ export class GradientSky {
     this._lensflare = new Lensflare();
     this._lensflare.userData._isHelper = true;
     const p         = this._p;
+    const bake      = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
     const streakLen = p.lensflareStreakLength ?? 1.0;
-    const c         = new THREE.Color(p.sunColor);
-    const glowTex    = this._makeFlareTexture(256, 'radial');
+    const c         = p.lensflareColor.clone();
+    const glowTex    = this._makeFlareTexture(256, 'radial', p.lensflareColor, bake);
     const streakTex1 = this._makeAnamorphicTexture(512, 64, '#a0d0ff');
     const streakTex2 = this._makeAnamorphicTexture(512, 32, '#6090ff');
     const ringTex    = this._makeFlareTexture(48, 'ring');
+    const ringScale  = (p.lensflareRingSize ?? 40) / 40;
     this._lensflare.addElement(new LensflareElement(glowTex,    p.lensflareSize * 0.6,             0,    c));
     this._lensflare.addElement(new LensflareElement(streakTex1, p.lensflareSize * 2.0 * streakLen, 0));
     this._lensflare.addElement(new LensflareElement(streakTex2, p.lensflareSize * 1.5 * streakLen, 0));
-    this._lensflare.addElement(new LensflareElement(ringTex, 30, 0.50));
-    this._lensflare.addElement(new LensflareElement(ringTex, 40, 0.80));
+    this._lensflare.addElement(new LensflareElement(ringTex, 14 * ringScale, 0.50));
+    this._lensflare.addElement(new LensflareElement(ringTex, 18 * ringScale, 0.80));
   }
 
   _buildSubtleWebGL() {
     this._lensflare = new Lensflare();
     this._lensflare.userData._isHelper = true;
     const p       = this._p;
-    const c       = new THREE.Color(p.sunColor);
-    const glowTex = this._makeFlareTexture(256, 'radial');
+    const bake    = Math.min(1.0, (p.lensflareColorIntensity ?? 1.5) / 5.0);
+    const c       = p.lensflareColor.clone();
+    const glowTex = this._makeFlareTexture(256, 'radial', p.lensflareColor, bake);
     this._lensflare.addElement(new LensflareElement(glowTex, p.lensflareSize * 0.8, 0, c));
   }
 
@@ -1135,7 +1163,7 @@ export class GradientSky {
       this._lensflare.visible = show;
       if (!show) return;
 
-      this._lensflare.position.copy(p.sunDir).multiplyScalar(450000);
+      // Position is kept within the camera frustum by update() every frame.
 
       const style      = p.lensflareStyle ?? 'classic';
       const intensity  = p.lensflareIntensity  ?? 1.0;
@@ -1145,8 +1173,9 @@ export class GradientSky {
       const lfElems     = this._lensflare.elements;
       const opacityScale = (p.lensflareOpacity ?? 1.0) * vis;
       if (lfElems?.[0]) {
-        // element[0] color = sunColor * opacity (preserves hue, scales brightness)
-        lfElems[0].color.copy(p.sunColor).multiplyScalar(opacityScale);
+        // element[0] color = grayscale opacity — user color is baked into the texture,
+        // multiplying by lensflareColor here would double-apply and cause white-wash.
+        lfElems[0].color.setScalar(opacityScale);
         let mainSize;
         switch (style) {
           case 'cinematic':  mainSize = p.lensflareSize * 1.5 * intensity; break;
@@ -1165,9 +1194,10 @@ export class GradientSky {
           default:           lfElems[1].size = p.lensflareSize * 0.4;               break;
         }
       }
-      // Apply opacity to all secondary elements via color grey-scale (setScalar resets each frame)
+      // Apply ring opacity to secondary elements independently from glow opacity
+      const ringOpacityScale = (p.lensflareRingOpacity ?? 0.7) * vis;
       if (lfElems) {
-        for (let i = 1; i < lfElems.length; i++) lfElems[i].color.setScalar(opacityScale);
+        for (let i = 1; i < lfElems.length; i++) lfElems[i].color.setScalar(ringOpacityScale);
       }
     }
     // Sprite array visibility/size is updated per-frame in _updateLensflareWebGPU
@@ -1178,7 +1208,7 @@ export class GradientSky {
    * @param {number} size
    * @param {'radial'|'ring'|'burst'} type
    */
-  _makeFlareTexture(size, type) {
+  _makeFlareTexture(size, type, bakeColor = null, bakeAmount = 0) {
     const canvas = document.createElement('canvas');
     canvas.width  = size;
     canvas.height = size;
@@ -1186,32 +1216,61 @@ export class GradientSky {
     const c   = size / 2;
 
     if (type === 'radial') {
+      // Center stays pure white (the sun core).
+      // Outer halo transitions to the user-selected color based on bakeAmount.
+      // bakeAmount=0 → warm-orange glow; bakeAmount=1 → fully user color on halo.
+      const lp = (a, b, t) => Math.round(a + (b - a) * t);
+      const have = bakeColor && bakeAmount > 0;
+      // Halo stop at 0.22 — transition to user color starts here
+      const h1r = have ? lp(255, bakeColor.r * 255, bakeAmount) : 255;
+      const h1g = have ? lp(200, bakeColor.g * 200, bakeAmount) : 200;
+      const h1b = have ? lp(100, bakeColor.b * 100, bakeAmount) : 100;
+      // Halo stop at 0.50 — full user color, fading to transparent
+      const h2r = have ? lp(255, bakeColor.r * 255, bakeAmount) : 255;
+      const h2g = have ? lp(140, bakeColor.g * 140, bakeAmount) : 140;
+      const h2b = have ? lp(40,  bakeColor.b * 40,  bakeAmount) : 40;
       const grad = ctx.createRadialGradient(c, c, 0, c, c, c);
-      grad.addColorStop(0,    'rgba(255,255,255,1)');
-      grad.addColorStop(0.15, 'rgba(255,220,150,0.9)');
-      grad.addColorStop(0.5,  'rgba(255,160,60,0.3)');
-      grad.addColorStop(1,    'rgba(255,120,0,0)');
+      grad.addColorStop(0,    'rgba(255,255,255,1)');                          // core: always white
+      grad.addColorStop(0.08, 'rgba(255,255,255,0.97)');                       // white stays white
+      grad.addColorStop(0.22, `rgba(${h1r},${h1g},${h1b},0.85)`);             // halo starts
+      grad.addColorStop(0.50, `rgba(${h2r},${h2g},${h2b},0.28)`);             // halo fades
+      grad.addColorStop(1,    'rgba(0,0,0,0)');                                // transparent edge
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, size, size);
 
     } else if (type === 'ring') {
+      const ringThickness = this._p?.lensflareRingThickness ?? 0.12;
+      const ringFill      = this._p?.lensflareRingFill      ?? 0.3;
       ctx.clearRect(0, 0, size, size);
       ctx.strokeStyle = 'rgba(220,200,255,0.9)';
-      ctx.lineWidth   = size * 0.12;
+      ctx.lineWidth   = size * ringThickness;
       ctx.beginPath();
       ctx.arc(c, c, c * 0.65, 0, Math.PI * 2);
       ctx.stroke();
-      // small inner fill
-      const grad = ctx.createRadialGradient(c, c, 0, c, c, c * 0.35);
-      grad.addColorStop(0,   'rgba(255,255,255,0.7)');
-      grad.addColorStop(1,   'rgba(255,255,255,0)');
-      ctx.fillStyle = grad;
-      ctx.fill();
+      // inner fill — 0 = hollow ring, 1 = fills up to the ring stroke radius
+      if (ringFill > 0) {
+        // fillRadius scales linearly from 0 at fill=0 to 0.60*c at fill=1 (just inside ring at 0.65*c)
+        const fillRadius = c * 0.60 * ringFill;
+        const fillAlpha  = Math.min(1, ringFill * 1.1).toFixed(2);
+        const grad = ctx.createRadialGradient(c, c, 0, c, c, fillRadius);
+        grad.addColorStop(0,   `rgba(255,255,255,${fillAlpha})`);
+        grad.addColorStop(0.5, `rgba(255,255,255,${(fillAlpha * 0.6).toFixed(2)})`);
+        grad.addColorStop(1,   'rgba(255,255,255,0)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+      }
 
     } else { // burst
       const rays = 16;
       const step = (Math.PI * 2) / rays;
       ctx.clearRect(0, 0, size, size);
+      const lerp = (a, b, t) => a + (b - a) * t;
+      const sr = bakeColor && bakeAmount > 0 ? Math.round(lerp(255, bakeColor.r * 255, bakeAmount)) : 255;
+      const sg = bakeColor && bakeAmount > 0 ? Math.round(lerp(255, bakeColor.g * 255, bakeAmount)) : 255;
+      const sb = bakeColor && bakeAmount > 0 ? Math.round(lerp(220, bakeColor.b * 220, bakeAmount)) : 220;
+      const mr = bakeColor && bakeAmount > 0 ? Math.round(lerp(255, bakeColor.r * 255, bakeAmount * 0.7)) : 255;
+      const mg = bakeColor && bakeAmount > 0 ? Math.round(lerp(240, bakeColor.g * 240, bakeAmount * 0.7)) : 240;
+      const mb = bakeColor && bakeAmount > 0 ? Math.round(lerp(180, bakeColor.b * 180, bakeAmount * 0.7)) : 180;
       for (let i = 0; i < rays; i++) {
         const angle = i * step;
         const w     = (i % 2 === 0) ? size * 0.04 : size * 0.02;
@@ -1220,9 +1279,9 @@ export class GradientSky {
         ctx.translate(c, c);
         ctx.rotate(angle);
         const grad = ctx.createLinearGradient(0, 0, len, 0);
-        grad.addColorStop(0,   'rgba(255,255,220,1)');
-        grad.addColorStop(0.6, 'rgba(255,240,180,0.4)');
-        grad.addColorStop(1,   'rgba(255,200,100,0)');
+        grad.addColorStop(0,   `rgba(${sr},${sg},${sb},1)`);
+        grad.addColorStop(0.6, `rgba(${mr},${mg},${mb},0.4)`);
+        grad.addColorStop(1,   'rgba(0,0,0,0)');
         ctx.fillStyle = grad;
         ctx.fillRect(0, -w / 2, len, w);
         ctx.restore();
