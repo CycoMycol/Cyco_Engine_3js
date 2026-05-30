@@ -76,29 +76,95 @@ export class MaterialBrowser {
     root.className = 'mat-browser';
     root.style.cssText = 'display:flex;flex-direction:column;height:100%;overflow:hidden;background:var(--bg-primary,#1a1a1a);';
 
-    // Search bar
-    const searchRow = document.createElement('div');
-    searchRow.style.cssText = 'display:flex;align-items:center;gap:5px;padding:5px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
+    // ── Single toolbar row ─────────────────────────────────────────────────
+    const toolbar = document.createElement('div');
+    toolbar.style.cssText = 'display:flex;align-items:center;gap:5px;padding:5px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
 
-    // Magnifying-glass toggle
+    // Search icon + popup ──────────────────────────────────────────────────
+    const searchWrap = document.createElement('div');
+    searchWrap.style.cssText = 'position:relative;flex-shrink:0;';
+
     const searchToggle = document.createElement('button');
     searchToggle.innerHTML = '&#128269;';
-    searchToggle.title = 'Toggle search';
+    searchToggle.title = 'Search materials';
     searchToggle.style.cssText = 'background:none;border:none;color:var(--text-secondary,#aaa);cursor:pointer;font-size:14px;padding:0 2px;flex-shrink:0;line-height:1;';
 
     this._searchInput = document.createElement('input');
     this._searchInput.type = 'text';
     this._searchInput.placeholder = 'Search materials…';
-    this._searchInput.style.cssText = 'flex:1;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-primary,#e0e0e0);border-radius:4px;padding:3px 8px;font-size:12px;min-width:0;';
-    this._searchInput.addEventListener('input', () => {
-      this._searchQuery = this._searchInput.value.toLowerCase();
-      this._refreshGrid();
+    this._searchInput.style.cssText = [
+      'position:absolute',
+      'top:calc(100% + 4px)',
+      'left:0',
+      'z-index:100',
+      'width:180px',
+      'background:var(--bg-secondary,#252525)',
+      'border:1px solid var(--border-color,#333)',
+      'color:var(--text-primary,#e0e0e0)',
+      'border-radius:4px',
+      'padding:3px 8px',
+      'font-size:12px',
+      'display:none',
+      'box-shadow:0 2px 8px rgba(0,0,0,0.5)',
+    ].join(';');
+
+    searchToggle.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isHidden = this._searchInput.style.display === 'none';
+      this._searchInput.style.display = isHidden ? 'block' : 'none';
+      searchToggle.style.color = isHidden ? 'var(--accent-color,#4a9eff)' : 'var(--text-secondary,#aaa)';
+      if (isHidden) this._searchInput.focus();
     });
 
-    searchToggle.addEventListener('click', () => {
-      const collapsed = this._searchInput.style.display === 'none';
-      this._searchInput.style.display = collapsed ? '' : 'none';
-      if (collapsed) this._searchInput.focus();
+    this._searchInput.addEventListener('input', () => {
+      this._searchQuery = this._searchInput.value.toLowerCase();
+      searchToggle.style.color = this._searchQuery ? 'var(--accent-color,#4a9eff)' : 'var(--text-secondary,#aaa)';
+      this._refreshGrid();
+    });
+    this._searchInput.addEventListener('click', (e) => e.stopPropagation());
+    this._searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        this._searchInput.style.display = 'none';
+        this._searchInput.value = '';
+        this._searchQuery = '';
+        searchToggle.style.color = 'var(--text-secondary,#aaa)';
+        this._refreshGrid();
+      }
+    });
+    document.addEventListener('click', () => {
+      this._searchInput.style.display = 'none';
+    });
+
+    searchWrap.appendChild(searchToggle);
+    searchWrap.appendChild(this._searchInput);
+
+    // Category dropdown ────────────────────────────────────────────────────
+    const typeSelect = document.createElement('select');
+    typeSelect.style.cssText = [
+      'flex:1',
+      'min-width:0',
+      'background:var(--bg-secondary,#252525)',
+      'border:1px solid var(--border-color,#333)',
+      'color:var(--text-primary,#e0e0e0)',
+      'border-radius:4px',
+      'padding:3px 6px',
+      'font-size:11px',
+      'cursor:pointer',
+    ].join(';');
+
+    const allOpt = document.createElement('option');
+    allOpt.value = '';
+    allOpt.textContent = 'All Types';
+    typeSelect.appendChild(allOpt);
+    for (const cat of MATERIAL_CATEGORIES) {
+      const opt = document.createElement('option');
+      opt.value = cat;
+      opt.textContent = cat;
+      typeSelect.appendChild(opt);
+    }
+    typeSelect.addEventListener('change', () => {
+      this._activeCategory = typeSelect.value || null;
+      this._refreshGrid();
     });
 
     // "Apply to Object" button — enabled only when a card is selected + object is selected
@@ -112,17 +178,17 @@ export class MaterialBrowser {
       if (this._selectedPreset) this._applyToSelection(this._selectedPreset);
     });
 
-    searchRow.appendChild(searchToggle);
-    searchRow.appendChild(this._searchInput);
-    searchRow.appendChild(this._applyBtn);
+    toolbar.appendChild(searchWrap);
+    toolbar.appendChild(typeSelect);
+    toolbar.appendChild(this._applyBtn);
 
-    // Renderer mode badge
+    // Renderer mode badge ──────────────────────────────────────────────────
     const updateBadge = () => {
       const isWebGPU = window.__cyco?.rendererManager?.activeType === 'webgpu';
       if (!this._rendererBadge) {
         this._rendererBadge = document.createElement('span');
         this._rendererBadge.style.cssText = 'background:#c0392b;color:#fff;font-size:9px;padding:2px 5px;border-radius:3px;flex-shrink:0;font-weight:bold;letter-spacing:0.05em;white-space:nowrap;';
-        searchRow.appendChild(this._rendererBadge);
+        toolbar.appendChild(this._rendererBadge);
       }
       this._rendererBadge.textContent = isWebGPU ? 'WebGPU' : 'WebGL';
       this._rendererBadge.style.background = isWebGPU ? '#1a6e3c' : '#555';
@@ -130,23 +196,9 @@ export class MaterialBrowser {
     updateBadge();
     window.addEventListener('cyco-renderer-changed', updateBadge);
 
-    root.appendChild(searchRow);
+    root.appendChild(toolbar);
 
-    // Category tabs
-    const tabs = document.createElement('div');
-    tabs.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;padding:4px 8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
-
-    const allBtn = this._makeTabBtn('All', null, tabs);
-    allBtn.classList.add('active');
-    this._activeTabEl = allBtn;
-
-    for (const cat of MATERIAL_CATEGORIES) {
-      this._makeTabBtn(cat, cat, tabs);
-    }
-    root.appendChild(tabs);
-    this._tabs = tabs;
-
-    // Grid
+    // Grid ─────────────────────────────────────────────────────────────────
     this._grid = document.createElement('div');
     this._grid.style.cssText = 'flex:1;overflow-y:auto;padding:8px;display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;align-content:start;';
     root.appendChild(this._grid);
@@ -154,22 +206,6 @@ export class MaterialBrowser {
     this._element = root;
 
     this._injectStyles();
-  }
-
-  _makeTabBtn(label, category, container) {
-    const btn = document.createElement('button');
-    btn.textContent = label;
-    btn.dataset.category = category ?? '';
-    btn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);border-radius:4px;padding:2px 8px;font-size:11px;cursor:pointer;white-space:nowrap;';
-    btn.addEventListener('click', () => {
-      this._activeCategory = category;
-      this._activeTabEl?.classList.remove('active');
-      btn.classList.add('active');
-      this._activeTabEl = btn;
-      this._refreshGrid();
-    });
-    container.appendChild(btn);
-    return btn;
   }
 
   // ── Grid rendering ────────────────────────────────────────────────────────

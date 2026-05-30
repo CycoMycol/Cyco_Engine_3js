@@ -386,9 +386,21 @@ export class EnvironmentProperties {
 
     // Sky Layer (ON): clouds sit at fixed high altitude, depth-tested so scene objects stay in front.
     // Legacy Surround (OFF): clouds wrap around camera at low altitude, no depth test.
+    // Toggling also syncs the other sky-layer elements: sun disc, moon disc, and lens flare.
     const skyModeCb = checkbox({
       checked: cs()?._p?.skyMode ?? true,
-      onChange: (v) => cs()?.setSkyMode(v),
+      onChange: (v) => {
+        cs()?.setSkyMode(v);
+        // Sync sky-layer siblings: sun, moon, lens flare are only meaningful in sky-layer mode
+        const sky = window.__cyco?.gradientSky;
+        if (sky) sky.setParams({ showSun: v, showMoon: v, lensflareEnabled: v });
+        const sc = this._skyControls;
+        if (sc) {
+          sc.showSunCb.checked         = v;
+          sc.showMoonCb.checked        = v;
+          sc.lensflareEnabledCb.checked = v;
+        }
+      },
     });
 
     // Animate checkbox — when unchecked, uTime freezes and clouds stay in place

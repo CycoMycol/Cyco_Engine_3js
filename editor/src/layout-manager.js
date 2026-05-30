@@ -83,6 +83,13 @@ const LayoutManager = {
     window.addEventListener('beforeunload', () => {
       if (!this._restoringLayout) this._doAutoSave();
     });
+
+    // Dockview does NOT fire onDidLayoutChange for sash/divider drags.
+    // Listen for pointerup on the dockview container so any completed sash
+    // drag schedules an auto-save (debounced 300 ms).
+    api.element?.addEventListener('pointerup', () => {
+      if (!this._restoringLayout) this._scheduleAutoSave();
+    });
   },
 
   /**
@@ -230,7 +237,7 @@ const LayoutManager = {
       // throughout so none of these intermediate changes trigger an auto-save.
       const _savedRoot = layout.grid?.root;
       setTimeout(() => {
-        try { this._applyGridSizes(_savedRoot, 'VERTICAL'); } catch(e) {
+        try { this._applyGridSizes(_savedRoot, 'HORIZONTAL'); } catch(e) {
           console.warn('[Cyco] restoreAutoSaved: size re-apply failed', e);
         }
         setTimeout(() => {
