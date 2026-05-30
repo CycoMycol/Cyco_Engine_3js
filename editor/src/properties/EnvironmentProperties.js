@@ -545,6 +545,23 @@ export class EnvironmentProperties {
 
     body.appendChild(row('Animate', animateCb));
 
+    // ── Render Quality dropdown ──────────────────────────────────────────────
+    const CLOUD_RENDER_OPTS = [
+      ['ultra',    'Ultra — 48 steps (default)'],
+      ['high',     'High — 32 steps'],
+      ['medium',   'Medium — 24 steps'],
+      ['fast',     'Fast — 16 steps'],
+      ['halfres',  'Half Res (B) — medium @ ½ res'],
+      ['impostor', 'Impostor (C) — billboard planes'],
+      ['compute',  'Compute (D) — fast @ ¼ res'],
+    ];
+    const qualitySelect = select({
+      options:  CLOUD_RENDER_OPTS,
+      value:    cs()?._p?.renderMode ?? 'ultra',
+      onChange: (v) => cs()?.setRenderMode(v),
+    });
+    body.appendChild(row('Render Quality', qualitySelect));
+
     const coverageSlider = slider({
       value: cs()?._p?.coverage ?? 0.45, min: 0, max: 1, step: 0.01,
       onChange: (v) => cs()?.setParam('coverage', v),
@@ -669,6 +686,23 @@ export class EnvironmentProperties {
     body.appendChild(row('Low Clouds', topCtrl2));
 
     body.appendChild(row('Animate', animateCb2));
+
+    // ── Render Quality dropdown ──────────────────────────────────────────────
+    const CLOUD_RENDER_OPTS2 = [
+      ['ultra',    'Ultra — 48 steps (default)'],
+      ['high',     'High — 32 steps'],
+      ['medium',   'Medium — 24 steps'],
+      ['fast',     'Fast — 16 steps'],
+      ['halfres',  'Half Res (B) — medium @ ½ res'],
+      ['impostor', 'Impostor (C) — billboard planes'],
+      ['compute',  'Compute (D) — fast @ ¼ res'],
+    ];
+    const qualitySelect2 = select({
+      options:  CLOUD_RENDER_OPTS2,
+      value:    cs2()?._p?.renderMode ?? 'ultra',
+      onChange: (v) => cs2()?.setRenderMode(v),
+    });
+    body.appendChild(row('Render Quality', qualitySelect2));
 
     const coverageSlider2 = slider({
       value: cs2()?._p?.coverage ?? 0.3, min: 0, max: 1, step: 0.01,
