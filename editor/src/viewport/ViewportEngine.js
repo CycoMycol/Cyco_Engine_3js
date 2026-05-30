@@ -93,6 +93,7 @@ export class ViewportEngine {
     this._onBackgroundChange    = this._onBackgroundChange.bind(this);
     this._onEnvPreset           = this._onEnvPreset.bind(this);
     this._onEnvIntensity        = this._onEnvIntensity.bind(this);
+    this._onGridSettings        = this._onGridSettings.bind(this);
     this._onLoadingStart        = this._onLoadingStart.bind(this);
     this._onLoadingProgress     = this._onLoadingProgress.bind(this);
     this._onLoadingDone         = this._onLoadingDone.bind(this);
@@ -110,6 +111,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-background-change',       this._onBackgroundChange);
     window.addEventListener('cyco-env-preset',              this._onEnvPreset);
     window.addEventListener('cyco-env-intensity',           this._onEnvIntensity);
+    window.addEventListener('cyco-grid-settings-change',    this._onGridSettings);
     window.addEventListener('cyco-loading-start',           this._onLoadingStart);
     window.addEventListener('cyco-loading-progress',        this._onLoadingProgress);
     window.addEventListener('cyco-loading-done',            this._onLoadingDone);
@@ -551,18 +553,123 @@ export class ViewportEngine {
     if (this.gridHelper) this.gridHelper.visible = visible;
   }
 
-  /**
-   * Reconfigure the grid (size + divisions).
-   * @param {number} size
-   * @param {number} divisions
-   */
+  /** Reconfigure the grid (size + divisions). */
   setGridConfig(size, divisions) {
     if (this.gridHelper) {
       this.scene.remove(this.gridHelper);
-      this.gridHelper.geometry.dispose();
+      this.gridHelper.geometry?.dispose();
     }
     this.gridHelper = this._makeGrid(size, divisions);
     this.scene.add(this.gridHelper);
+  }
+
+  // ─── Grid helpers ─────────────────────────────────────────────────────────
+
+  /** Fully dispose and remove the current gridHelper from the scene. */
+  _disposeGridHelper() {
+    if (!this.gridHelper) return;
+    if (this.scene) this.scene.remove(this.gridHelper);
+    this.gridHelper.geometry?.dispose();
+    const mats = Array.isArray(this.gridHelper.material)
+      ? this.gridHelper.material : [this.gridHelper.material];
+    mats.forEach(m => m?.dispose?.());
+    this.gridHelper = null;
+  }
+
+  /**
+   * Handle cyco-grid-settings-change.
+   * For TSL grids (infinite/checkered) already in the scene, updates uniforms in-place
+   * so sliders give live feedback without shader recompilation.
+   * Style changes and first-time builds use a generation counter to cancel stale async work.
+   */
+  _onGridSettings({ detail } = {}) {
+    if (!this.scene) return;
+    const d = detail ?? {};
+
+    // Axes visibility always applies
+    if (this.axesHelper) this.axesHelper.visible = d.axesVisible !== false;
+
+    const newStyle  = d.style ?? 'standard';
+    const curName   = this.gridHelper?.name ?? '';
+    const isInfNow  = curName === '__cyco_infinite_grid';
+    const isChkNow  = curName === '__cyco_checker_grid';
+
+    // ── In-place uniform update (no shader rebuild needed) ──────────────────
+    if (newStyle === 'infinite' && isInfNow) {
+      this._updateInfiniteUniforms(d);
+      this.gridHelper.visible = d.gridVisible !== false;
+      return;
+    }
+    if ((newStyle === 'checkered' || newStyle === 'checkered-infinite') && isChkNow) {
+      this._updateCheckerUniforms(d);
+      this.gridHelper.visible = d.gridVisible !== false;
+      return;
+    }
+
+    // ── Full rebuild ─────────────────────────────────────────────────────────
+    // Increment generation to cancel any in-flight async build
+    this._gridGen = (this._gridGen ?? 0) + 1;
+
+    this._disposeGridHelper();
+
+    if (d.gridVisible === false) return;
+
+    if (newStyle === 'infinite') {
+      const gen = this._gridGen;
+      this._makeInfiniteGrid(d).then(mesh => {
+        if (this._gridGen !== gen || !mesh || !this.scene) return;
+        this._disposeGridHelper();   // remove any grid added between dispatch and resolve
+        this.gridHelper = mesh;
+        this.scene.add(mesh);
+      });
+
+    } else if (newStyle === 'checkered' || newStyle === 'checkered-infinite') {
+      const gen = this._gridGen;
+      this._makeCheckerGrid(d).then(mesh => {
+        if (this._gridGen !== gen || !mesh || !this.scene) return;
+        this._disposeGridHelper();
+        this.gridHelper = mesh;
+        this.scene.add(mesh);
+      });
+
+    } else {
+      // Standard GridHelper — synchronous, cheap
+      const gc = new THREE.Color(d.gridColor   ?? '#444444');
+      const cc = new THREE.Color(d.centerColor ?? '#888888');
+      const g  = new THREE.GridHelper(d.size ?? 20, d.divisions ?? 20, cc, gc);
+      g.raycast        = () => {};
+      g.userData._isHelper = true;
+      g.castShadow     = false;
+      g.receiveShadow  = false;
+      const mats = Array.isArray(g.material) ? g.material : [g.material];
+      mats.forEach(m => {
+        m.opacity     = d.opacity ?? 1.0;
+        m.transparent = (d.opacity ?? 1.0) < 1.0;
+      });
+      this.gridHelper = g;
+      this.scene.add(g);
+    }
+  }
+
+  /** Live-update uniforms for the current infinite grid mesh (no rebuild). */
+  _updateInfiniteUniforms(d) {
+    const u = this.gridHelper?._uniforms;
+    if (!u) return;
+    if (d.gridColor   !== undefined) u.uLineColor.value.set(d.gridColor);
+    if (d.xAxisColor  !== undefined) u.uXColor.value.set(d.xAxisColor);
+    if (d.zAxisColor  !== undefined) u.uZColor.value.set(d.zAxisColor);
+    if (d.opacity     !== undefined) u.uOpacity.value = d.opacity;
+    if (d.cellSize    !== undefined) u.uCellSize.value = d.cellSize;
+  }
+
+  /** Live-update uniforms for the current checker grid mesh (no rebuild). */
+  _updateCheckerUniforms(d) {
+    const u = this.gridHelper?._uniforms;
+    if (!u) return;
+    if (d.checkerColor1 !== undefined) u.uColor1.value.set(d.checkerColor1);
+    if (d.checkerColor2 !== undefined) u.uColor2.value.set(d.checkerColor2);
+    if (d.opacity       !== undefined) u.uOpacity.value = d.opacity;
+    if (d.checkerSize   !== undefined) u.uCellSize.value = d.checkerSize;
   }
 
   // ─── Build helpers ────────────────────────────────────────────────────────
@@ -640,12 +747,22 @@ export class ViewportEngine {
     this._hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x888888, 0.4);
     this.scene.add(this._ambientLight, this._hemisphereLight);
 
-    // Grid + axes (non-selectable)
-    this.gridHelper = this._makeGrid(20, 20);
+    // Grid + axes (non-selectable) — use saved settings if available
     this.axesHelper = new THREE.AxesHelper(1);
     this.axesHelper.raycast = () => {};
     this.axesHelper.userData._isHelper = true;
-    this.scene.add(this.gridHelper, this.axesHelper);
+    this.scene.add(this.axesHelper);
+
+    // Apply persisted grid settings (may build infinite grid asynchronously)
+    try {
+      const saved = JSON.parse(localStorage.getItem('cyco-grid-settings') ?? '{}');
+      const gridDefaults = { divisions: 20, size: 20, gridColor: '#444444', centerColor: '#888888',
+        opacity: 1.0, gridVisible: true, axesVisible: true, style: 'standard' };
+      this._onGridSettings({ detail: { ...gridDefaults, ...saved } });
+    } catch (_) {
+      this.gridHelper = this._makeGrid(20, 20);
+      this.scene.add(this.gridHelper);
+    }
     // IBL intensity: 1.0 ensures metallic/glass materials show full reflections.
     // Directional shadows stay visible because they are multiplicative on top of IBL.
     this.scene.environmentIntensity = 1.0;
@@ -658,6 +775,162 @@ export class ViewportEngine {
     g.castShadow    = false;
     g.receiveShadow = false;
     return g;
+  }
+
+  /**
+   * Infinite Unreal Engine-style grid — "Pristine Grid" algorithm (Ben Golus).
+   * Uses fwidth-based AA per-axis: no aliasing at any distance, lines have true
+   * perspective thickness. Red X axis, blue Z axis. 10 000×10 000 plane looks infinite.
+   * All visual properties are TSL uniforms for live updates without shader recompilation.
+   */
+  async _makeInfiniteGrid(opts = {}) {
+    try {
+      const [webgpuMod, tslMod] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const { MeshBasicNodeMaterial } = webgpuMod;
+      const { Fn, abs, fract, fwidth, mix, clamp, smoothstep, vec4, float, positionWorld, max, uniform } = tslMod;
+
+      // ── Live-update uniforms ───────────────────────────────────────────────
+      const uCellSize  = uniform(opts.cellSize  ?? 1.0);
+      const uLineW     = uniform(opts.lineWidth ?? 0.02);
+      const uLineColor = uniform(new THREE.Color(opts.gridColor  ?? '#555555'));
+      const uXColor    = uniform(new THREE.Color(opts.xAxisColor ?? '#CC2222'));
+      const uZColor    = uniform(new THREE.Color(opts.zAxisColor ?? '#2244CC'));
+      const uOpacity   = uniform(opts.opacity   ?? 1.0);
+
+      // ── Pristine Grid — single axis (Bgolus technique) ────────────────────
+      // fwidth gives the screen-space derivative; we clamp draw width to 0.5
+      // and fade the line so it converges to the correct average brightness.
+      // Moiré suppression: lerp to solid color when deriv > 0.5.
+      const prisAxis = Fn(([t, lw]) => {
+        const d  = fwidth(t);
+        const dw = clamp(lw, d, float(0.5));
+        const aa = d.mul(1.5);
+        const g  = float(1.0).sub(fract(t).mul(2.0).sub(1.0).abs());    // 1 at grid line, 0 at center
+        const line = smoothstep(dw.add(aa), dw.sub(aa), g)
+                       .mul(clamp(lw.div(dw), float(0.0), float(1.0))); // phone-wire fade
+        return mix(line, lw, clamp(d.mul(2.0).sub(1.0), float(0.0), float(1.0))); // Moiré suppress
+      });
+
+      // ── Single axis line at coord = 0 (X axis = z=0, Z axis = x=0) ───────
+      const axisLine = Fn(([coord, lw]) => {
+        const d  = fwidth(coord);
+        const dw = clamp(lw, d, float(0.5));
+        const aa = d.mul(1.5);
+        const line = smoothstep(dw.add(aa), dw.sub(aa), abs(coord))
+                       .mul(clamp(lw.div(dw), float(0.0), float(1.0)));
+        return mix(line, lw, clamp(d.mul(2.0).sub(1.0), float(0.0), float(1.0)));
+      });
+
+      // Scale world XZ by 1/cellSize so lines are cellSize world-units apart
+      const sx = positionWorld.x.div(uCellSize);
+      const sz = positionWorld.z.div(uCellSize);
+
+      const axisW  = uLineW.mul(3.0);  // axis lines 3× thicker than grid
+      const gx     = prisAxis(sx, uLineW);
+      const gz     = prisAxis(sz, uLineW);
+      const gridMask = mix(gx, float(1.0), gz);  // premultiplied union
+
+      // X axis (red): line at z=0; Z axis (blue): line at x=0
+      const xAxis = axisLine(sz, axisW);
+      const zAxis = axisLine(sx, axisW);
+
+      // Composite colors: grid → x-axis override → z-axis override
+      const colMid   = uLineColor.mix(uXColor, xAxis);
+      const colFinal = colMid.mix(uZColor, zAxis);
+      const alpha    = max(gridMask, max(xAxis, zAxis)).mul(uOpacity);
+
+      const material = new MeshBasicNodeMaterial();
+      material.transparent = true;
+      material.depthWrite  = false;
+      material.side        = THREE.DoubleSide;
+      material.colorNode   = vec4(colFinal, alpha);
+
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(10000, 10000), material);
+      plane.rotation.x         = -Math.PI / 2;
+      plane.renderOrder        = -1;
+      plane.raycast            = () => {};
+      plane.userData._isHelper = true;
+      plane.castShadow         = false;
+      plane.receiveShadow      = false;
+      plane.name               = '__cyco_infinite_grid';
+      plane._uniforms          = { uCellSize, uLineW, uLineColor, uXColor, uZColor, uOpacity };
+      return plane;
+
+    } catch (e) {
+      console.warn('[ViewportEngine] Infinite grid failed, falling back to standard:', e);
+      return null;
+    }
+  }
+
+  /**
+   * Checkerboard grid (finite or infinite depending on opts.style).
+   * Hard-edge alternating squares in world XZ space.
+   * 'checkered'          — large plane (400u) with radial opacity fade at edges.
+   * 'checkered-infinite' — 10 000u plane, no fade.
+   * All visual properties are TSL uniforms for live updates.
+   */
+  async _makeCheckerGrid(opts = {}) {
+    try {
+      const [webgpuMod, tslMod] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+      const { MeshBasicNodeMaterial } = webgpuMod;
+      const { Fn, floor, mod, mix, smoothstep, length, vec4, float, positionWorld, uniform } = tslMod;
+
+      // ── Live-update uniforms ───────────────────────────────────────────────
+      const uCellSize = uniform(opts.checkerSize ?? 1.0);
+      const uColor1   = uniform(new THREE.Color(opts.checkerColor1 ?? '#333333'));
+      const uColor2   = uniform(new THREE.Color(opts.checkerColor2 ?? '#555555'));
+      const uOpacity  = uniform(opts.opacity ?? 1.0);
+
+      const infinite = opts.style === 'checkered-infinite';
+
+      // ── Checker pattern via world-space XZ ────────────────────────────────
+      // floor(XZ / cellSize) gives integer cell coords; mod(x+z, 2) alternates 0/1
+      const cellX   = floor(positionWorld.x.div(uCellSize));
+      const cellZ   = floor(positionWorld.z.div(uCellSize));
+      const pattern = mod(cellX.add(cellZ), float(2.0));  // exactly 0.0 or 1.0
+
+      const checkerColor = uColor1.mix(uColor2, pattern);
+
+      let alphaNode;
+      if (infinite) {
+        alphaNode = uOpacity;
+      } else {
+        // Fade to transparent beyond a radius so it doesn't look like a finite plane
+        const fadeR  = float(80.0);
+        const fadeF  = float(50.0);
+        const dist   = length(positionWorld.xz);
+        const fade   = smoothstep(fadeR, fadeR.sub(fadeF), dist);
+        alphaNode    = uOpacity.mul(fade);
+      }
+
+      const material = new MeshBasicNodeMaterial();
+      material.transparent = true;
+      material.depthWrite  = false;
+      material.side        = THREE.DoubleSide;
+      material.colorNode   = vec4(checkerColor, alphaNode);
+
+      const planeSize = infinite ? 10000 : 400;
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(planeSize, planeSize), material);
+      plane.rotation.x         = -Math.PI / 2;
+      plane.renderOrder        = -1;
+      plane.raycast            = () => {};
+      plane.userData._isHelper = true;
+      plane.castShadow         = false;
+      plane.receiveShadow      = false;
+      plane.name               = '__cyco_checker_grid';
+      plane._uniforms          = { uCellSize, uColor1, uColor2, uOpacity };
+      return plane;
+
+    } catch (e) {
+      console.warn('[ViewportEngine] Checker grid failed, falling back to standard:', e);
+      return null;
+    }
   }
 
   /**
@@ -1377,6 +1650,7 @@ export class ViewportEngine {
     window.removeEventListener('cyco-env-background-toggle',    this._onEnvBgToggle);
     window.removeEventListener('cyco-env-preset',               this._onEnvPreset);
     window.removeEventListener('cyco-env-intensity',            this._onEnvIntensity);
+    window.removeEventListener('cyco-grid-settings-change',     this._onGridSettings);
     window.removeEventListener('cyco-loading-start',            this._onLoadingStart);
     window.removeEventListener('cyco-loading-progress',         this._onLoadingProgress);
     window.removeEventListener('cyco-loading-done',             this._onLoadingDone);

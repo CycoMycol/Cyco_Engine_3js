@@ -258,6 +258,58 @@ export const MATERIALS = [
     },
     preview: 'linear-gradient(135deg,#ff8080,#80ff80,#8080ff)',
   },
+
+  // mat_5-showcase-grid : TSL anti-aliased grid — dots at corners + lines, radial fade
+  // Apply to a PlaneGeometry rotated -π/2 on X for a floor grid effect
+  {
+    id: 'node-showcase-grid',
+    name: 'Showcase Grid (TSL)',
+    category: 'Node Materials',
+    type: 'NodeMaterial',
+    factory: async () => {
+      const [
+        { MeshBasicNodeMaterial },
+        { Fn, abs, fract, fwidth, length, max, saturate, smoothstep, vec3, vec4, positionWorld, float },
+      ] = await Promise.all([
+        import('three/webgpu'),
+        import('three/tsl'),
+      ]);
+
+      // Anti-aliased grid lines + corner dots (from Three.js webgpu_tsl_graph example)
+      const grid = Fn(([coord, lineWidth, dotSize]) => {
+        const g   = fract(coord);
+        const fw  = fwidth(coord);
+        const gx  = abs(g.x.sub(0.5));
+        const gy  = abs(g.y.sub(0.5));
+        const lineX = saturate(lineWidth.sub(gx).div(fw.x).add(0.5));
+        const lineY = saturate(lineWidth.sub(gy).div(fw.y).add(0.5));
+        const lines = max(lineX, lineY);
+        const squareDist = max(gx, gy);
+        const aa   = max(fw.x, fw.y);
+        const dots = smoothstep(dotSize.add(aa), dotSize.sub(aa), squareDist);
+        return max(dots, lines);
+      });
+
+      // Radial fade from camera based on world-space distance
+      const fade = Fn(([radius, falloff]) => {
+        return smoothstep(radius, radius.sub(falloff), length(positionWorld));
+      });
+
+      const mat = new MeshBasicNodeMaterial();
+      mat.transparent = true;
+      mat.depthWrite  = false;
+      mat.side        = 2; // THREE.DoubleSide
+
+      const gridColor = vec4(vec3(0.2), 1.0);
+      const baseColor = vec4(vec3(0.4), 0.0);
+      mat.colorNode = grid(positionWorld.xz, float(0.007), float(0.03))
+        .mix(baseColor, gridColor)
+        .mul(fade(float(30.0), float(18.0)));
+
+      return mat;
+    },
+    preview: 'repeating-linear-gradient(0deg,#222 0px,#222 1px,#111 1px,#111 20px),repeating-linear-gradient(90deg,#222 0px,#222 1px,#111 1px,#111 20px)',
+  },
 ];
 
 /**
