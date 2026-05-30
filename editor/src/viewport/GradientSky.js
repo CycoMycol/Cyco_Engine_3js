@@ -261,8 +261,8 @@ export class GradientSky {
 
   setEnabled(v) {
     this._enabled = !!v;
-    if (v) this._createMesh();
-    else   this._destroyMesh();
+    if (v && !this._mesh) this._createMesh();
+    else if (!v)          this._destroyMesh();
   }
 
   /** Dispatch to WebGL or WebGPU mesh creation based on the active renderer. */
@@ -499,9 +499,8 @@ export class GradientSky {
       const cam = this._vpe?.camera;
       if (cam) this._mesh.position.copy(cam.position);
 
-      try { this._createLensflare(); this._updateLensflare(); } catch (_) {}
+      // Lensflare is WebGL-only — skip under WebGPU.
       scene.add(this._mesh);
-      if (this._lensflare) try { scene.add(this._lensflare); } catch (_) {}
       console.log('[GradientSky] WebGPU fallback sky created (gradient only).');
     } catch (err2) {
       console.error('[GradientSky] WebGPU fallback also failed:', err2);
@@ -573,7 +572,7 @@ export class GradientSky {
     const { MeshBasicNodeMaterial } = webgpuMod;
     const {
       Fn, vec2, vec3, vec4, float, clamp, mix, smoothstep, acos,
-      positionLocal, texture, uniform, cameraFar,
+      positionLocal, positionGeometry, texture, uniform, cameraFar,
     } = webgpuMod.TSL;
 
     if (!this._gradientTex) this._rebuildGradientTex();
@@ -607,7 +606,10 @@ export class GradientSky {
     const gradTex = this._gradientTex;
 
     const skyColorNode = Fn(() => {
-      const dir    = positionLocal.normalize();
+      // Use positionGeometry (raw vertex attribute) for direction — this is
+      // unaffected by positionNode so we get correct spherical interpolation,
+      // matching the original WebGL shader behaviour near the horizon.
+      const dir    = positionGeometry.normalize();
       // Map y [-1,+1] → UV [0,1]; clamp away from border pixels
       const skyT   = dir.y.mul(0.5).add(0.5).clamp(0.001, 0.999);
       const skyCol = texture(gradTex, vec2(skyT, float(0.5))).rgb.mul(uSkyBrightness).toVar();
@@ -660,11 +662,10 @@ export class GradientSky {
     const cam = this._vpe?.camera;
     if (cam) this._mesh.position.copy(cam.position);
 
-    // Lens flare (WebGL addon — skip gracefully in WebGPU context)
-    try { this._createLensflare(); this._updateLensflare(); } catch (_) {}
+    // Lensflare uses renderer.renderBufferDirect() which is WebGL-only —
+    // skip it entirely under the WebGPU renderer to avoid crashing the pipeline.
 
     scene.add(this._mesh);
-    if (this._lensflare) try { scene.add(this._lensflare); } catch (_) {}
   }
 
   _destroyMesh() {
