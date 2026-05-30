@@ -237,10 +237,12 @@ const LayoutManager = {
       // throughout so none of these intermediate changes trigger an auto-save.
       const _savedRoot = layout.grid?.root;
       setTimeout(() => {
-        try { this._applyGridSizes(_savedRoot, 'HORIZONTAL'); } catch(e) {
+        try { this._applyGridSizes(_savedRoot, 'VERTICAL'); } catch(e) {
           console.warn('[Cyco] restoreAutoSaved: size re-apply failed', e);
         }
+        // Second pass at 350 ms to handle slower reflows / high-DPI scaling.
         setTimeout(() => {
+          try { this._applyGridSizes(_savedRoot, 'VERTICAL'); } catch(_) {}
           this._restoringLayout = false;
         }, 200);
       }, 150);

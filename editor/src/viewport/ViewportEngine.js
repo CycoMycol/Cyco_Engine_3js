@@ -757,7 +757,8 @@ export class ViewportEngine {
     try {
       const saved = JSON.parse(localStorage.getItem('cyco-grid-settings') ?? '{}');
       const gridDefaults = { divisions: 20, size: 20, gridColor: '#444444', centerColor: '#888888',
-        opacity: 1.0, gridVisible: true, axesVisible: true, style: 'standard' };
+        opacity: 1.0, gridVisible: true, axesVisible: true, style: 'standard',
+        cellSize: 4.0, checkerSize: 4.0 };
       this._onGridSettings({ detail: { ...gridDefaults, ...saved } });
     } catch (_) {
       this.gridHelper = this._makeGrid(20, 20);
@@ -793,7 +794,7 @@ export class ViewportEngine {
       const { Fn, abs, fract, fwidth, mix, clamp, smoothstep, vec4, float, positionWorld, max, uniform } = tslMod;
 
       // ── Live-update uniforms ───────────────────────────────────────────────
-      const uCellSize  = uniform(opts.cellSize  ?? 1.0);
+      const uCellSize  = uniform(opts.cellSize  ?? 4.0);
       const uLineW     = uniform(opts.lineWidth ?? 0.02);
       const uLineColor = uniform(new THREE.Color(opts.gridColor  ?? '#555555'));
       const uXColor    = uniform(new THREE.Color(opts.xAxisColor ?? '#CC2222'));
@@ -882,7 +883,7 @@ export class ViewportEngine {
       const { Fn, floor, mod, mix, smoothstep, length, vec4, float, positionWorld, uniform } = tslMod;
 
       // ── Live-update uniforms ───────────────────────────────────────────────
-      const uCellSize = uniform(opts.checkerSize ?? 1.0);
+      const uCellSize = uniform(opts.checkerSize ?? 4.0);
       const uColor1   = uniform(new THREE.Color(opts.checkerColor1 ?? '#333333'));
       const uColor2   = uniform(new THREE.Color(opts.checkerColor2 ?? '#555555'));
       const uOpacity  = uniform(opts.opacity ?? 1.0);
@@ -901,12 +902,11 @@ export class ViewportEngine {
       if (infinite) {
         alphaNode = uOpacity;
       } else {
-        // Fade to transparent beyond a radius so it doesn't look like a finite plane
-        const fadeR  = float(80.0);
-        const fadeF  = float(50.0);
-        const dist   = length(positionWorld.xz);
-        const fade   = smoothstep(fadeR, fadeR.sub(fadeF), dist);
-        alphaNode    = uOpacity.mul(fade);
+        // Fade in cell-space units so the visible radius scales with cell size:
+        // always ~7 full cells visible, gone by ~20 cells from center.
+        const distCells = length(positionWorld.xz).div(uCellSize);
+        const fade      = smoothstep(float(20.0), float(7.0), distCells);
+        alphaNode       = uOpacity.mul(fade);
       }
 
       const material = new MeshBasicNodeMaterial();

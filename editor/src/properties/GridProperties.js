@@ -25,13 +25,13 @@ const DEFAULTS = {
   gridColor:      '#444444',
   centerColor:    '#888888',
   // Infinite-only
-  cellSize:       1.0,
+  cellSize:       4.0,
   xAxisColor:     '#CC2222',
   zAxisColor:     '#2244CC',
   // Checkered (both checkered styles)
   checkerColor1:  '#333333',
   checkerColor2:  '#555555',
-  checkerSize:    1.0,
+  checkerSize:    4.0,
   // Common
   opacity:        1.0,
   gridVisible:    true,
@@ -130,8 +130,8 @@ export class GridProperties {
     this._addRow(gBody, 'Center Color', centColorSw.el, STD);
 
     // ── Infinite-only controls ────────────────────────────────────────────────
-    const cellInp = numInput({ value: s.cellSize ?? 1.0, step: 0.1, min: 0.1, max: 100, decimals: 2,
-      onChange: v => { s.cellSize = Math.max(0.1, v); this._save(); } });
+    const cellInp = numInput({ value: s.cellSize ?? 4.0, step: 0.5, min: 0.5, max: 500, decimals: 2,
+      onChange: v => { s.cellSize = Math.max(0.5, v); this._save(); } });
     this._addRow(gBody, 'Cell Size', cellInp, INF);
 
     const xAxisSw = colorSwatch({ color: s.xAxisColor ?? '#CC2222',
@@ -143,8 +143,8 @@ export class GridProperties {
     this._addRow(gBody, 'Z Axis Color', zAxisSw.el, INF);
 
     // ── Checkered-only controls ───────────────────────────────────────────────
-    const chkSzInp = numInput({ value: s.checkerSize ?? 1.0, step: 0.1, min: 0.1, max: 100, decimals: 2,
-      onChange: v => { s.checkerSize = Math.max(0.1, v); this._save(); } });
+    const chkSzInp = numInput({ value: s.checkerSize ?? 4.0, step: 0.5, min: 0.5, max: 500, decimals: 2,
+      onChange: v => { s.checkerSize = Math.max(0.5, v); this._save(); } });
     this._addRow(gBody, 'Checker Size', chkSzInp, CHK);
 
     const col1Sw = colorSwatch({ color: s.checkerColor1 ?? '#333333',
