@@ -503,6 +503,11 @@ export class EnvironmentProperties {
       onChange: (v) => cs2()?.setEnabled(v),
     });
 
+    const skyModeCb2 = checkbox({
+      checked: cs2()?._p?.skyMode ?? false,
+      onChange: (v) => cs2()?.setSkyMode(v),
+    });
+
     const animateCb2 = checkbox({
       checked: cs2()?._p?.animated ?? true,
       onChange: (v) => cs2()?.setAnimated(v),
@@ -519,8 +524,10 @@ export class EnvironmentProperties {
     const topCtrl2 = document.createElement('div');
     topCtrl2.style.cssText = 'display:flex;align-items:center;gap:10px;';
     topCtrl2.appendChild(_mkCbLabel2(enableCb2, 'Enable'));
-    topCtrl2.appendChild(_mkCbLabel2(animateCb2, 'Animate'));
+    topCtrl2.appendChild(_mkCbLabel2(skyModeCb2, 'Sky Layer'));
     body.appendChild(row('Low Clouds', topCtrl2));
+
+    body.appendChild(row('Animate', animateCb2));
 
     const coverageSlider2 = slider({
       value: cs2()?._p?.coverage ?? 0.3, min: 0, max: 1, step: 0.01,
