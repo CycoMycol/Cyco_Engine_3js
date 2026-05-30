@@ -173,6 +173,9 @@ class Lensflare extends Mesh {
 
 		const elements = [];
 
+		/** Exposed for external read/write access to element properties (size, color). */
+		this.elements = elements;
+
 		const shader = LensflareElement.Shader;
 
 		const material2 = new RawShaderMaterial( {

@@ -317,17 +317,73 @@ export class EnvironmentProperties {
 
     flareSec.addRow(row('Enable', lensflareEnabledCb));
 
+    const lensflareStyleSelect = select({
+      options: [
+        ['classic',    'Classic'   ],
+        ['natural',    'Natural'   ],
+        ['cinematic',  'Cinematic' ],
+        ['anamorphic', 'Anamorphic'],
+        ['subtle',     'Subtle'    ],
+      ],
+      value: _skyP?.lensflareStyle ?? 'classic',
+      onChange: () => { _updateFlareStyleRows(); _fire(); },
+    });
+    flareSec.addRow(row('Style', lensflareStyleSelect));
+
     const lensflareSizeSlider = slider({
       value: _skyP?.lensflareSize ?? 300, min: 50, max: 1200, step: 10,
       onChange: () => _fire(),
     });
-    flareSec.addRow(row('Size', lensflareSizeSlider.el));
+    const _sizeRow = row('Size', lensflareSizeSlider.el);
+    flareSec.addRow(_sizeRow);
 
     const lensflareOpacitySlider = slider({
       value: _skyP?.lensflareOpacity ?? 0.7, min: 0, max: 1, step: 0.05,
       onChange: () => _fire(),
     });
     flareSec.addRow(row('Opacity', lensflareOpacitySlider.el));
+
+    // ── Per-style controls (shown/hidden based on selected style) ────────────
+    const lensflareIntensitySlider = slider({
+      value: _skyP?.lensflareIntensity ?? 1.0, min: 0.5, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    const _intensityRow = row('Intensity', lensflareIntensitySlider.el);
+
+    const lensflareGhostCountSlider = slider({
+      value: _skyP?.lensflareGhostCount ?? 4, min: 2, max: 10, step: 1,
+      onChange: () => _fire(),
+    });
+    const _ghostRow = row('Ghost Count', lensflareGhostCountSlider.el);
+
+    const lensflareStreakLengthSlider = slider({
+      value: _skyP?.lensflareStreakLength ?? 1.0, min: 0.3, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    const _streakRow = row('Streak Length', lensflareStreakLengthSlider.el);
+
+    const lensflareBrightnessSlider = slider({
+      value: _skyP?.lensflareBrightness ?? 1.2, min: 0.5, max: 2.5, step: 0.05,
+      onChange: () => _fire(),
+    });
+    const _brightnessRow = row('Brightness', lensflareBrightnessSlider.el);
+
+    // Add all per-style rows to section (initially hidden)
+    flareSec.addRow(_intensityRow);
+    flareSec.addRow(_ghostRow);
+    flareSec.addRow(_streakRow);
+    flareSec.addRow(_brightnessRow);
+
+    /** Show/hide per-style rows based on the current style selection. */
+    const _updateFlareStyleRows = () => {
+      const styleVal = lensflareStyleSelect.value ?? 'classic';
+      _intensityRow.style.display  = styleVal === 'cinematic'  ? '' : 'none';
+      _ghostRow.style.display      = styleVal === 'cinematic'  ? '' : 'none';
+      _streakRow.style.display     = styleVal === 'anamorphic' ? '' : 'none';
+      _brightnessRow.style.display = styleVal === 'natural'    ? '' : 'none';
+      _sizeRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
+    };
+    _updateFlareStyleRows();
 
     // Store all references
     this._skyControls = {
@@ -337,6 +393,8 @@ export class EnvironmentProperties {
       showSunCb, sunColorSw, sunGlowSlider,
       showMoonCb, moonColorSw, moonGlowSlider,
       lensflareEnabledCb, lensflareSizeSlider, lensflareOpacitySlider,
+      lensflareStyleSelect, lensflareIntensitySlider, lensflareGhostCountSlider,
+      lensflareStreakLengthSlider, lensflareBrightnessSlider,
     };
   }
 
@@ -364,9 +422,14 @@ export class EnvironmentProperties {
         showMoon:          s.showMoonCb.checked,
         moonColor,
         moonGlowStrength:  parseFloat(s.moonGlowSlider.input.value),
-        lensflareEnabled:  s.lensflareEnabledCb.checked,
-        lensflareSize:     parseFloat(s.lensflareSizeSlider.input.value),
-        lensflareOpacity:  parseFloat(s.lensflareOpacitySlider.input.value),
+        lensflareEnabled:      s.lensflareEnabledCb.checked,
+        lensflareSize:         parseFloat(s.lensflareSizeSlider.input.value),
+        lensflareOpacity:      parseFloat(s.lensflareOpacitySlider.input.value),
+        lensflareStyle:        s.lensflareStyleSelect?.value ?? 'classic',
+        lensflareIntensity:    parseFloat(s.lensflareIntensitySlider.input.value),
+        lensflareGhostCount:   parseFloat(s.lensflareGhostCountSlider.input.value),
+        lensflareStreakLength:  parseFloat(s.lensflareStreakLengthSlider.input.value),
+        lensflareBrightness:   parseFloat(s.lensflareBrightnessSlider.input.value),
       }
     }));
   }

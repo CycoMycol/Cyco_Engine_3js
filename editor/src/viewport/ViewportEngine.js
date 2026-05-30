@@ -168,6 +168,21 @@ export class ViewportEngine {
     // Resize observer
     this._buildResizeObserver(container);
 
+    // Deferred size sync — on cold load, getBoundingClientRect() above may
+    // return a pre-layout (e.g. zero) size if dockview hasn't finished its
+    // initial layout pass yet. The ResizeObserver won't fire again if the
+    // container was already at its final size when observe() was called.
+    // Two nested RAFs guarantee we read after CSS layout has settled.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (!this._container) return;
+        const { width, height } = this._container.getBoundingClientRect();
+        const w = Math.max(1, Math.floor(width));
+        const h = Math.max(1, Math.floor(height));
+        if (w > 1 && h > 1) this._handleResize(w, h);
+      });
+    });
+
     // Right-click context menu
     this._buildContextMenu(container);
 
@@ -209,6 +224,7 @@ export class ViewportEngine {
       showMoon = true, moonColor, moonGlowStrength,
       exposure, saturation, contrast,
       lensflareEnabled, lensflareSize, lensflareOpacity,
+      lensflareStyle, lensflareIntensity, lensflareGhostCount, lensflareStreakLength, lensflareBrightness,
     } = detail ?? {};
     console.log(
       `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  elevation=${elevation}°  azimuth=${azimuth}°` +
@@ -238,9 +254,14 @@ export class ViewportEngine {
     if (exposure !== undefined)   params.exposure         = exposure;
     if (saturation !== undefined) params.saturation       = saturation;
     if (contrast !== undefined)   params.contrast         = contrast;
-    if (lensflareEnabled !== undefined) params.lensflareEnabled = lensflareEnabled;
-    if (lensflareSize !== undefined)    params.lensflareSize    = lensflareSize;
-    if (lensflareOpacity !== undefined) params.lensflareOpacity = lensflareOpacity;
+    if (lensflareEnabled      !== undefined) params.lensflareEnabled      = lensflareEnabled;
+    if (lensflareSize         !== undefined) params.lensflareSize         = lensflareSize;
+    if (lensflareOpacity      !== undefined) params.lensflareOpacity      = lensflareOpacity;
+    if (lensflareStyle        !== undefined) params.lensflareStyle        = lensflareStyle;
+    if (lensflareIntensity    !== undefined) params.lensflareIntensity    = lensflareIntensity;
+    if (lensflareGhostCount   !== undefined) params.lensflareGhostCount   = lensflareGhostCount;
+    if (lensflareStreakLength  !== undefined) params.lensflareStreakLength  = lensflareStreakLength;
+    if (lensflareBrightness   !== undefined) params.lensflareBrightness   = lensflareBrightness;
 
     this.gradientSky.setEnabled(true);
     this.gradientSky.setParams(params);
@@ -1198,10 +1219,26 @@ export class ViewportEngine {
     // Rebuild IBL with new renderer (SVG/CSS3D renderers are skipped inside _setupIBL)
     this._setupIBL();
 
+    // Sync the new renderer to the container's current size. The renderer was
+    // created using the container's pre-layout dimensions (which may have been
+    // wrong on cold load). Re-read to get the final settled dimensions.
+    if (this._container) {
+      const { width, height } = this._container.getBoundingClientRect();
+      const w = Math.max(1, Math.floor(width));
+      const h = Math.max(1, Math.floor(height));
+      if (w > 1 && h > 1) this._handleResize(w, h);
+    }
+
     // Rebuild OrbitControls + ViewHelper with new canvas
     if (this.controls) this.controls.dispose();
     this._buildControls();
     this._buildViewHelper();
+
+    // Rebuild sky/flare with new renderer (TSL mesh vs ShaderMaterial)
+    if (this.skyEnabled && this.gradientSky) {
+      this.gradientSky.setEnabled(false);
+      this.gradientSky.setEnabled(true);
+    }
 
     // TransformControls will re-wire via its own cyco-renderer-changed listener
   }
