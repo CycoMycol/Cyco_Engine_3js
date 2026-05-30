@@ -218,6 +218,7 @@ export class GradientSky {
     this._lensflare       = null;   // Three.js Lensflare (WebGL only)
     this._lensflareSprites = null;  // Sprite array for WebGPU lensflare
     this._enabled         = false;
+    this._raycaster       = null;   // Reused for per-frame sun occlusion test (WebGPU path)
 
     this._p = {
       elevation:          30,
@@ -764,6 +765,24 @@ export class GradientSky {
       this._lensflareSprites.forEach(s => { s.visible = false; });
       return;
     }
+
+    // ── Occlusion test: hide if any scene mesh blocks the line to the sun ──────
+    // Collect non-helper meshes that are currently visible in the scene.
+    const scene = this._vpe?.scene;
+    if (scene) {
+      if (!this._raycaster) this._raycaster = new THREE.Raycaster();
+      this._raycaster.set(camera.position, p.sunDir);
+      this._raycaster.far = camera.far;
+      const occluders = [];
+      scene.traverseVisible(obj => {
+        if ((obj.isMesh || obj.isInstancedMesh) && !obj.userData._isHelper) occluders.push(obj);
+      });
+      if (occluders.length > 0 && this._raycaster.intersectObjects(occluders, false).length > 0) {
+        this._lensflareSprites.forEach(s => { s.visible = false; });
+        return;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     const renderer = this._vpe?.rendererManager?.renderer;
     const canvas   = renderer?.domElement;

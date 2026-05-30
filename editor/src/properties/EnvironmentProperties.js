@@ -271,7 +271,8 @@ export class EnvironmentProperties {
     };
 
     // ── Sun controls ────────────────────────────────────────────────────────
-    const showSunCb = checkbox({ checked: true, onChange: () => _fire() });
+    const _skyP = ve?.gradientSky?._p;  // current GradientSky params (null if sky not yet enabled)
+    const showSunCb = checkbox({ checked: _skyP?.showSun ?? true, onChange: () => _fire() });
     const sunColorSw = colorSwatch({ color: '#fff8e7', onChange: () => _fire() });
 
     const sunSec = _subSection('Sun');
@@ -285,13 +286,13 @@ export class EnvironmentProperties {
     sunSec.addRow(sunComboRow);
 
     const sunGlowSlider = slider({
-      value: 0.5, min: 0, max: 10, step: 0.1,
+      value: _skyP?.sunGlowStrength ?? 0.5, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
     sunSec.addRow(row('Glow', sunGlowSlider.el));
 
     // ── Moon controls ───────────────────────────────────────────────────────
-    const showMoonCb = checkbox({ checked: true, onChange: () => _fire() });
+    const showMoonCb = checkbox({ checked: _skyP?.showMoon ?? true, onChange: () => _fire() });
     const moonColorSw = colorSwatch({ color: '#c0d4ff', onChange: () => _fire() });
 
     const moonSec = _subSection('Moon');
@@ -304,26 +305,26 @@ export class EnvironmentProperties {
     moonSec.addRow(moonComboRow);
 
     const moonGlowSlider = slider({
-      value: 0.3, min: 0, max: 10, step: 0.1,
+      value: _skyP?.moonGlowStrength ?? 0.3, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
     moonSec.addRow(row('Glow', moonGlowSlider.el));
 
     // ── Lens Flare ──────────────────────────────────────────────────────────
-    const lensflareEnabledCb = checkbox({ checked: true, onChange: () => _fire() });
+    const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: () => _fire() });
 
     const flareSec = _subSection('Lens Flare');
 
     flareSec.addRow(row('Enable', lensflareEnabledCb));
 
     const lensflareSizeSlider = slider({
-      value: 300, min: 50, max: 1200, step: 10,
+      value: _skyP?.lensflareSize ?? 300, min: 50, max: 1200, step: 10,
       onChange: () => _fire(),
     });
     flareSec.addRow(row('Size', lensflareSizeSlider.el));
 
     const lensflareOpacitySlider = slider({
-      value: 0.7, min: 0, max: 1, step: 0.05,
+      value: _skyP?.lensflareOpacity ?? 0.7, min: 0, max: 1, step: 0.05,
       onChange: () => _fire(),
     });
     flareSec.addRow(row('Opacity', lensflareOpacitySlider.el));
@@ -517,7 +518,18 @@ export class EnvironmentProperties {
 
     const skyModeCb2 = checkbox({
       checked: cs2()?._p?.skyMode ?? false,
-      onChange: (v) => cs2()?.setSkyMode(v),
+      onChange: (v) => {
+        cs2()?.setSkyMode(v);
+        // Sky-layer siblings (sun, moon, lens flare) follow any sky-layer toggle
+        const sky = window.__cyco?.gradientSky;
+        if (sky) sky.setParams({ showSun: v, showMoon: v, lensflareEnabled: v });
+        const sc = this._skyControls;
+        if (sc) {
+          sc.showSunCb.checked          = v;
+          sc.showMoonCb.checked         = v;
+          sc.lensflareEnabledCb.checked = v;
+        }
+      },
     });
 
     const animateCb2 = checkbox({
