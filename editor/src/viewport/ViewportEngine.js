@@ -1278,8 +1278,17 @@ export class ViewportEngine {
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
 
-    this.camera.aspect = w / h;
-    this.camera.updateProjectionMatrix();
+    if (this.camera.isPerspectiveCamera) {
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+    } else if (this.camera.isOrthographicCamera) {
+      // Keep the same vertical half-size, update horizontal for new aspect
+      const halfH = this.camera.top;
+      const halfW = halfH * (w / h);
+      this.camera.left   = -halfW;
+      this.camera.right  =  halfW;
+      this.camera.updateProjectionMatrix();
+    }
 
     this.rendererManager.resize(w, h);
 
@@ -1510,6 +1519,18 @@ export class ViewportEngine {
 
   _onCameraSnap(event) {
     const { view } = event.detail;
+
+    // ── Perspective / Orthographic toggle ─────────────────────────────────
+    if (view === 'orthographic' || view === 'perspective') {
+      const isOrtho = this.camera.isOrthographicCamera;
+      if (view === 'orthographic' && !isOrtho) {
+        this._switchToOrthoCamera();
+      } else if (view === 'perspective' && isOrtho) {
+        this._switchToPerspCamera();
+      }
+      return;
+    }
+
     const dist = this.camera.position.distanceTo(this.controls.target);
 
     {
@@ -1552,6 +1573,57 @@ export class ViewportEngine {
         `  near=${c.near}  far=${c.far}  fov=${c.fov}`
       );
     }
+  }
+
+  /** Swap the editor viewport camera to an OrthographicCamera. */
+  _switchToOrthoCamera() {
+    const persp = this.camera;
+    if (!persp?.isPerspectiveCamera) return;
+    const { width: w, height: h } = this._container?.getBoundingClientRect() ?? { width: 800, height: 600 };
+    const aspect = w / h;
+    // Ortho half-size: match the visible height at current orbit distance
+    const dist  = persp.position.distanceTo(this.controls.target);
+    const halfH = Math.tan(persp.fov * 0.5 * (Math.PI / 180)) * dist;
+    const halfW = halfH * aspect;
+    const ortho = new THREE.OrthographicCamera(-halfW, halfW, halfH, -halfH, persp.near, persp.far);
+    ortho.position.copy(persp.position);
+    ortho.quaternion.copy(persp.quaternion);
+    ortho.name = persp.name;
+    ortho.userData = { ...persp.userData, _prevPerspFov: persp.fov };
+    this._swapEditorCamera(ortho);
+  }
+
+  /** Swap the editor viewport camera back to a PerspectiveCamera. */
+  _switchToPerspCamera() {
+    const ortho = this.camera;
+    if (!ortho?.isOrthographicCamera) return;
+    const { width: w, height: h } = this._container?.getBoundingClientRect() ?? { width: 800, height: 600 };
+    const fov   = ortho.userData._prevPerspFov ?? 90;
+    const persp = new THREE.PerspectiveCamera(fov, w / h, ortho.near, ortho.far);
+    persp.position.copy(ortho.position);
+    persp.quaternion.copy(ortho.quaternion);
+    persp.name = ortho.name;
+    persp.userData = { ...ortho.userData };
+    delete persp.userData._prevPerspFov;
+    this._swapEditorCamera(persp);
+  }
+
+  /** Replace this.camera with newCam, rewire controls, and update everything. */
+  _swapEditorCamera(newCam) {
+    this.camera = newCam;
+    if (this.controls) {
+      const target = this.controls.target.clone();
+      this.controls.dispose();
+      this.controls = null;
+      this._buildControls();
+      this.controls.target.copy(target);
+      this.controls.update();
+    }
+    // Rebuild ViewHelper so the orientation gizmo tracks the new camera
+    this._buildViewHelper();
+    // Notify post-processing pipeline and any other camera-dependent systems.
+    // PostProcessingPipeline listens and rebuilds its TSL pass() node with the new camera.
+    window.dispatchEvent(new CustomEvent('cyco-editor-camera-changed', { detail: { camera: newCam } }));
   }
 
   // ─── Renderer swap ───────────────────────────────────────────────────────

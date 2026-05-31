@@ -161,18 +161,20 @@ export class PostProcessingPipeline {
     this._onDeselectAll       = this._onDeselectAll.bind(this);
     this._onHoverObject       = this._onHoverObject.bind(this);
     this._onPpSettings        = this._onPpSettings.bind(this);
-    this._onSceneChildAdded   = this._onSceneChildAdded.bind(this);
-    this._onVpTool            = this._onVpTool.bind(this);
+    this._onSceneChildAdded    = this._onSceneChildAdded.bind(this);
+    this._onVpTool             = this._onVpTool.bind(this);
+    this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
 
-    window.addEventListener('cyco-vp-ready',          this._onVpReady);
-    window.addEventListener('cyco-renderer-changed',  this._onRendererChanged);
-    window.addEventListener('cyco-vp-tick',           this._onTick);
-    window.addEventListener('cyco-vp-resize',         this._onResize);
-    window.addEventListener('cyco-select-node',       this._onSelectNode);
-    window.addEventListener('cyco-deselect-all',      this._onDeselectAll);
-    window.addEventListener('cyco-hover-object',      this._onHoverObject);
-    window.addEventListener('cyco-pp-settings',       this._onPpSettings);
-    window.addEventListener('cyco-vp-tool',           this._onVpTool);
+    window.addEventListener('cyco-vp-ready',                this._onVpReady);
+    window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
+    window.addEventListener('cyco-vp-tick',                 this._onTick);
+    window.addEventListener('cyco-vp-resize',               this._onResize);
+    window.addEventListener('cyco-select-node',             this._onSelectNode);
+    window.addEventListener('cyco-deselect-all',            this._onDeselectAll);
+    window.addEventListener('cyco-hover-object',            this._onHoverObject);
+    window.addEventListener('cyco-pp-settings',             this._onPpSettings);
+    window.addEventListener('cyco-vp-tool',                 this._onVpTool);
+    window.addEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
   }
 
   // ─── Build pipelines ──────────────────────────────────────────────────────
@@ -316,6 +318,10 @@ export class PostProcessingPipeline {
   async _buildWebGPUPipeline(renderer, scene, camera) {
     this._tslPipelineActive = false;
     this._tslBloomNode = null;
+    // Yield rendering control to the fallback direct-render path while the
+    // async pipeline is rebuilding.  Without this, _pipelineActive stays true
+    // but _tslPipelineActive is false, which produces blank frames.
+    this.engine.setPipelineActive(false);
     try {
       const webgpuMod = await import('three/webgpu');
       const { RenderPipeline, TSL } = webgpuMod;
@@ -458,6 +464,16 @@ export class PostProcessingPipeline {
 
   _onRendererChanged(event) {
     const { renderer, type } = event.detail;
+    this._rebuildForType(renderer, type);
+  }
+
+  /** Editor viewport camera was swapped (e.g. perspective ↔ orthographic).
+   *  The TSL pass() node captures the camera by reference at build time, so
+   *  a full pipeline rebuild is required to pick up the new camera type.
+   */
+  _onEditorCameraChanged() {
+    const renderer = this.engine.rendererManager?.renderer;
+    const type     = this.engine.rendererManager?.activeType ?? 'webgl';
     this._rebuildForType(renderer, type);
   }
 
@@ -997,6 +1013,7 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-deselect-all',      this._onDeselectAll);
     window.removeEventListener('cyco-hover-object',      this._onHoverObject);
     window.removeEventListener('cyco-pp-settings',       this._onPpSettings);
-    window.removeEventListener('cyco-vp-tool',           this._onVpTool);
+    window.removeEventListener('cyco-vp-tool',                 this._onVpTool);
+    window.removeEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
   }
 }

@@ -78,6 +78,7 @@ export class ObjectFactory {
     this._onDuplicate      = this._onDuplicate.bind(this);
     this._onRemoveObj      = this._onRemoveObj.bind(this);
     this._onRestoreObj     = this._onRestoreObj.bind(this);
+    this._onCameraTypeChange = this._onCameraTypeChange.bind(this);
 
     window.addEventListener('cyco-add-object',            this._onAddObject);
     window.addEventListener('cyco-load-file',             this._onLoadFile);
@@ -86,6 +87,7 @@ export class ObjectFactory {
     window.addEventListener('cyco-duplicate-object',      this._onDuplicate);
     window.addEventListener('cyco-hierarchy-remove-obj',  this._onRemoveObj);
     window.addEventListener('cyco-hierarchy-restore-obj', this._onRestoreObj);
+    window.addEventListener('cyco-camera-type-change',    this._onCameraTypeChange);
   }
 
   // ─── Renderer-dependent init ──────────────────────────────────────────────
@@ -176,6 +178,51 @@ export class ObjectFactory {
     window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
       detail: { object, parentId: targetParent?.userData?.cycoId ?? null }
     }));
+  }
+
+  /**
+   * Convert a scene camera object between Perspective and Orthographic.
+   * Replaces the object in the scene and re-selects it in the properties panel.
+   */
+  _onCameraTypeChange(event) {
+    const { camera: oldCam, type } = event.detail ?? {};
+    if (!oldCam) return;
+
+    const isPerspNow  = oldCam.isPerspectiveCamera;
+    const isOrthoNow  = oldCam.isOrthographicCamera;
+    if ((type === 'perspective' && isPerspNow) || (type === 'orthographic' && isOrthoNow)) return;
+
+    let newCam;
+    if (type === 'orthographic') {
+      // Convert perspective → orthographic
+      const aspect = 16 / 9; // neutral aspect until resize fires
+      const halfH  = 500;     // sensible default — 500 cm = 5 m half-height
+      newCam = new THREE.OrthographicCamera(-halfH * aspect, halfH * aspect, halfH, -halfH, oldCam.near, oldCam.far);
+    } else {
+      // Convert orthographic → perspective
+      const fov = oldCam.userData._prevPerspFov ?? 90;
+      newCam = new THREE.PerspectiveCamera(fov, 16 / 9, oldCam.near, oldCam.far);
+    }
+
+    newCam.position.copy(oldCam.position);
+    newCam.quaternion.copy(oldCam.quaternion);
+    newCam.name     = oldCam.name;
+    newCam.userData = { ...oldCam.userData };
+    if (!newCam.userData.cycoId) {
+      newCam.userData.cycoId = oldCam.userData.cycoId ?? Math.random().toString(36).slice(2, 9);
+    }
+    if (type === 'orthographic' && isPerspNow) {
+      newCam.userData._prevPerspFov = oldCam.fov;
+    }
+
+    const parent = oldCam.parent ?? this.sceneManager.scene;
+    parent.remove(oldCam);
+    parent.add(newCam);
+    this.sceneManager._markDirty?.();
+
+    // Remove old hierarchy node, then add new one (reuses same cycoId)
+    window.dispatchEvent(new CustomEvent('cyco-hierarchy-remove', { detail: { objectId: oldCam.userData.cycoId } }));
+    window.dispatchEvent(new CustomEvent('cyco-hierarchy-add',    { detail: { object: newCam, parentId: null } }));
   }
 
   async _onLoadFile(event) {

@@ -20,14 +20,15 @@ const RENDER_MODES = [
 ];
 
 const CAMERA_VIEWS = [
-  { value: 'perspective', label: 'Perspective' },
-  { value: 'top',         label: 'Top'         },
-  { value: 'bottom',      label: 'Bottom'      },
-  { value: 'front',       label: 'Front'       },
-  { value: 'back',        label: 'Back'        },
-  { value: 'left',        label: 'Left'        },
-  { value: 'right',       label: 'Right'       },
-  { value: 'camera',      label: 'Camera'      },
+  { value: 'perspective',  label: 'Perspective'  },
+  { value: 'orthographic', label: 'Orthographic' },
+  { value: 'top',          label: 'Top'          },
+  { value: 'bottom',       label: 'Bottom'       },
+  { value: 'front',        label: 'Front'        },
+  { value: 'back',         label: 'Back'         },
+  { value: 'left',         label: 'Left'         },
+  { value: 'right',        label: 'Right'        },
+  { value: 'camera',       label: 'Camera'       },
 ];
 
 // ── Panel class ───────────────────────────────────────────────────────────────
@@ -53,10 +54,12 @@ export class CenterPanel extends BasePanel {
     this._history      = [];
     this._histIndex    = -1;
 
-    this._onHistoryChange = this._onHistoryChange.bind(this);
-    this._onRuntimeState  = this._onRuntimeState.bind(this);
-    window.addEventListener('cyco-history-change', this._onHistoryChange);
-    window.addEventListener('cyco-runtime-state',  this._onRuntimeState);
+    this._onHistoryChange     = this._onHistoryChange.bind(this);
+    this._onRuntimeState      = this._onRuntimeState.bind(this);
+    this._onEditorCamChanged  = this._onEditorCamChanged.bind(this);
+    window.addEventListener('cyco-history-change',        this._onHistoryChange);
+    window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
+    window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
   }
 
   _buildContent() {
@@ -406,6 +409,17 @@ export class CenterPanel extends BasePanel {
   _onRuntimeState(e) {
     this._playing = !!e.detail?.playing;
     this._updatePlayBtn();
+  }
+
+  /** Sync the viewport camera dropdown label when the editor camera is swapped. */
+  _onEditorCamChanged(e) {
+    const cam = e.detail?.camera;
+    if (!cam || !this._cameraHandle) return;
+    const newView = cam.isOrthographicCamera ? 'orthographic' : 'perspective';
+    if (this._cameraView !== newView) {
+      this._cameraView = newView;
+      this._cameraHandle.refresh();
+    }
   }
 
   _updatePlayBtn() {

@@ -44,9 +44,12 @@ export class CameraProperties {
     this._el.className = 'ce-props-panel';
     this._posVec  = null;
     this._elapsed = 0;
-    this._onTick  = this._onTick.bind(this);
+    this._typeSel = null;  // Camera Type <select> — kept in sync with viewport dropdown
+    this._onTick               = this._onTick.bind(this);
+    this._onEditorCamChanged   = this._onEditorCamChanged.bind(this);
     this._build();
-    window.addEventListener('cyco-vp-tick', this._onTick);
+    window.addEventListener('cyco-vp-tick',               this._onTick);
+    window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
   }
 
   get element() { return this._el; }
@@ -78,6 +81,22 @@ export class CameraProperties {
     // ── Camera properties ──────────────────────────────────────────────────
     const { el: cSec, body: cBody } = section('Camera');
     cBody.appendChild(row('Type', readOnly(cam.type ?? '')));
+
+    // ── Camera type switcher ───────────────────────────────────────────────
+    const typeSel = select({
+      options: [['perspective', 'Perspective'], ['orthographic', 'Orthographic']],
+      value: cam.isPerspectiveCamera ? 'perspective' : 'orthographic',
+      onChange: (val) => {
+        // Swap the scene camera object type
+        window.dispatchEvent(new CustomEvent('cyco-camera-type-change', {
+          detail: { camera: cam, type: val }
+        }));
+        // Also switch the editor viewport to match
+        window.dispatchEvent(new CustomEvent('cyco-vp-camera', { detail: { view: val } }));
+      },
+    });
+    this._typeSel = typeSel;
+    cBody.appendChild(row('Camera Type', typeSel));
 
     if (cam.isPerspectiveCamera) {
       // FOV — linked to Focal Length below
@@ -266,6 +285,19 @@ export class CameraProperties {
   }
 
   dispose() {
-    window.removeEventListener('cyco-vp-tick', this._onTick);
+    window.removeEventListener('cyco-vp-tick',               this._onTick);
+    window.removeEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+  }
+
+  /** Sync Camera Type dropdown when the editor viewport camera is swapped externally. */
+  _onEditorCamChanged(event) {
+    if (!this._typeSel) return;
+    const cam = event.detail?.camera;
+    if (!cam) return;
+    const newVal = cam.isOrthographicCamera ? 'orthographic' : 'perspective';
+    if (this._typeSel.value !== newVal) {
+      // Programmatic update — does NOT fire the 'change' event, so no re-dispatch
+      this._typeSel.value = newVal;
+    }
   }
 }
