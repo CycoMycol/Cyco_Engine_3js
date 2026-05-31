@@ -98,174 +98,265 @@ export class CameraProperties {
     this._typeSel = typeSel;
     cBody.appendChild(row('Camera Type', typeSel));
 
-    if (cam.isPerspectiveCamera) {
-      // FOV — linked to Focal Length below
+    // Cross-section refs (closures read these after assignment below)
+    let _cameraFovInp  = null;  // FOV numInput in Camera section (perspective only)
+    let _lensSensorSel = null;  // sensor <select> in Lens section
+    let _lensFlInp     = null;  // focal length numInput in Lens section
+    let _lensFovInp    = null;  // FOV numInput in Lens section
+
+    const isPerspective = cam.isPerspectiveCamera;
+
+    // ── Near / Far (both types) ────────────────────────────────────────────
+    const nearInp = numInput({ value: cam.near, step: 0.1, min: 0.0001, max: 10000, decimals: 4,
+      onChange: (v) => { cam.near = Math.max(0.0001, v); cam.updateProjectionMatrix(); } });
+    const farInp = numInput({ value: cam.far, step: 100, min: 1, max: 10000000, decimals: 1,
+      onChange: (v) => { cam.far = v; cam.updateProjectionMatrix(); } });
+    cBody.appendChild(row('Near (cm)', nearInp));
+    cBody.appendChild(row('Far (cm)',  farInp));
+
+    if (isPerspective) {
+      // FOV — syncs with Lens section
       const fovInp = numInput({ value: cam.fov, step: 1, min: 1, max: 179, decimals: 2,
         onChange: (v) => {
           cam.fov = Math.min(179, Math.max(1, v));
           cam.updateProjectionMatrix();
-          // sync focal length display
-          const sH = SENSORS[sensorSel.value]?.h ?? 24.0;
-          flInp.querySelector('input').value = fovToFocal(cam.fov, sH).toFixed(2);
+          if (_lensFlInp && _lensSensorSel) {
+            const sH = SENSORS[_lensSensorSel.value]?.h ?? 24.0;
+            _lensFlInp.querySelector('input').value = fovToFocal(cam.fov, sH).toFixed(2);
+          }
+          if (_lensFovInp) _lensFovInp.querySelector('input').value = cam.fov.toFixed(2);
         }
       });
+      _cameraFovInp = fovInp;
       cBody.appendChild(row('FOV (°)', fovInp));
 
-      // Near / far — UE defaults: near 10 cm, far 10 000 cm
-      const nearInp = numInput({ value: cam.near, step: 0.1, min: 0.0001, max: 10000, decimals: 4,
-        onChange: (v) => { cam.near = Math.max(0.0001, v); cam.updateProjectionMatrix(); } });
-      const farInp = numInput({ value: cam.far, step: 100, min: 1, max: 10000000, decimals: 1,
-        onChange: (v) => { cam.far = v; cam.updateProjectionMatrix(); } });
-      cBody.appendChild(row('Near (cm)', nearInp));
-      cBody.appendChild(row('Far (cm)',  farInp));
-
-      // Zoom
       const zoomInp = numInput({ value: cam.zoom, step: 0.1, min: 0.01, decimals: 2,
         onChange: (v) => { cam.zoom = v; cam.updateProjectionMatrix(); } });
       cBody.appendChild(row('Zoom', zoomInp));
-
-      // Aspect (read-only — driven by viewport)
       cBody.appendChild(row('Aspect', readOnly(cam.aspect.toFixed(3))));
 
-      this._el.appendChild(cSec);
-
-      // ── Lens section ───────────────────────────────────────────────────
-      const { el: lSec, body: lBody } = section('Lens');
-
-      // Sensor size selector
-      const savedSensor = cam.userData.sensorKey ?? 'full-frame';
-      const sensorSel = select({
-        options: Object.entries(SENSORS).map(([k, v]) => [k, v.label]),
-        value: savedSensor,
-        onChange: (k) => {
-          cam.userData.sensorKey = k;
-          const sH = SENSORS[k]?.h ?? 24.0;
-          // Update focal length display from current FOV
-          flInp.querySelector('input').value = fovToFocal(cam.fov, sH).toFixed(2);
-        },
-      });
-      lBody.appendChild(row('Sensor', sensorSel));
-
-      // Focal Length — primary control, updates FOV
-      const initSH   = SENSORS[savedSensor]?.h ?? 24.0;
-      const initFL   = cam.userData.focalLengthMm ?? fovToFocal(cam.fov, initSH);
-      const flInp    = numInput({ value: initFL, step: 1, min: 1, max: 2000, decimals: 2,
-        onChange: (mm) => {
-          cam.userData.focalLengthMm = mm;
-          const sH = SENSORS[sensorSel.value]?.h ?? 24.0;
-          const newFov = Math.min(179, Math.max(1, focalToFov(mm, sH)));
-          cam.fov = newFov;
-          cam.updateProjectionMatrix();
-          // sync FOV input
-          fovInp.querySelector('input').value = newFov.toFixed(2);
-        },
-      });
-      lBody.appendChild(row('Focal (mm)', flInp));
-
-      // Lens preset buttons
-      const presetsWrap = document.createElement('div');
-      presetsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;padding:2px 0;';
-      LENS_PRESETS.forEach(mm => {
-        const btn = document.createElement('button');
-        btn.textContent = `${mm}`;
-        btn.title       = `${mm} mm`;
-        btn.style.cssText = 'flex:1;min-width:28px;padding:2px 3px;font-size:10px;' +
-          'background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;';
-        btn.addEventListener('mouseover', () => btn.style.background = '#3a3a3a');
-        btn.addEventListener('mouseout',  () => btn.style.background = '#2a2a2a');
-        btn.addEventListener('click', () => {
-          cam.userData.focalLengthMm = mm;
-          flInp.querySelector('input').value = mm.toFixed(2);
-          const sH = SENSORS[sensorSel.value]?.h ?? 24.0;
-          const newFov = Math.min(179, Math.max(1, focalToFov(mm, sH)));
-          cam.fov = newFov;
-          cam.updateProjectionMatrix();
-          fovInp.querySelector('input').value = newFov.toFixed(2);
-        });
-        presetsWrap.appendChild(btn);
-      });
-      const presetsLabel = document.createElement('div');
-      presetsLabel.style.cssText = 'font-size:10px;color:#888;padding:2px 0 1px 0;';
-      presetsLabel.textContent = 'mm Presets';
-      lBody.appendChild(presetsLabel);
-      lBody.appendChild(presetsWrap);
-
-      this._el.appendChild(lSec);
-
-      // ── Zoom / Sprint / ADS section ───────────────────────────────────
-      const { el: zSec, body: zBody } = section('Zoom Presets');
-
-      // Note label
-      const zNote = document.createElement('div');
-      zNote.style.cssText = 'font-size:10px;color:#777;padding:2px 4px 4px;line-height:1.4;';
-      zNote.textContent = 'Store FOV targets for runtime Blueprint/code use. Click Apply to preview.';
-      zBody.appendChild(zNote);
-
-      const baseFovInp = numInput({
-        value: cam.userData.baseFov ?? cam.fov, step: 1, min: 1, max: 179, decimals: 1,
-        onChange: (v) => { cam.userData.baseFov = v; }
-      });
-      zBody.appendChild(row('Base FOV (°)', baseFovInp));
-
-      const sprintFovInp = numInput({
-        value: cam.userData.sprintFov ?? 110, step: 1, min: 60, max: 170, decimals: 1,
-        onChange: (v) => { cam.userData.sprintFov = v; }
-      });
-      zBody.appendChild(row('Sprint FOV (°)', sprintFovInp));
-
-      const adsFovInp = numInput({
-        value: cam.userData.adsFov ?? 40, step: 1, min: 5, max: 90, decimals: 1,
-        onChange: (v) => { cam.userData.adsFov = v; }
-      });
-      zBody.appendChild(row('ADS FOV (°)', adsFovInp));
-
-      // Apply buttons row
-      const applyRow = document.createElement('div');
-      applyRow.style.cssText = 'display:flex;gap:4px;padding:4px 0 2px;';
-      const mkApply = (label, getFov) => {
-        const b = document.createElement('button');
-        b.textContent = label;
-        b.style.cssText = 'flex:1;padding:3px 4px;font-size:10px;background:#2a2a2a;' +
-          'color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;';
-        b.addEventListener('mouseover', () => b.style.background = '#3a3a3a');
-        b.addEventListener('mouseout',  () => b.style.background = '#2a2a2a');
-        b.addEventListener('click', () => {
-          const v = getFov();
-          if (!v) return;
-          cam.fov = Math.min(179, Math.max(1, v));
-          cam.updateProjectionMatrix();
-          fovInp.querySelector('input').value = cam.fov.toFixed(2);
-          const sH = SENSORS[sensorSel.value]?.h ?? 24.0;
-          flInp.querySelector('input').value = fovToFocal(cam.fov, sH).toFixed(2);
-        });
-        return b;
-      };
-      applyRow.appendChild(mkApply('▶ Base',   () => parseFloat(baseFovInp.querySelector('input').value)));
-      applyRow.appendChild(mkApply('▶ Sprint', () => parseFloat(sprintFovInp.querySelector('input').value)));
-      applyRow.appendChild(mkApply('▶ ADS',    () => parseFloat(adsFovInp.querySelector('input').value)));
-      zBody.appendChild(applyRow);
-
-      this._el.appendChild(zSec);
-
     } else if (cam.isOrthographicCamera) {
-      const nearInp = numInput({ value: cam.near, step: 0.001, min: 0.0001, max: 1000, decimals: 4,
-        onChange: (v) => { cam.near = Math.max(0.0001, v); cam.updateProjectionMatrix(); } });
-      const farInp  = numInput({ value: cam.far,  step: 100,  min: 1, max: 10000000, decimals: 1,
-        onChange: (v) => { cam.far  = v; cam.updateProjectionMatrix(); } });
       const zoomInp = numInput({ value: cam.zoom, step: 0.1, min: 0.01, decimals: 2,
         onChange: (v) => { cam.zoom = v; cam.updateProjectionMatrix(); } });
-
-      cBody.appendChild(row('Near', nearInp));
-      cBody.appendChild(row('Far',  farInp));
       cBody.appendChild(row('Zoom', zoomInp));
-      cBody.appendChild(row('Left',   readOnly(cam.left.toFixed(2))));
-      cBody.appendChild(row('Right',  readOnly(cam.right.toFixed(2))));
-      cBody.appendChild(row('Top',    readOnly(cam.top.toFixed(2))));
-      cBody.appendChild(row('Bottom', readOnly(cam.bottom.toFixed(2))));
-      this._el.appendChild(cSec);
-    } else {
-      this._el.appendChild(cSec);
+
+      // Link state — linked by default (symmetric frustum)
+      const lrState = { linked: true };
+      const tbState = { linked: true };
+
+      const mkLinkRow = (state) => {
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'display:flex;justify-content:flex-end;align-items:center;padding:0 4px;height:14px;';
+        const btn = document.createElement('button');
+        const refresh = () => {
+          btn.textContent = '🔗';
+          btn.style.cssText =
+            `background:none;border:1px solid ${state.linked ? 'var(--ce-accent-orange,#e07228)' : '#444'};` +
+            `border-radius:3px;cursor:pointer;font-size:9px;padding:0 4px;height:12px;` +
+            `line-height:1;color:${state.linked ? 'var(--ce-accent-orange,#e07228)' : '#555'};`;
+          btn.title = state.linked ? 'Linked — click to unlink' : 'Unlinked — click to link';
+        };
+        refresh();
+        btn.addEventListener('click', () => { state.linked = !state.linked; refresh(); });
+        wrap.appendChild(btn);
+        return wrap;
+      };
+
+      let leftEl = null, rightEl = null, topEl = null, bottomEl = null;
+
+      leftEl = numInput({ value: cam.left, step: 10, decimals: 2,
+        onChange: (v) => {
+          cam.left = v; cam.updateProjectionMatrix();
+          if (lrState.linked && rightEl) { cam.right = -v; rightEl.querySelector('input').value = (-v).toFixed(2); }
+        }
+      });
+      rightEl = numInput({ value: cam.right, step: 10, decimals: 2,
+        onChange: (v) => {
+          cam.right = v; cam.updateProjectionMatrix();
+          if (lrState.linked && leftEl) { cam.left = -v; leftEl.querySelector('input').value = (-v).toFixed(2); }
+        }
+      });
+      topEl = numInput({ value: cam.top, step: 10, decimals: 2,
+        onChange: (v) => {
+          cam.top = v; cam.updateProjectionMatrix();
+          if (tbState.linked && bottomEl) { cam.bottom = -v; bottomEl.querySelector('input').value = (-v).toFixed(2); }
+        }
+      });
+      bottomEl = numInput({ value: cam.bottom, step: 10, decimals: 2,
+        onChange: (v) => {
+          cam.bottom = v; cam.updateProjectionMatrix();
+          if (tbState.linked && topEl) { cam.top = -v; topEl.querySelector('input').value = (-v).toFixed(2); }
+        }
+      });
+
+      cBody.appendChild(mkLinkRow(lrState));
+      cBody.appendChild(row('Left',   leftEl));
+      cBody.appendChild(row('Right',  rightEl));
+      cBody.appendChild(mkLinkRow(tbState));
+      cBody.appendChild(row('Top',    topEl));
+      cBody.appendChild(row('Bottom', bottomEl));
     }
+
+    this._el.appendChild(cSec);
+
+    // ── Lens section (both camera types) ──────────────────────────────────
+    // For perspective: focal/FOV directly control cam.fov + projection matrix.
+    // For orthographic: values are stored as cam.userData._prevPerspFov /
+    //   focalLengthMm so they are restored when switching back to perspective.
+    const { el: lSec, body: lBody } = section('Lens');
+
+    const savedSensor = cam.userData.sensorKey ?? 'full-frame';
+    const initFov = isPerspective ? cam.fov : (cam.userData._prevPerspFov ?? 90);
+    const initSH  = SENSORS[savedSensor]?.h ?? 24.0;
+    const initFL  = cam.userData.focalLengthMm ?? fovToFocal(initFov, initSH);
+
+    const sensorSel = select({
+      options: Object.entries(SENSORS).map(([k, v]) => [k, v.label]),
+      value: savedSensor,
+      onChange: (k) => {
+        cam.userData.sensorKey = k;
+        const sH = SENSORS[k]?.h ?? 24.0;
+        const curFov = isPerspective ? cam.fov : (cam.userData._prevPerspFov ?? 90);
+        if (_lensFlInp) _lensFlInp.querySelector('input').value = fovToFocal(curFov, sH).toFixed(2);
+      },
+    });
+    _lensSensorSel = sensorSel;
+    lBody.appendChild(row('Sensor', sensorSel));
+
+    // Focal length — primary control, drives FOV
+    const flInp = numInput({ value: initFL, step: 1, min: 1, max: 2000, decimals: 2,
+      onChange: (mm) => {
+        cam.userData.focalLengthMm = mm;
+        const sH = SENSORS[_lensSensorSel?.value ?? savedSensor]?.h ?? 24.0;
+        const newFov = Math.min(179, Math.max(1, focalToFov(mm, sH)));
+        if (isPerspective) {
+          cam.fov = newFov;
+          cam.updateProjectionMatrix();
+          if (_cameraFovInp) _cameraFovInp.querySelector('input').value = newFov.toFixed(2);
+        } else {
+          cam.userData._prevPerspFov = newFov;
+        }
+        if (_lensFovInp) _lensFovInp.querySelector('input').value = newFov.toFixed(2);
+      },
+    });
+    _lensFlInp = flInp;
+    lBody.appendChild(row('Focal (mm)', flInp));
+
+    // FOV in the Lens section (syncs with Camera section FOV for perspective)
+    const lensFovInp = numInput({ value: initFov, step: 1, min: 1, max: 179, decimals: 2,
+      onChange: (v) => {
+        const clamp = Math.min(179, Math.max(1, v));
+        if (isPerspective) {
+          cam.fov = clamp;
+          cam.updateProjectionMatrix();
+          if (_cameraFovInp) _cameraFovInp.querySelector('input').value = clamp.toFixed(2);
+        } else {
+          cam.userData._prevPerspFov = clamp;
+        }
+        if (_lensFlInp && _lensSensorSel) {
+          const sH = SENSORS[_lensSensorSel.value]?.h ?? 24.0;
+          _lensFlInp.querySelector('input').value = fovToFocal(clamp, sH).toFixed(2);
+        }
+      },
+    });
+    _lensFovInp = lensFovInp;
+    lBody.appendChild(row('FOV (°)', lensFovInp));
+
+    // Lens preset buttons
+    const presetsWrap = document.createElement('div');
+    presetsWrap.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;padding:2px 0;';
+    LENS_PRESETS.forEach(mm => {
+      const btn = document.createElement('button');
+      btn.textContent = `${mm}`;
+      btn.title       = `${mm} mm`;
+      btn.style.cssText = 'flex:1;min-width:28px;padding:2px 3px;font-size:10px;' +
+        'background:#2a2a2a;color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;';
+      btn.addEventListener('mouseover', () => btn.style.background = '#3a3a3a');
+      btn.addEventListener('mouseout',  () => btn.style.background = '#2a2a2a');
+      btn.addEventListener('click', () => {
+        cam.userData.focalLengthMm = mm;
+        if (_lensFlInp) _lensFlInp.querySelector('input').value = mm.toFixed(2);
+        const sH = SENSORS[_lensSensorSel?.value ?? savedSensor]?.h ?? 24.0;
+        const newFov = Math.min(179, Math.max(1, focalToFov(mm, sH)));
+        if (isPerspective) {
+          cam.fov = newFov;
+          cam.updateProjectionMatrix();
+          if (_cameraFovInp) _cameraFovInp.querySelector('input').value = newFov.toFixed(2);
+        } else {
+          cam.userData._prevPerspFov = newFov;
+        }
+        if (_lensFovInp) _lensFovInp.querySelector('input').value = newFov.toFixed(2);
+      });
+      presetsWrap.appendChild(btn);
+    });
+    const presetsLabel = document.createElement('div');
+    presetsLabel.style.cssText = 'font-size:10px;color:#888;padding:2px 0 1px 0;';
+    presetsLabel.textContent = 'mm Presets';
+    lBody.appendChild(presetsLabel);
+    lBody.appendChild(presetsWrap);
+
+    if (isPerspective) this._el.appendChild(lSec);
+
+    // ── Zoom / Sprint / ADS section (perspective only) ────────────────────
+    const { el: zSec, body: zBody } = section('Zoom Presets');
+
+    const zNote = document.createElement('div');
+    zNote.style.cssText = 'font-size:10px;color:#777;padding:2px 4px 4px;line-height:1.4;';
+    zNote.textContent = 'Store FOV targets for runtime Blueprint/code use. Click Apply to preview.';
+    zBody.appendChild(zNote);
+
+    const baseFovInp = numInput({
+      value: cam.userData.baseFov ?? initFov, step: 1, min: 1, max: 179, decimals: 1,
+      onChange: (v) => { cam.userData.baseFov = v; }
+    });
+    zBody.appendChild(row('Base FOV (°)', baseFovInp));
+
+    const sprintFovInp = numInput({
+      value: cam.userData.sprintFov ?? 110, step: 1, min: 60, max: 170, decimals: 1,
+      onChange: (v) => { cam.userData.sprintFov = v; }
+    });
+    zBody.appendChild(row('Sprint FOV (°)', sprintFovInp));
+
+    const adsFovInp = numInput({
+      value: cam.userData.adsFov ?? 40, step: 1, min: 5, max: 90, decimals: 1,
+      onChange: (v) => { cam.userData.adsFov = v; }
+    });
+    zBody.appendChild(row('ADS FOV (°)', adsFovInp));
+
+    const applyRow = document.createElement('div');
+    applyRow.style.cssText = 'display:flex;gap:4px;padding:4px 0 2px;';
+    const mkApply = (label, getFov) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.style.cssText = 'flex:1;padding:3px 4px;font-size:10px;background:#2a2a2a;' +
+        'color:#ccc;border:1px solid #555;border-radius:3px;cursor:pointer;';
+      b.addEventListener('mouseover', () => b.style.background = '#3a3a3a');
+      b.addEventListener('mouseout',  () => b.style.background = '#2a2a2a');
+      b.addEventListener('click', () => {
+        const v = getFov();
+        if (v == null || isNaN(v)) return;
+        const clamp = Math.min(179, Math.max(1, v));
+        if (isPerspective) {
+          cam.fov = clamp;
+          cam.updateProjectionMatrix();
+          if (_cameraFovInp) _cameraFovInp.querySelector('input').value = clamp.toFixed(2);
+        } else {
+          cam.userData._prevPerspFov = clamp;
+        }
+        if (_lensFovInp) _lensFovInp.querySelector('input').value = clamp.toFixed(2);
+        if (_lensFlInp && _lensSensorSel) {
+          const sH = SENSORS[_lensSensorSel.value]?.h ?? 24.0;
+          _lensFlInp.querySelector('input').value = fovToFocal(clamp, sH).toFixed(2);
+        }
+      });
+      return b;
+    };
+    applyRow.appendChild(mkApply('▶ Base',   () => parseFloat(baseFovInp.querySelector('input').value)));
+    applyRow.appendChild(mkApply('▶ Sprint', () => parseFloat(sprintFovInp.querySelector('input').value)));
+    applyRow.appendChild(mkApply('▶ ADS',    () => parseFloat(adsFovInp.querySelector('input').value)));
+    zBody.appendChild(applyRow);
+
+    if (isPerspective) this._el.appendChild(zSec);
   }
 
   _syncTransform() {
@@ -289,15 +380,20 @@ export class CameraProperties {
     window.removeEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
   }
 
-  /** Sync Camera Type dropdown when the editor viewport camera is swapped externally. */
+  /** Sync Camera Type dropdown when the editor viewport camera is swapped externally.
+   *  If the type actually changed, also swap the scene camera so the panel fully rebuilds. */
   _onEditorCamChanged(event) {
     if (!this._typeSel) return;
-    const cam = event.detail?.camera;
-    if (!cam) return;
-    const newVal = cam.isOrthographicCamera ? 'orthographic' : 'perspective';
+    const vpCam = event.detail?.camera;
+    if (!vpCam) return;
+    const newVal = vpCam.isOrthographicCamera ? 'orthographic' : 'perspective';
     if (this._typeSel.value !== newVal) {
-      // Programmatic update — does NOT fire the 'change' event, so no re-dispatch
       this._typeSel.value = newVal;
+      // Swap the scene camera type so the full properties panel rebuilds with
+      // the correct controls. ObjectFactory handles the actual THREE object swap.
+      window.dispatchEvent(new CustomEvent('cyco-camera-type-change', {
+        detail: { camera: this.object, type: newVal }
+      }));
     }
   }
 }

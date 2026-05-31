@@ -43,6 +43,7 @@ export class TransformGizmo {
 
     this._onVpReady          = this._onVpReady.bind(this);
     this._onRendererChanged  = this._onRendererChanged.bind(this);
+    this._onEditorCamChanged = this._onEditorCamChanged.bind(this);
     this._onSelectNode       = this._onSelectNode.bind(this);
     this._onDeselectAll      = this._onDeselectAll.bind(this);
     this._onTool             = this._onTool.bind(this);
@@ -50,10 +51,11 @@ export class TransformGizmo {
     this._onWorld            = this._onWorld.bind(this);
     this._onGizmoSize        = this._onGizmoSize.bind(this);
 
-    window.addEventListener('cyco-vp-ready',          this._onVpReady);
-    window.addEventListener('cyco-renderer-changed',  this._onRendererChanged);
-    window.addEventListener('cyco-select-node',       this._onSelectNode);
-    window.addEventListener('cyco-deselect-all',      this._onDeselectAll);
+    window.addEventListener('cyco-vp-ready',              this._onVpReady);
+    window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
+    window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+    window.addEventListener('cyco-select-node',           this._onSelectNode);
+    window.addEventListener('cyco-deselect-all',          this._onDeselectAll);
     window.addEventListener('cyco-hierarchy-remove',  (e) => {
       const { objectId } = e.detail ?? {};
       if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
@@ -133,6 +135,12 @@ export class TransformGizmo {
     this._build(event.detail?.renderer ?? this.engine.rendererManager?.renderer);
   }
 
+  /** Rebuild TransformControls with the new editor camera so raycasting stays correct. */
+  _onEditorCamChanged() {
+    const renderer = this.engine.rendererManager?.renderer;
+    if (renderer) this._build(renderer);
+  }
+
   _onSelectNode(event) {
     const { object } = event.detail;
     if (!this.controls) return;
@@ -202,10 +210,11 @@ export class TransformGizmo {
   // ─── Disposal ─────────────────────────────────────────────────────────────
 
   dispose() {
-    window.removeEventListener('cyco-vp-ready',          this._onVpReady);
-    window.removeEventListener('cyco-renderer-changed',  this._onRendererChanged);
-    window.removeEventListener('cyco-select-node',       this._onSelectNode);
-    window.removeEventListener('cyco-deselect-all',      this._onDeselectAll);
+    window.removeEventListener('cyco-vp-ready',              this._onVpReady);
+    window.removeEventListener('cyco-renderer-changed',      this._onRendererChanged);
+    window.removeEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+    window.removeEventListener('cyco-select-node',           this._onSelectNode);
+    window.removeEventListener('cyco-deselect-all',          this._onDeselectAll);
     window.removeEventListener('cyco-vp-tool',           this._onTool);
     window.removeEventListener('cyco-rvp-snap',          this._onSnap);
     window.removeEventListener('cyco-rvp-world',         this._onWorld);
