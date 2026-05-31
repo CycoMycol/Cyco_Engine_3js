@@ -144,21 +144,56 @@ export class CameraProperties {
       const lrState = { linked: true };
       const tbState = { linked: true };
 
-      const mkLinkRow = (state) => {
+      /**
+       * Wrap two rows in a Photoshop-style linked pair:
+       * a vertical line + chain icon overlaid on the left edge, no extra row.
+       */
+      const mkLinkedPair = (label1, el1, label2, el2, state) => {
         const wrap = document.createElement('div');
-        wrap.style.cssText = 'display:flex;justify-content:flex-end;align-items:center;padding:0 4px;height:14px;';
+        wrap.style.cssText = 'position:relative;';
+
+        const r1 = row(label1, el1);
+        const r2 = row(label2, el2);
+        wrap.appendChild(r1);
+        wrap.appendChild(r2);
+
+        // Overlay: sits on the far-left, spanning both rows
+        const overlay = document.createElement('div');
+        overlay.style.cssText =
+          'position:absolute;left:max(56px,28%);top:0;bottom:0;width:10px;' +
+          'display:flex;flex-direction:column;align-items:center;pointer-events:none;';
+
+        const lineTop = document.createElement('div');
+        lineTop.style.cssText = 'flex:1;width:1px;';
+
         const btn = document.createElement('button');
+        btn.style.cssText =
+          'pointer-events:all;background:var(--ce-bg-panel,#1e1e1e);' +
+          'border-radius:3px;cursor:pointer;font-size:8px;padding:1px 2px;' +
+          'line-height:1;z-index:1;flex-shrink:0;border:1px solid;';
+        btn.innerHTML = '&#x1F517;'; // 🔗
+
+        const lineBot = document.createElement('div');
+        lineBot.style.cssText = 'flex:1;width:1px;';
+
+        overlay.appendChild(lineTop);
+        overlay.appendChild(btn);
+        overlay.appendChild(lineBot);
+        wrap.appendChild(overlay);
+
         const refresh = () => {
-          btn.textContent = '🔗';
-          btn.style.cssText =
-            `background:none;border:1px solid ${state.linked ? 'var(--ce-accent-orange,#e07228)' : '#444'};` +
-            `border-radius:3px;cursor:pointer;font-size:9px;padding:0 4px;height:12px;` +
-            `line-height:1;color:${state.linked ? 'var(--ce-accent-orange,#e07228)' : '#555'};`;
+          const accent = 'var(--ce-accent-orange,#e07228)';
+          const dim    = '#444';
+          const col    = state.linked ? accent : dim;
+          btn.style.borderColor = col;
+          btn.style.color       = col;
+          lineTop.style.background = col;
+          lineBot.style.background = col;
           btn.title = state.linked ? 'Linked — click to unlink' : 'Unlinked — click to link';
         };
         refresh();
         btn.addEventListener('click', () => { state.linked = !state.linked; refresh(); });
-        wrap.appendChild(btn);
+
         return wrap;
       };
 
@@ -189,12 +224,8 @@ export class CameraProperties {
         }
       });
 
-      cBody.appendChild(mkLinkRow(lrState));
-      cBody.appendChild(row('Left',   leftEl));
-      cBody.appendChild(row('Right',  rightEl));
-      cBody.appendChild(mkLinkRow(tbState));
-      cBody.appendChild(row('Top',    topEl));
-      cBody.appendChild(row('Bottom', bottomEl));
+      cBody.appendChild(mkLinkedPair('Left', leftEl, 'Right', rightEl, lrState));
+      cBody.appendChild(mkLinkedPair('Top',  topEl,  'Bottom', bottomEl, tbState));
     }
 
     this._el.appendChild(cSec);

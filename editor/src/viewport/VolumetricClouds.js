@@ -387,6 +387,13 @@ export class VolumetricClouds {
     this._halfResScene      = null;
     this._compositeQuadMesh = null;
     this._impostorPlanes    = null;
+
+    // Absolute cloud slab Y values used by shaders each frame.
+    // For skyMode=true these equal _p.cloudBase/cloudTop (absolute world Y).
+    // For skyMode=false (surround mode) these are cam.position.y + _p.cloudBase/cloudTop
+    // so the slab always sits relative to the camera, not stuck at ground level.
+    this._absCloudBase = this._p.cloudBase;
+    this._absCloudTop  = this._p.cloudTop;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -583,6 +590,33 @@ export class VolumetricClouds {
     // ── Standard box cloud mesh follows camera ───────────────────────────────
     if (this._mesh && !this._halfResRT && !this._impostorPlanes?.length && cam) {
       this._mesh.position.copy(cam.position);
+    }
+
+    // ── Compute absolute cloud slab heights ───────────────────────────────────
+    // skyMode=true  → cloudBase/cloudTop are absolute world Y (high sky layer).
+    // skyMode=false → treat cloudBase/cloudTop as offsets from camera Y so the
+    //                 surround slab always floats around the camera, not the ground.
+    if (cam) {
+      if (this._p.skyMode) {
+        this._absCloudBase = this._p.cloudBase;
+        this._absCloudTop  = this._p.cloudTop;
+      } else {
+        this._absCloudBase = cam.position.y + this._p.cloudBase;
+        this._absCloudTop  = cam.position.y + this._p.cloudTop;
+      }
+      // WebGL: push updated abs values to uniforms so the GLSL shader sees the
+      // camera-relative heights (overrides the static push from _pushUniforms).
+      if (!this._isWebGPU) {
+        if (this._mesh?.material?.uniforms) {
+          this._mesh.material.uniforms.uCloudBase.value = this._absCloudBase;
+          this._mesh.material.uniforms.uCloudTop.value  = this._absCloudTop;
+        }
+        if (this._shadowMesh?.material?.uniforms) {
+          this._shadowMesh.material.uniforms.uCloudBase.value = this._absCloudBase;
+          this._shadowMesh.material.uniforms.uCloudTop.value  = this._absCloudTop;
+        }
+      }
+      // WebGPU: reference('_absCloudBase', 'float', this) reads these per frame.
     }
 
     if (this._shadowMesh && cam) {
@@ -843,8 +877,8 @@ export class VolumetricClouds {
       const rSunColor   = reference('sunColor',            'color', this._p);
       const rSkyHorizon = reference('skyHorizon',          'color', this._p);
       const rSkyZenith  = reference('skyZenith',           'color', this._p);
-      const rCloudBase  = reference('cloudBase',           'float', this._p);
-      const rCloudTop   = reference('cloudTop',            'float', this._p);
+      const rCloudBase  = reference('_absCloudBase',        'float', this);
+      const rCloudTop   = reference('_absCloudTop',         'float', this);
       const rBloomBrt   = reference('bloomBrightness',     'float', this._p);
       const rBloomThr   = reference('cloudBloomThreshold', 'float', this._p);
 
@@ -1353,8 +1387,8 @@ export class VolumetricClouds {
       const rWindAngle  = reference('windAngle',      'float', this._p);
       const rMorphSpeed = reference('morphSpeed',     'float', this._p);
       const rSunDir     = reference('sunDir',         'vec3',  this._p);
-      const rCloudBase  = reference('cloudBase',      'float', this._p);
-      const rCloudTop   = reference('cloudTop',       'float', this._p);
+      const rCloudBase  = reference('_absCloudBase', 'float', this);
+      const rCloudTop   = reference('_absCloudTop',  'float', this);
       const rShadowStr  = reference('shadowStrength', 'float', this._p);
 
       // Fast 3-octave density (shadow pass does not need full 6-octave detail)
