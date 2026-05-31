@@ -872,15 +872,121 @@ export class GradientSky {
   }
 
   /**
-   * Style-aware WebGPU lens flare creation.
-   * Dispatches to the appropriate implementation based on this._p.lensflareStyle.
+   * Phase 5 granular WebGPU lens flare — builds sprites from new granular params.
+   * Replaces old style-dispatch system.
    */
   _createLensflareWebGPU(scene) {
-    // Phase 5: dispatch based on granular anamorphic flag
-    if (this._p.lensflareAnamorphic) {
-      this._createLensflareAnamorphicWebGPU(scene);
-    } else {
-      this._createLensflareSpritesWebGPU(scene, 'classic');
+    this._buildGranularSpritesWebGPU(scene);
+  }
+
+  /**
+   * Build WebGPU sprite-based lens flare using the Phase 5 granular params:
+   * lensflareGlareSize, lensflareHaloScale, lensflareGhostScale, lensflareFlareSize,
+   * lensflareSecondaryGhosts, lensflareAnamorphic, lensflareStarBurst, lensflareStarPoints, etc.
+   */
+  _buildGranularSpritesWebGPU(scene) {
+    const p = this._p;
+
+    // Element list: each entry describes one sprite
+    const ELEMS = [];
+
+    // ── Glare disc at sun position ──────────────────────────────────────────
+    ELEMS.push({
+      texType:     'glare',
+      dist:        0.0,
+      sizeBase:    Math.max(0.05, p.lensflareGlareSize),
+      baseOpacity: 1.0,
+      isStreak:    false,
+    });
+
+    // ── Halo ring ───────────────────────────────────────────────────────────
+    if (p.lensflareHaloScale > 0.01) {
+      ELEMS.push({
+        texType:     'halo',
+        dist:        0.5,
+        sizeBase:    p.lensflareHaloScale * 0.9,
+        baseOpacity: 0.65,
+        isStreak:    false,
+      });
+    }
+
+    // ── Ghost train ─────────────────────────────────────────────────────────
+    if (p.lensflareGhostScale > 0.01) {
+      const flareRange = p.lensflareFlareSize * 2.0;
+      const offsets    = [ 0.30, -0.20,  0.70, -0.50,  1.10 ];
+      const sizeMults  = [ 1.00,  0.70,  0.50,  0.35,  0.20 ];
+      offsets.forEach((off, i) => {
+        ELEMS.push({
+          texType:     'ghost',
+          dist:        off * flareRange,
+          sizeBase:    p.lensflareGhostScale * sizeMults[i],
+          baseOpacity: 0.55,
+          isStreak:    false,
+        });
+      });
+      if (p.lensflareSecondaryGhosts) {
+        [ 0.15, -0.35, 0.55, -0.75 ].forEach((off, i) => {
+          ELEMS.push({
+            texType:     'ghost',
+            dist:        off,
+            sizeBase:    p.lensflareGhostScale * 0.45 * (1.0 - i * 0.08),
+            baseOpacity: 0.35,
+            isStreak:    false,
+          });
+        });
+      }
+    }
+
+    // ── Anamorphic horizontal streak ────────────────────────────────────────
+    if (p.lensflareAnamorphic) {
+      ELEMS.push({
+        texType:     'streak',
+        dist:        0.0,
+        sizeBase:    Math.max(0.05, p.lensflareGlareSize) * 2.5,
+        baseOpacity: 0.75,
+        isStreak:    true,
+      });
+    }
+
+    // ── Star burst diffraction overlay ──────────────────────────────────────
+    if (p.lensflareStarBurst) {
+      ELEMS.push({
+        texType:     'starburst',
+        dist:        0.0,
+        sizeBase:    Math.max(0.05, p.lensflareGlareSize) * 1.8,
+        baseOpacity: 0.55,
+        isStreak:    false,
+      });
+    }
+
+    // ── Build sprites ────────────────────────────────────────────────────────
+    this._lensflareSprites = [];
+    for (const el of ELEMS) {
+      let tex;
+      if      (el.texType === 'glare')     tex = this._makeGlareTex(128, p.lensflareStarPoints);
+      else if (el.texType === 'halo')      tex = this._makeHaloTex(128);
+      else if (el.texType === 'ghost')     tex = this._makeGhostTex(64);
+      else if (el.texType === 'streak')    tex = this._makeStreakTex(256, 32);
+      else if (el.texType === 'starburst') tex = this._makeStarBurstTex(128, p.lensflareStarPoints);
+
+      const mat = new THREE.SpriteMaterial({
+        map:        tex,
+        transparent: true,
+        depthTest:  false,
+        depthWrite: false,
+        blending:   THREE.AdditiveBlending,
+      });
+      const sprite            = new THREE.Sprite(mat);
+      sprite.renderOrder      = 999;
+      sprite.frustumCulled    = false;
+      sprite.userData._dist        = el.dist;
+      sprite.userData._sizeBase    = el.sizeBase;
+      sprite.userData._baseOpacity = el.baseOpacity;
+      sprite.userData._isStreak    = el.isStreak;
+      sprite.userData._isHelper    = true;
+      sprite.visible = false;
+      this._lensflareSprites.push(sprite);
+      scene.add(sprite);
     }
   }
 
@@ -1075,14 +1181,11 @@ export class GradientSky {
     const DIST = Math.max(camera.near * 80, 0.5);
     const worldPerPx = 2 * DIST / (pe[5] * vpH);
 
-    // Cinematic intensity multiplier
-    const intensity = (p.lensflareStyle === 'cinematic') ? (p.lensflareIntensity ?? 1.0) : 1.0;
-
     this._lensflareSprites.forEach(sprite => {
-      const d          = sprite.userData._dist;
-      const sizeScaleX = sprite.userData._sizeScaleX ?? sprite.userData._sizeScale;
-      const sizeScaleY = sprite.userData._sizeScaleY ?? sprite.userData._sizeScale;
-      const sunTint    = sprite.userData._sunTint;
+      const d          = sprite.userData._dist        ?? 0;
+      const sizeBase   = sprite.userData._sizeBase    ?? p.lensflareGlareSize ?? 0.4;
+      const baseOpacity = sprite.userData._baseOpacity ?? 1.0;
+      const isStreak   = sprite.userData._isStreak    ?? false;
 
       const ndcX = sunNDC.x * (1 - d);
       const ndcY = sunNDC.y * (1 - d);
@@ -1095,23 +1198,16 @@ export class GradientSky {
 
       sprite.position.copy(worldPos);
 
-      const ringAbsPx = sprite.userData._ringAbsPx;
-      if (ringAbsPx !== undefined) {
-        // Ring ghost: independent size from sun glow, independent opacity
-        const ringScale = (p.lensflareRingSize ?? 40) / 40;
-        const worldSize = ringAbsPx * ringScale * worldPerPx;
-        sprite.scale.set(worldSize, worldSize, 1);
-        sprite.material.color.setScalar(1);
-        sprite.material.opacity = (p.lensflareRingOpacity ?? 0.7) * vis;
+      // Scale: 200 pixels is the reference size for sizeBase=1.0
+      const worldSize = sizeBase * 200 * worldPerPx;
+      if (isStreak) {
+        sprite.scale.set(worldSize * 5.0, worldSize * 0.05, 1);
       } else {
-        // Sun glow/burst: size from lensflareSize, HDR color intensity for bloom
-        const worldSizeX = p.lensflareSize * sizeScaleX * intensity * worldPerPx;
-        const worldSizeY = p.lensflareSize * sizeScaleY * intensity * worldPerPx;
-        sprite.scale.set(worldSizeX, worldSizeY, 1);
-        // Color is baked into the texture; set material to white so texture color shows accurately.
-        if (sunTint) sprite.material.color.setScalar(1.0);
-        sprite.material.opacity = (p.lensflareOpacity ?? 0.7) * vis;
+        sprite.scale.set(worldSize, worldSize, 1);
       }
+
+      sprite.material.color.setScalar(1);
+      sprite.material.opacity = (p.lensflareOpacity ?? 0.7) * vis * baseOpacity;
       sprite.visible = true;
     });
   }

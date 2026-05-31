@@ -160,8 +160,8 @@ export class ViewportEngine {
     this.cloudSystem2 = new VolumetricClouds(this);
     this.cloudSystem2._p.skyMode              = false;
     this.cloudSystem2._p.cameraRelativeHeight = true;  // cloudBase/cloudTop are camera-Y offsets
-    this.cloudSystem2._p.cloudBase      = 5;
-    this.cloudSystem2._p.cloudTop       = 85;
+    this.cloudSystem2._p.cloudBase      = 80;          // 80m above camera (was 5 — too near ground)
+    this.cloudSystem2._p.cloudTop       = 350;         // top at 350m above camera
     this.cloudSystem2._p.coverage       = 0.3;
     this.cloudSystem2._p.density        = 0.8;
     this.cloudSystem2._p.windSpeed      = 0.8;
@@ -247,9 +247,11 @@ export class ViewportEngine {
       showMoon = true, moonColor, moonGlowStrength,
       exposure, saturation, contrast,
       turbidity, rayleigh, mieDirectionalG, mieCoefficient,
-      lensflareEnabled, lensflareSize, lensflareOpacity,
-      lensflareStyle, lensflareColor, lensflareColorIntensity, lensflareIntensity, lensflareGhostCount, lensflareStreakLength, lensflareBrightness,
-      lensflareRingThickness, lensflareRingFill, lensflareRingSize, lensflareRingOpacity,
+      // Granular lens flare params (Phase 5)
+      lensflareEnabled, lensflareOpacity,
+      lensflareGlareSize, lensflareStarPoints, lensflareFlareSize, lensflareFlareSpeed,
+      lensflareFlareShape, lensflareHaloScale, lensflareColorGain, lensflareGhostScale,
+      lensflareSecondaryGhosts, lensflareAdditionalStreaks, lensflareStarBurst, lensflareAnamorphic,
     } = detail ?? {};
     console.log(
       `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  skyType=${skyType}  elevation=${elevation}°  azimuth=${azimuth}°` +
@@ -286,6 +288,10 @@ export class ViewportEngine {
       if (rayleigh        !== undefined) physParams.rayleigh        = rayleigh;
       if (mieDirectionalG !== undefined) physParams.mieDirectionalG = mieDirectionalG;
       if (mieCoefficient  !== undefined) physParams.mieCoefficient  = mieCoefficient;
+      // Lens flare params apply to physical sky's sun flare too
+      if (lensflareEnabled    !== undefined) physParams.lensflareEnabled    = lensflareEnabled;
+      if (lensflareOpacity    !== undefined) physParams.lensflareOpacity    = lensflareOpacity;
+      if (lensflareGlareSize  !== undefined) physParams.lensflareSize       = lensflareGlareSize;
 
       this.physicalSky.setEnabled(true);
       this.physicalSky.setParams(physParams);
@@ -302,20 +308,20 @@ export class ViewportEngine {
       if (exposure !== undefined)   params.exposure         = exposure;
       if (saturation !== undefined) params.saturation       = saturation;
       if (contrast !== undefined)   params.contrast         = contrast;
-      if (lensflareEnabled      !== undefined) params.lensflareEnabled      = lensflareEnabled;
-      if (lensflareSize         !== undefined) params.lensflareSize         = lensflareSize;
-      if (lensflareOpacity      !== undefined) params.lensflareOpacity      = lensflareOpacity;
-      if (lensflareStyle        !== undefined) params.lensflareStyle        = lensflareStyle;
-      if (lensflareIntensity    !== undefined) params.lensflareIntensity    = lensflareIntensity;
-      if (lensflareGhostCount   !== undefined) params.lensflareGhostCount   = lensflareGhostCount;
-      if (lensflareStreakLength  !== undefined) params.lensflareStreakLength  = lensflareStreakLength;
-      if (lensflareBrightness   !== undefined) params.lensflareBrightness   = lensflareBrightness;
-      if (lensflareColor) params.lensflareColor = lensflareColor;
-      if (lensflareColorIntensity !== undefined) params.lensflareColorIntensity = lensflareColorIntensity;
-      if (lensflareRingThickness  !== undefined) params.lensflareRingThickness  = lensflareRingThickness;
-      if (lensflareRingFill       !== undefined) params.lensflareRingFill       = lensflareRingFill;
-      if (lensflareRingSize       !== undefined) params.lensflareRingSize       = lensflareRingSize;
-      if (lensflareRingOpacity    !== undefined) params.lensflareRingOpacity    = lensflareRingOpacity;
+      if (lensflareEnabled          !== undefined) params.lensflareEnabled          = lensflareEnabled;
+      if (lensflareOpacity          !== undefined) params.lensflareOpacity          = lensflareOpacity;
+      if (lensflareGlareSize        !== undefined) params.lensflareGlareSize        = lensflareGlareSize;
+      if (lensflareStarPoints       !== undefined) params.lensflareStarPoints       = lensflareStarPoints;
+      if (lensflareFlareSize        !== undefined) params.lensflareFlareSize        = lensflareFlareSize;
+      if (lensflareFlareSpeed       !== undefined) params.lensflareFlareSpeed       = lensflareFlareSpeed;
+      if (lensflareFlareShape       !== undefined) params.lensflareFlareShape       = lensflareFlareShape;
+      if (lensflareHaloScale        !== undefined) params.lensflareHaloScale        = lensflareHaloScale;
+      if (lensflareColorGain        !== undefined) params.lensflareColorGain        = lensflareColorGain;
+      if (lensflareGhostScale       !== undefined) params.lensflareGhostScale       = lensflareGhostScale;
+      if (lensflareSecondaryGhosts  !== undefined) params.lensflareSecondaryGhosts  = lensflareSecondaryGhosts;
+      if (lensflareAdditionalStreaks !== undefined) params.lensflareAdditionalStreaks = lensflareAdditionalStreaks;
+      if (lensflareStarBurst        !== undefined) params.lensflareStarBurst        = lensflareStarBurst;
+      if (lensflareAnamorphic       !== undefined) params.lensflareAnamorphic       = lensflareAnamorphic;
 
       this.gradientSky.setEnabled(true);
       this.gradientSky.setParams(params);
@@ -474,6 +480,14 @@ export class ViewportEngine {
       this.scene.background = this._bgGradTex;
     } else if (type === 'hdri') {
       this.scene.background = this._lastEnvMap ?? new THREE.Color(0x1a1a1a);
+      if (detail.hdriRotation !== undefined) {
+        const rad = THREE.MathUtils.degToRad(detail.hdriRotation);
+        this.scene.backgroundRotation.y = rad;
+        this.scene.environmentRotation.y = rad;
+      }
+      if (detail.backgroundBlur      !== undefined) this.scene.backgroundBlurriness  = detail.backgroundBlur;
+      if (detail.backgroundIntensity !== undefined) this.scene.backgroundIntensity   = detail.backgroundIntensity;
+      if (detail.envIntensity        !== undefined) this.scene.environmentIntensity  = detail.envIntensity;
     } else if (type === 'sky') {
       this.scene.background = null;
     }
@@ -1455,6 +1469,27 @@ export class ViewportEngine {
     // Physical sky follows camera
     this.physicalSky?.update();
 
+    // Update god rays sun screen UV for WebGPU TSL pipeline (runs every frame)
+    {
+      const pp = window.__cyco?.postPipeline;
+      if (pp && this.camera) {
+        const sky    = this._activeSkyType === 'physical' ? this.physicalSky : this.gradientSky;
+        const sunDir = sky?._p?.sunDir;
+        if (sunDir) {
+          if (!this._sunProjHelper) this._sunProjHelper = new THREE.Vector3();
+          this._sunProjHelper
+            .copy(sunDir).normalize()
+            .multiplyScalar(this.camera.far * 0.8)
+            .add(this.camera.position)
+            .project(this.camera);
+          pp.updateGodRaysSunPos(
+            (this._sunProjHelper.x + 1) * 0.5,
+            (this._sunProjHelper.y + 1) * 0.5,
+          );
+        }
+      }
+    }
+
     // Contact shadows — renders depth pass + blur before main frame
     if (_D && this.contactShadows) {
       const rt = renderer.getRenderTarget();
@@ -1753,11 +1788,19 @@ export class ViewportEngine {
     this._buildViewHelper();
 
     // Rebuild sky/flare with new renderer (TSL mesh vs ShaderMaterial)
-    if (this.skyEnabled && this.gradientSky) {
+    // Physical sky uses THREE.Sky (ShaderMaterial) — WebGL only.
+    // If we just switched to WebGPU while physical is active, fall back to gradient.
+    if (this.skyEnabled && this._activeSkyType === 'physical' && type === 'webgpu') {
+      this.physicalSky?.setEnabled(false);
+      this._activeSkyType = 'gradient';
+      if (this.gradientSky) {
+        this.gradientSky.setEnabled(false);
+        this.gradientSky.setEnabled(true);
+      }
+    } else if (this.skyEnabled && this.gradientSky && this._activeSkyType !== 'physical') {
       this.gradientSky.setEnabled(false);
       this.gradientSky.setEnabled(true);
-    }
-    if (this.skyEnabled && this._activeSkyType === 'physical' && this.physicalSky) {
+    } else if (this.skyEnabled && this._activeSkyType === 'physical' && this.physicalSky) {
       this.physicalSky.setEnabled(false);
       this.physicalSky.setEnabled(true);
     }

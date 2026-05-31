@@ -265,7 +265,7 @@ export class PostProcessingPipeline {
     // ── God Rays ──────────────────────────────────────────────────────────────
     this.godRays         = new GodRays(viewportEngine);
     this._godRaysEnabled = false;
-    this._godRaysParams  = { density: 0.96, weight: 0.40, decay: 0.90, exposure: 0.65, samples: 60 };
+    this._godRaysParams  = { density: 0.96, weight: 0.60, decay: 0.92, exposure: 0.90, samples: 60 };
 
     /**
      * Live-update param store for TSL reference nodes (WebGPU post FX).
@@ -487,6 +487,7 @@ export class PostProcessingPipeline {
         pass, mrt, normalView, output,
         vec2, vec3, vec4, float,
         Fn, uv, smoothstep, reference,
+        clamp, max, mix, convertToTexture,
       } = TSL;
       const [{ ao }, { bloom: bloomFn }, { chromaticAberration }, { film }] = await Promise.all([
         import('three/addons/tsl/display/GTAONode.js'),
@@ -548,14 +549,14 @@ export class PostProcessingPipeline {
         sceneColorNode = scenePassColor;
         outputNode = outputMode === 4 ? aoOnlyNode : compositeNode;
       } else {
-        // AO disabled — render scene directly, no post-processing.
-        // Use scenePass directly (not swizzled) so RenderPipeline can traverse
-        // the PassNode and render the scene.  Swizzling (e.g. scenePass.rgb)
-        // breaks graph traversal and produces a black viewport.
-        const scenePass = pass(scene, camera);
+        // AO disabled — render scene directly.
+        // Keep PassNode as outputNode root so RenderPipeline traverses/renders the scene.
+        // Separately expose the TextureNode so god rays can sample at arbitrary UVs.
+        const scenePass    = pass(scene, camera);
+        const sceneColorTex = scenePass.getTextureNode();
         this._tslNodes  = { sceneOnly: scenePass };
-        sceneColorNode  = scenePass;
-        outputNode      = scenePass;
+        sceneColorNode  = sceneColorTex;  // TextureNode — supports .uv() sampling
+        outputNode      = scenePass;      // PassNode — required as graph root
       }
 
       // ── Bloom ──────────────────────────────────────────────────────────────
@@ -566,6 +567,66 @@ export class PostProcessingPipeline {
         const initStrength = (bp.enabled !== false) ? (bp.strength ?? 0.8) : 0;
         this._tslBloomNode = bloomFn(sceneColorNode, initStrength, bp.radius ?? 0.4, bp.threshold ?? 0.85);
         outputNode = outputNode.add(this._tslBloomNode);
+      }
+
+      // ── God Rays (WebGPU TSL screen-space radial blur) ───────────────────────────
+      // Additive: accumulates scatter from bright pixels along rays toward sun.
+      // exposure=0 when disabled — no pipeline rebuild needed on toggle.
+      {
+        if (!this._godRaysGPUParams) {
+          this._godRaysGPUParams = {
+            sunX:     0.5,
+            sunY:     0.5,
+            density:  this._godRaysParams.density  ?? 0.96,
+            weight:   this._godRaysParams.weight   ?? 0.60,
+            decay:    this._godRaysParams.decay    ?? 0.92,
+            exposure: this._godRaysEnabled ? (this._godRaysParams.exposure ?? 0.90) : 0.0,
+          };
+        } else {
+          // Preserve sun pos across rebuilds; sync enabled state
+          this._godRaysGPUParams.exposure = this._godRaysEnabled
+            ? (this._godRaysParams.exposure ?? 0.90) : 0.0;
+        }
+        const grp        = this._godRaysGPUParams;
+        const grSunX     = reference('sunX',     'float', grp);
+        const grSunY     = reference('sunY',     'float', grp);
+        const grDensity  = reference('density',  'float', grp);
+        const grWeight   = reference('weight',   'float', grp);
+        const grExposure = reference('exposure', 'float', grp);
+
+        // convertToTexture captures the full pipeline output (scene + bloom) into
+        // a render target texture so the god rays Fn can sample at arbitrary UVs.
+        // This is the same pattern as chromaticAberration(outputNode, ...) which
+        // calls convertToTexture(node) internally — we just do it explicitly.
+        const godRaysTex = convertToTexture(outputNode);
+
+        // Radial blur god rays — 16 samples marching from pixel toward sun.
+        // godRaysTex is a CLOSURE (not a Fn arg), exactly like ChromaticAberrationNode
+        // uses textureNode as a closure — that's the only pattern where .sample(UV) works.
+        const GodRaysFn = Fn(([sunX, sunY, density, weight, exposure]) => {
+          const texUV = uv();
+          const sunUV = vec2(sunX, sunY);
+          const N     = 16;
+          const DECAY = 0.90;
+          let   grAccum = float(0.0);
+
+          for (let i = 1; i <= N; i++) {
+            // Interpolate from current pixel toward sun: t=1/N…1, scaled by density
+            const t   = float(i / N);
+            const sUV = texUV.add(sunUV.sub(texUV).mul(t.mul(density)));
+            const cUV = clamp(sUV, vec2(0.0, 0.0), vec2(1.0, 1.0));
+            const col = godRaysTex.sample(cUV);   // closure w/ convertToTexture
+            const lum = col.r.mul(0.2126).add(col.g.mul(0.7152)).add(col.b.mul(0.0722));
+            grAccum   = grAccum.add(max(float(0.0), lum.sub(float(0.5))).mul(float(Math.pow(DECAY, i))));
+          }
+
+          return vec4(
+            vec3(1.0, 0.92, 0.75).mul(grAccum.mul(weight).mul(exposure).div(float(N))),
+            float(0.0),
+          );
+        });
+
+        outputNode = outputNode.add(GodRaysFn(grSunX, grSunY, grDensity, grWeight, grExposure));
       }
 
       // ── Post FX: Chromatic Aberration, Film Grain, Vignette (WebGPU) ──────────
@@ -750,12 +811,32 @@ export class PostProcessingPipeline {
 
   setGodRaysEnabled(v) {
     this._godRaysEnabled = !!v;
-    this.godRays?.setEnabled(v);
+    this.godRays?.setEnabled(v);  // WebGL path
+    // WebGPU path: toggle via exposure reference (no rebuild needed)
+    if (this._godRaysGPUParams) {
+      this._godRaysGPUParams.exposure = v ? (this._godRaysParams.exposure ?? 0.90) : 0.0;
+    }
   }
 
   updateGodRaysParams(opts) {
     Object.assign(this._godRaysParams, opts);
-    this.godRays?.setParams(opts);
+    this.godRays?.setParams(opts);  // WebGL path
+    // WebGPU path: sync live-update reference objects
+    if (this._godRaysGPUParams) {
+      if (opts.density  !== undefined) this._godRaysGPUParams.density  = opts.density;
+      if (opts.weight   !== undefined) this._godRaysGPUParams.weight   = opts.weight;
+      if (opts.decay    !== undefined) this._godRaysGPUParams.decay    = opts.decay;
+      if (opts.exposure !== undefined && this._godRaysEnabled)
+        this._godRaysGPUParams.exposure = opts.exposure;
+    }
+  }
+
+  /** Update the sun screen-space UV for WebGPU god rays (called every frame). */
+  updateGodRaysSunPos(x, y) {
+    if (this._godRaysGPUParams) {
+      this._godRaysGPUParams.sunX = x;
+      this._godRaysGPUParams.sunY = y;
+    }
   }
 
   /**

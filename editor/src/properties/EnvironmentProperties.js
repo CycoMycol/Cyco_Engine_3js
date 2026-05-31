@@ -114,20 +114,36 @@ export class EnvironmentProperties {
     gradWrap.appendChild(this._bgGradEditor.element);
     body.appendChild(gradWrap);
 
-    // HDRI show-as-background toggle
+    // HDRI controls container
+    const hdriBody = document.createElement('div');
+
     const hdriBgCb = checkbox({
       checked: !!(ve?.scene?.background instanceof THREE.Texture),
       onChange: (v) => {
         window.dispatchEvent(new CustomEvent('cyco-env-background-toggle', { detail: { enabled: v } }));
       },
     });
-    const hdriRow = row('Show HDRI as BG', hdriBgCb);
-    body.appendChild(hdriRow);
+    hdriBody.appendChild(row('Show HDRI as BG', hdriBgCb));
+
+    const hdriRotSlider  = slider({ value: 0,   min: 0,   max: 360, step: 1,    onChange: () => this._dispatchBackground('hdri') });
+    const hdriBlurSlider = slider({ value: 0,   min: 0,   max: 1,   step: 0.01, onChange: () => this._dispatchBackground('hdri') });
+    const hdriBgIntSlider  = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
+    const hdriEnvIntSlider = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
+    hdriBody.appendChild(row('Rotation',     hdriRotSlider.el));
+    hdriBody.appendChild(row('BG Blur',      hdriBlurSlider.el));
+    hdriBody.appendChild(row('BG Intensity', hdriBgIntSlider.el));
+    hdriBody.appendChild(row('Env Intensity', hdriEnvIntSlider.el));
+    body.appendChild(hdriBody);
+
+    this._hdriRotSlider    = hdriRotSlider;
+    this._hdriBlurSlider   = hdriBlurSlider;
+    this._hdriBgIntSlider  = hdriBgIntSlider;
+    this._hdriEnvIntSlider = hdriEnvIntSlider;
 
     const _showRows = (type) => {
       solidRow.style.display = type === 'solid'    ? '' : 'none';
       gradWrap.style.display = type === 'gradient' ? '' : 'none';
-      hdriRow.style.display  = type === 'hdri'     ? '' : 'none';
+      hdriBody.style.display = type === 'hdri'     ? '' : 'none';
     };
     _showRows(initType);
   }
@@ -135,7 +151,16 @@ export class EnvironmentProperties {
   _dispatchBackground(type) {
     const { colorStops, opacityStops } = this._bgGradEditor?.data ?? { colorStops: [], opacityStops: [] };
     window.dispatchEvent(new CustomEvent('cyco-background-change', {
-      detail: { type, color: this._solidColor, colorStops, opacityStops },
+      detail: {
+        type,
+        color: this._solidColor,
+        colorStops,
+        opacityStops,
+        hdriRotation:        parseFloat(this._hdriRotSlider?.input.value    ?? 0),
+        backgroundBlur:      parseFloat(this._hdriBlurSlider?.input.value   ?? 0),
+        backgroundIntensity: parseFloat(this._hdriBgIntSlider?.input.value  ?? 1),
+        envIntensity:        parseFloat(this._hdriEnvIntSlider?.input.value ?? 1),
+      },
     }));
   }
 
@@ -704,13 +729,13 @@ export class EnvironmentProperties {
     body.appendChild(row('Wind Direction', windDirSlider2.el));
 
     const heightSlider2 = slider({
-      value: cs2()?._p?.cloudBase ?? 5, min: 0, max: 1000, step: 1,
+      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 1000, step: 1,
       onChange: (v) => cs2()?.setParam('cloudHeight', v),
     });
     body.appendChild(row('Cloud Height', heightSlider2.el));
 
     const thicknessSlider2 = slider({
-      value: ((cs2()?._p?.cloudTop ?? 120) - (cs2()?._p?.cloudBase ?? 40)), min: 10, max: 500, step: 1,
+      value: ((cs2()?._p?.cloudTop ?? 350) - (cs2()?._p?.cloudBase ?? 80)), min: 10, max: 500, step: 1,
       onChange: (v) => cs2()?.setParam('cloudThickness', v),
     });
     body.appendChild(row('Thickness', thicknessSlider2.el));
