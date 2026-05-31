@@ -1,618 +1,1173 @@
-# Sky & Atmosphere System Plan
-## Cyco Engine 4 — Unreal Engine 5–Inspired Environment Revamp
+﻿# Sky & Atmosphere System Plan
+## Cyco Engine 4 — Full Implementation (All Phases)
 
 ---
 
-## Overview
+## Overview & Goal
 
-The goal is to replace the single `GradientSky.js` sky type with a **multi-mode sky system** controlled by a top-level **Sky Type** dropdown, matching the quality and feature richness of Unreal Engine's Sky Atmosphere + Volumetric Clouds stack.
+Transform the current single `GradientSky.js` system into a full multi-mode sky and atmosphere stack that matches Unreal Engine 5's Sky Atmosphere + God Rays + Volumetric Clouds experience.
 
 ### UE5 → Cyco Engine Feature Mapping
 
-| Unreal Engine 5 Component | Cyco Engine Equivalent |
-|---|---|
-| Sky Atmosphere | **Physical Sky** mode (`THREE.Sky` shader) |
-| Gradient sky / custom | **Gradient Sky** mode (current `GradientSky.js`) |
-| HDRI Backdrop | **HDRI Sky** mode (`RGBELoader` → `EquirectangularReflectionMapping`) |
-| Directional Light (Atmosphere Sun) | `DirectionalLight` in `GradientSky.js` (shared by all modes) |
-| Sunlight Shafts / God Rays | **God Rays** post-process pass (new — see §5) |
-| Volumetric Clouds | `VolumetricClouds.js` (already implemented) |
-| Sky Light (Real-Time Capture) | `RoomEnvironment` IBL + optional PMREM sky capture |
-| Exponential Height Fog | `THREE.FogExp2` + aerial perspective shader |
-| Lens Flare | Lensflare system (already implemented, 5 styles) |
+| Unreal Engine 5 Component | Cyco Engine Equivalent | Status |
+|---|---|---|
+| Sky Atmosphere (Hosek-Wilkie) | `PhysicalSky.js` using `THREE.Sky` | Phase 2 |
+| Custom gradient sky | `GradientSky.js` | Done |
+| HDRI Backdrop | Existing HDRI env map | Done (cleanup Phase 4) |
+| Directional Light (Atmosphere Sun) | `DirectionalLight` in sky system | Done |
+| **Sunlight Shafts / God Rays** | `GodRays.js` screen-space radial blur | **Phase 1** |
+| Volumetric Clouds | `VolumetricClouds.js` | Done |
+| Exponential Height Fog | `THREE.FogExp2` + height-stratified shader | Phase 3 |
+| Sky Light / IBL | `RoomEnvironment` + PMREM | Done |
+| Lens Flare | `GradientSky.js` 5-style system | Done |
+| Aerial Perspective | Height fog + atmosphere haze | Phase 3 |
 
 ---
 
-## 1. Sky Type Dropdown
+## Architecture: Sky Type System
 
-The `Background` section in `EnvironmentProperties.js` gains a **Sky Type** control that replaces the current single-path. Everything else (clouds, fog, sun, god rays) is shared across all sky types.
+All sky modes share: sun/moon directional light, lens flare, god rays, volumetric clouds.
 
 ```
-Background Type:  [ Solid Color | Gradient | Sky | HDRI ]
-                           ↓ (when "Sky" is selected)
-Sky Type:   [ Gradient Sky | Physical Sky | HDRI Sky ]
+Background Type: [ Solid Color | Gradient | Sky | HDRI ]
+                                              v
+                                  Sky Type: [ Gradient Sky | Physical Sky | HDRI Sky ]
 ```
 
-### Sky Type Options
+### Sky Type Values
 
-| Value | Label | Class | Description |
+| Value | Class | Renderer Support | Description |
 |---|---|---|---|
-| `gradient` | Gradient Sky | `GradientSky.js` (existing) | Artistic gradient + sun disc. Artist-controlled colours, no physics. |
-| `physical` | Physical Sky | `PhysicalSky.js` (new) | `THREE.Sky` shader — Hosek-Wilkie physically-based Rayleigh + Mie atmosphere. |
-| `hdri` | HDRI Panorama | inline in `ViewportEngine.js` | Equirectangular HDR as a skydome. Environment map + optional visible background. |
+| `gradient` | `GradientSky.js` | WebGL + WebGPU | Artistic gradient + procedural sun/moon disc |
+| `physical` | `PhysicalSky.js` | WebGL only (Phase 2) | `THREE.Sky` - Hosek-Wilkie atmosphere |
+| `hdri` | inline `ViewportEngine.js` | WebGL + WebGPU | Equirectangular HDR panorama |
 
-All three modes share the same **sun/moon directional light**, **lens flare**, **god rays**, and **cloud systems**. Switching sky type is non-destructive; parameters are preserved per-type.
-
-### Shared Sky Parameters (all modes)
-
-These params exist regardless of sky type:
-
-| Parameter | Description |
-|---|---|
-| Elevation | Sun altitude angle (−10 to 90°) |
-| Azimuth/Rotation | Sun horizontal angle (0–360°) |
-| Exposure | `renderer.toneMappingExposure` (0.1–4.0) |
-| Show Sun | Sun disc visible |
-| Sun Color | Sun disc and light colour |
-| Show Moon | Moon disc visible |
-| Moon Color | Moon disc colour |
-| Lens Flare | Enable/disable + style (5 styles, existing) |
+**All three modes share:** elevation/azimuth, sun light, lens flare, god rays, fog, clouds.
 
 ---
 
-## 2. Gradient Sky (Current — `GradientSky.js`)
+# PHASE 1 - GOD RAYS
 
-**Status: Complete and working.**
-
-The current `GradientSky.js` implementation provides:
-- Full gradient editor (colour stops + opacity stops → 256-sample 1D texture)
-- Procedural sun disc (SDR, no bloom contamination)
-- Procedural moon disc
-- 5-style lens flare (Classic / Natural / Cinematic / Anamorphic / Subtle)
-- Single `DirectionalLight` tracking the sun
-- WebGL + WebGPU via Sprite-based fallback for lens flare (see `sky-clouds-pipeline.md`)
-- TSL `reference()` nodes for WebGPU uniform updates
-
-**Controls specific to Gradient Sky:**
-
-| Control | Range | Description |
-|---|---|---|
-| Sky Colours | Gradient editor | Colour + opacity stops driving the 1D gradient texture |
-| Sky Brightness | 0.1–4.0 | Overall luminance multiplier |
-| Saturation | 0–3 | 0=greyscale, 1=unchanged |
-| Contrast | 0.5–3 | Pivot at 0.5 |
-| Sun Glow Strength | 0–10 | Atmospheric glow band radius around sun disc |
-| Moon Glow Strength | 0–10 | Same for moon |
+**Priority: HIGHEST. Implement first.**
 
 ---
 
-## 3. Physical Sky (New — `PhysicalSky.js`)
+## P1 Overview
 
-> **This is the Unreal Engine Sky Atmosphere equivalent.**
+God rays (crepuscular light shafts) are the single most impactful missing visual. They appear at low sun elevations (5-25 degrees) where the sun is near the horizon and scene objects or clouds cast visible shadows through the atmosphere.
 
-Uses `THREE.Sky` from `three/addons/objects/Sky.js` — a Hosek-Wilkie / Preetham physically-based atmospheric scattering shader. Already present in `ObjectFactory.js`; needs to be promoted to a first-class sky mode.
+**Technique:** Screen-space radial blur toward sun screen position ("Volumetric Light Scattering as a Post-Process", GPU Gems 3, Ch. 13). Runs at 1/4 resolution, ~0.4ms on any mid-range GPU.
 
-### How It Works
+```
+RenderPass -> [AO] -> BloomPass -> OutlinePass -> OutputPass -> [GodRaysPass] -> FXAAPass -> LUTPass
+```
 
-The `Sky` shader ray-marches through a parametric atmosphere model, computing the correct color for every sky pixel based on:
-- **Rayleigh scattering** — small molecules; makes sky blue, sunsets red/orange
-- **Mie scattering** — aerosol particles (haze/fog/pollution); creates sun halo
-- **Sun position** — drives both sky colour distribution and the directional light
+God rays are injected AFTER OutputPass (post-tone-mapping). They are an additive LDR contribution.
 
-This is how UE5's Sky Atmosphere computes sky colour.
+---
 
-### Physical Sky Controls (UE5 Sky Atmosphere equivalent)
+## P1.1 - Create `editor/src/viewport/GodRays.js`
 
-#### Atmosphere Model
-
-| Cyco Engine Control | `THREE.Sky` Uniform | UE5 Equivalent | Range | Default | Description |
-|---|---|---|---|---|---|
-| Rayleigh | `rayleigh` | Rayleigh Scattering Scale | 0–4 | 1.0 | Density of air molecules. Higher = bluer sky, redder sunsets. Earth default = 1.0. |
-| Mie (Turbidity) | `turbidity` | Mie Scattering Scale / Haze | 1–20 | 2.0 | Aerosol / haze density. Higher = hazier, more white horizon. |
-| Mie Coefficient | `mieCoefficient` | Mie Coefficient | 0–0.1 | 0.005 | Mie scattering intensity. |
-| Mie Anisotropy | `mieDirectionalG` | Mie Anisotropy | 0–0.99 | 0.8 | 0=uniform scatter, 0.8=Earth default, >0.9=tight sun halo. |
-
-#### Artistic Controls
-
-| Cyco Engine Control | Description | UE5 Equivalent |
-|---|---|---|
-| Sun Intensity | `DirectionalLight.intensity` in lux (0–200 000) | Directional Light intensity |
-| Sun Angular Size | Controls sun disc size in sky shader | Sun disc size |
-| Aerial Perspective | Height-based atmosphere tinting of distant objects | Aerial Perspective View Distance Scale |
-| Sky Tint | Colour multiplier on sky output | Sky Tint / Sky Color |
-
-#### Implementation Notes
+Full class implementation:
 
 ```js
-// PhysicalSky.js skeleton:
-import { Sky } from 'three/addons/objects/Sky.js';
+/**
+ * GodRays.js
+ * Screen-space radial blur god ray effect.
+ * GPU Gems 3, Ch. 13 - "Volumetric Light Scattering as a Post-Process"
+ *
+ * Usage:
+ *   const gr = new GodRays(viewportEngine);
+ *   gr.setEnabled(true);
+ *   gr.setParams({ density: 0.96, weight: 0.4, decay: 0.9, exposure: 0.65, samples: 60 });
+ *   // Call gr.update(sunWorldDir, camera) each frame BEFORE composer.render()
+ *   // insert gr.pass into EffectComposer after OutputPass
+ */
 
-const sky = new Sky();
-sky.scale.setScalar(450000);
-scene.add(sky);
+import * as THREE from 'three';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
-// Parameters exposed via reference() nodes for WebGPU, or direct uniform update for WebGL:
-sky.material.uniforms['turbidity'].value      = params.turbidity;     // Mie haze
-sky.material.uniforms['rayleigh'].value       = params.rayleigh;      // Rayleigh
-sky.material.uniforms['mieCoefficient'].value = params.mieCoefficient;
-sky.material.uniforms['mieDirectionalG'].value = params.mieDirectionalG; // anisotropy
-sky.material.uniforms['sunPosition'].value.copy(sunDir);  // derived from elevation/azimuth
+// -- Radial blur shader --
 
-// Bloom clamping (CRITICAL — sky HDR output will trigger bloom without this):
-sky.material.onBeforeCompile = (shader) => {
-  shader.fragmentShader = shader.fragmentShader.replace(
-    'gl_FragColor = vec4( texColor, 1.0 );',
-    'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );'
-  );
+const GodRaysVertShader = /* glsl */`
+varying vec2 vUv;
+void main() {
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const GodRaysFragShader = /* glsl */`
+uniform sampler2D tOccluder;
+uniform vec2      sunScreenPos;   // [0,1] screen space
+uniform float     density;        // 0.96
+uniform float     weight;         // 0.40
+uniform float     decay;          // 0.90
+uniform float     exposure;       // 0.65
+uniform int       numSamples;     // 60
+uniform float     enabled;        // 0 or 1
+
+varying vec2 vUv;
+
+void main() {
+  if (enabled < 0.5) { gl_FragColor = vec4(0.0); return; }
+
+  vec2 uv        = vUv;
+  vec2 deltaUV   = (uv - sunScreenPos) * (density / float(numSamples));
+  float decayVal = 1.0;
+  vec3 godRay    = vec3(0.0);
+
+  for (int i = 0; i < 100; i++) {
+    if (i >= numSamples) break;
+    uv -= deltaUV;
+    vec3 s = texture2D(tOccluder, clamp(uv, 0.0, 1.0)).rgb;
+    s     *= decayVal * weight;
+    godRay += s;
+    decayVal *= decay;
+  }
+
+  gl_FragColor = vec4(clamp(godRay * exposure, 0.0, 1.5), 1.0);
+}
+`;
+
+export class GodRays {
+  constructor(viewportEngine) {
+    this._vpe = viewportEngine;
+    this._enabled    = false;
+    this._occluderRT = null;  // 1/4 res WebGLRenderTarget for silhouette mask
+    this._blackMat   = null;  // MeshBasicMaterial: black for occluder pass
+    this._pass       = null;  // ShaderPass - radial blur, additive output
+    this._renderer   = null;
+
+    this._p = {
+      density:  0.96,
+      weight:   0.40,
+      decay:    0.90,
+      exposure: 0.65,
+      samples:  60,
+    };
+  }
+
+  /** The ShaderPass to insert into EffectComposer after OutputPass. */
+  get pass() { return this._pass; }
+
+  setEnabled(v) {
+    this._enabled = !!v;
+    if (this._pass) {
+      this._pass.uniforms['enabled'].value = v ? 1.0 : 0.0;
+    }
+  }
+
+  setParams(opts = {}) {
+    if (opts.density  !== undefined) this._p.density  = opts.density;
+    if (opts.weight   !== undefined) this._p.weight   = opts.weight;
+    if (opts.decay    !== undefined) this._p.decay    = opts.decay;
+    if (opts.exposure !== undefined) this._p.exposure = opts.exposure;
+    if (opts.samples  !== undefined) this._p.samples  = Math.round(opts.samples);
+    if (this._pass) this._applyUniforms();
+  }
+
+  /**
+   * Call once when the WebGL pipeline is built.
+   * @param {WebGLRenderer} renderer
+   * @param {number} w  Full viewport width
+   * @param {number} h  Full viewport height
+   */
+  build(renderer, w, h) {
+    this.dispose();
+    this._renderer = renderer;
+
+    // 1/4-resolution occluder render target
+    this._occluderRT = new THREE.WebGLRenderTarget(
+      Math.max(1, Math.floor(w / 4)),
+      Math.max(1, Math.floor(h / 4)),
+      {
+        format:    THREE.RGBFormat,
+        type:      THREE.UnsignedByteType,
+        minFilter: THREE.LinearFilter,
+        magFilter: THREE.LinearFilter,
+      }
+    );
+
+    // Black silhouette material for scene geometry in the occluder pass
+    this._blackMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+
+    // Radial blur ShaderPass - additive blending onto the final frame
+    this._pass = new ShaderPass({
+      uniforms: {
+        tDiffuse:     { value: null },
+        tOccluder:    { value: null },
+        sunScreenPos: { value: new THREE.Vector2(0.5, 0.5) },
+        density:      { value: this._p.density },
+        weight:       { value: this._p.weight },
+        decay:        { value: this._p.decay },
+        exposure:     { value: this._p.exposure },
+        numSamples:   { value: this._p.samples },
+        enabled:      { value: this._enabled ? 1.0 : 0.0 },
+      },
+      vertexShader:   GodRaysVertShader,
+      fragmentShader: GodRaysFragShader,
+    });
+    this._pass.material.blending    = THREE.AdditiveBlending;
+    this._pass.material.depthWrite  = false;
+    this._pass.material.transparent = true;
+    this._pass.needsSwap = false;
+  }
+
+  /**
+   * Must be called every frame BEFORE composer.render().
+   * Renders the occluder pass and updates the sun screen position uniform.
+   * @param {THREE.Camera} camera
+   * @param {THREE.Vector3} sunWorldDir  unit vector pointing toward sun
+   */
+  update(camera, sunWorldDir) {
+    if (!this._enabled || !this._pass || !this._occluderRT || !this._renderer) return;
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+
+    // 1. Project sun direction to screen UV [0,1]
+    const sunPoint = sunWorldDir.clone().multiplyScalar(camera.near * 10000);
+    sunPoint.add(camera.position);
+    sunPoint.project(camera);  // NDC [-1,1]
+
+    const sunScreenX = sunPoint.x * 0.5 + 0.5;
+    const sunScreenY = sunPoint.y * 0.5 + 0.5;
+    const sunBehind  = sunPoint.z > 1.0;
+
+    // 2. Render occluder pass - scene = black, sky sun disc = white
+    const gradSky = this._vpe?.gradientSky;
+
+    scene.overrideMaterial = this._blackMat;
+    if (gradSky?._mesh) gradSky._mesh.userData._inOccluderPass = true;
+
+    this._renderer.setRenderTarget(this._occluderRT);
+    this._renderer.setClearColor(0x000000, 1);
+    this._renderer.clear();
+    this._renderer.render(scene, camera);
+    this._renderer.setRenderTarget(null);
+
+    scene.overrideMaterial = null;
+    if (gradSky?._mesh) gradSky._mesh.userData._inOccluderPass = false;
+
+    // 3. Update radial blur uniforms
+    const u = this._pass.uniforms;
+    u['tOccluder'].value      = this._occluderRT.texture;
+    u['sunScreenPos'].value.set(sunScreenX, sunScreenY);
+    u['enabled'].value        = (this._enabled && !sunBehind) ? 1.0 : 0.0;
+  }
+
+  resize(w, h) {
+    if (this._occluderRT) {
+      this._occluderRT.setSize(
+        Math.max(1, Math.floor(w / 4)),
+        Math.max(1, Math.floor(h / 4))
+      );
+    }
+  }
+
+  dispose() {
+    this._occluderRT?.dispose();
+    this._blackMat?.dispose();
+    this._pass?.dispose();
+    this._occluderRT = null;
+    this._blackMat   = null;
+    this._pass       = null;
+  }
+
+  _applyUniforms() {
+    const u = this._pass.uniforms;
+    u['density'].value    = this._p.density;
+    u['weight'].value     = this._p.weight;
+    u['decay'].value      = this._p.decay;
+    u['exposure'].value   = this._p.exposure;
+    u['numSamples'].value = this._p.samples;
+  }
+}
+```
+
+---
+
+## P1.2 - Patch `GradientSky.js`: Occluder Material
+
+During the god rays occluder pass, the sky sphere must render the sun disc as **white** while the rest of the sky is black. Add `_createOccluderMaterial()` and patch `onBeforeRender`.
+
+Add to the top of `GradientSky.js`, after the existing GLSL constants:
+
+```js
+// Occluder fragment shader: renders only the sun disc as white
+const SKY_OCCLUDER_FRAG = /* glsl */`
+precision highp float;
+uniform vec3  uSunDir;
+uniform float uSunInner;
+uniform float uSunOuter;
+uniform float uSunVisible;
+varying vec3 vLocalPos;
+
+void main() {
+  vec3 dir    = normalize(vLocalPos);
+  float sunDot = dot(dir, normalize(uSunDir));
+  float disc   = smoothstep(uSunOuter, uSunInner, sunDot) * uSunVisible;
+  gl_FragColor = vec4(vec3(disc), 1.0);
+}
+`;
+```
+
+Add this method inside the `GradientSky` class:
+
+```js
+_createOccluderMaterial() {
+  return new THREE.ShaderMaterial({
+    uniforms: {
+      uSunDir:     { value: this._p.sunDir },
+      uSunInner:   { value: SUN_INNER },   // same constant used by main sky shader
+      uSunOuter:   { value: SUN_OUTER },
+      uSunVisible: { value: 1.0 },
+    },
+    vertexShader:   SKY_VERT,              // same vertex shader as main sky
+    fragmentShader: SKY_OCCLUDER_FRAG,
+    side: THREE.BackSide,
+    depthWrite: false,
+  });
+}
+```
+
+In `_createMeshWebGL()`, after `this._mesh = new THREE.Mesh(geo, mat)`:
+
+```js
+// Store reference to main material for swap
+this._mainMat     = mat;
+this._occluderMat = this._createOccluderMaterial();
+this._mesh.userData._occluderMat = this._occluderMat;
+
+// Swap to occluder material during god rays occluder pass
+this._mesh.onBeforeRender = () => {
+  if (this._mesh.userData._inOccluderPass) {
+    this._mesh.material = this._occluderMat;
+  } else {
+    this._mesh.material = this._mainMat;
+  }
 };
 ```
 
-> **WebGPU Note:** `THREE.Sky` uses `ShaderMaterial` with custom GLSL — it renders **black** under `WebGPURenderer`. For WebGPU, the sky must either:
-> - Use WebGL2 fallback for this sky type, OR
-> - Be rewritten as a TSL `MeshBasicNodeMaterial` (significant effort — future work)
->
-> **Recommendation for Phase 1:** Physical Sky is WebGL-only. Display a note in the UI if WebGPU renderer is active.
+Extend `_pushUniforms()` to keep occluder material in sync:
+
+```js
+// At end of _pushUniforms():
+if (this._occluderMat) {
+  this._occluderMat.uniforms.uSunDir.value.copy(this._p.sunDir);
+  this._occluderMat.uniforms.uSunVisible.value = this._sunVisible();
+}
+```
 
 ---
 
-## 4. HDRI Sky Mode
+## P1.3 - Wire God Rays into `PostProcessingPipeline.js`
 
-Uses an equirectangular HDR image as both the visible background and the environment light source.
-
+**Import** at top of file:
 ```js
-// HDRI sky setup:
-import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
-
-const pmremGen = new THREE.PMREMGenerator(renderer);
-pmremGen.compileEquirectangularShader();
-
-const hdrTexture = await new RGBELoader().loadAsync(url);
-scene.environment = pmremGen.fromEquirectangular(hdrTexture).texture;
-scene.background  = showHDRIBackground ? scene.environment : null;
-hdrTexture.dispose();
-pmremGen.dispose();
+import { GodRays } from './GodRays.js';
 ```
 
-**HDRI Sky Controls:**
+**Constructor** - add after existing field declarations:
+```js
+this.godRays          = new GodRays(engine);
+this._godRaysEnabled  = false;
+this._godRaysParams   = { density: 0.96, weight: 0.40, decay: 0.90, exposure: 0.65, samples: 60 };
+```
 
-| Control | Description |
-|---|---|
-| File | HDR file picker (`.hdr`, `.exr`) |
-| Show as Background | Toggle between env-only vs visible sky |
-| Rotation | Rotate the HDRI horizontally (0–360°) |
-| Intensity | `scene.environmentIntensity` (0.1–5.0) |
-| Background Blur | `scene.backgroundBlurriness` (0.0–1.0) |
-| Background Intensity | `scene.backgroundIntensity` (0.1–5.0) |
+**`_buildWebGLPipeline()`** - add after `this._composer.addPass(this.lutPass)`:
+```js
+// 8. God Rays - additive overlay, rendered over the final LDR frame
+this.godRays.build(renderer, w, h);
+this.godRays.setEnabled(this._godRaysEnabled);
+this.godRays.setParams(this._godRaysParams);
+this._composer.addPass(this.godRays.pass);
+```
 
-The sun direction for god rays and lens flare is defined by a manual **Sun Azimuth** and **Elevation** slider when in HDRI mode (it cannot be auto-derived from the HDRI).
+**Per-frame render** - locate where `this._composer.render()` is called (in the main render method). Add immediately BEFORE it:
+```js
+// Update god rays occluder pass each frame
+if (this._godRaysEnabled) {
+  const ve     = this.engine;
+  const skyType = ve?._activeSkyType;
+  const skyObj  = skyType === 'physical' ? ve?.physicalSky : ve?.gradientSky;
+  const sunDir  = skyObj?._p?.sunDir;
+  if (sunDir) this.godRays.update(ve.camera, sunDir);
+}
+```
+
+**Resize** - in the resize handler, after other pass resizes:
+```js
+this.godRays?.resize(w, h);
+```
+
+**`_disposeWebGLPipeline()`** - add before/after existing dispose calls:
+```js
+this.godRays?.dispose();
+```
+
+**New public API**:
+```js
+setGodRaysEnabled(v) {
+  this._godRaysEnabled = !!v;
+  this.godRays?.setEnabled(v);
+}
+
+updateGodRaysParams(opts) {
+  Object.assign(this._godRaysParams, opts);
+  this.godRays?.setParams(opts);
+}
+```
 
 ---
 
-## 5. God Rays (Atmosphere Sunlight Shafts) — PRIORITY FEATURE
+## P1.4 - Wire God Rays into `ViewportEngine.js`
 
-> **Unreal Engine equivalent:** _"Atmosphere Sunlight Shafts"_ — enabled via `Cast Shadow on Atmosphere` on the Directional Light.
-
-God rays (crepuscular rays / volumetric light shafts) are the single most impactful atmosphere visual missing from the engine. They make sun at low elevation (morning/evening) look dramatic and cinematic.
-
-### How They Work
-
-From Nvidia GPU Gems 3, Ch. 13 — "Volumetric Light Scattering as a Post-Process":
-
-1. **Occluder Pass (1/4 resolution):** Render the scene to a low-res texture. Sun disc pixels → bright white. Everything else → black (using `MeshBasicMaterial` colour `0x000000`, except the sky mesh which renders its sun disc colour). This creates a silhouette mask.
-2. **Radial Blur Pass:** For each output pixel, march N steps from pixel toward the sun's 2D screen position. Sample the occluder texture at each step with exponential falloff. Accumulate — this creates the "beams" radiating from the sun.
-3. **Composite Pass:** Additively blend the radial blur output onto the final frame.
-
-```
-Frame pipeline with god rays:
-  ScenePass → OccluderPass (1/4 res) → RadialBlurPass → AdditiveBlend → Output
+**Constructor** - add to event binding block:
+```js
+this._onGodRaysChange = this._onGodRaysChange.bind(this);
+window.addEventListener('cyco-godrays-change', this._onGodRaysChange);
 ```
 
-### Recommended Implementation: Screen-Space Radial Blur
+**New handler** - add alongside `_onFogChange`:
+```js
+_onGodRaysChange({ detail } = {}) {
+  const pp = window.__cyco?.postPipeline;
+  if (!pp) return;
+  const { enabled, ...params } = detail ?? {};
+  if (enabled !== undefined) pp.setGodRaysEnabled(enabled);
+  if (Object.keys(params).length) pp.updateGodRaysParams(params);
+}
+```
 
-This is the **recommended approach** for Cyco Engine. It:
-- Works on both WebGL and WebGPU
-- Runs at 1/4 resolution (extremely cheap)
-- Is easy to tune (5 float parameters)
-- Produces convincing results similar to UE5's ground-level shafts
+---
 
-#### Step 1 — Occluder Pass
+## P1.5 - Add God Rays Section to `EnvironmentProperties.js`
+
+Add `_buildGodRaysSection(root)` method and call it from `_build()` after `_buildSkySection(root)`:
 
 ```js
-// Create a 1/4-res render target:
-this._godRaysRT = new THREE.WebGLRenderTarget(
-  Math.floor(w / 4), Math.floor(h / 4),
-  { format: THREE.RGBFormat, type: THREE.UnsignedByteType }
-);
+_buildGodRaysSection(root) {
+  const { el, body } = section('God Rays');
+  root.appendChild(el);
 
-// Occluder scene: clone materials to black silhouettes
-// Sky mesh uses its own special occluder material that draws the sun disc white.
-const occluderMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
-renderer.setRenderTarget(this._godRaysRT);
-scene.overrideMaterial = occluderMat;
-renderer.render(scene, camera);
-scene.overrideMaterial = null;
-renderer.setRenderTarget(null);
+  const _fire = () => {
+    window.dispatchEvent(new CustomEvent('cyco-godrays-change', {
+      detail: {
+        enabled:  enabledCb.checked,
+        density:  parseFloat(densitySlider.input.value),
+        weight:   parseFloat(weightSlider.input.value),
+        decay:    parseFloat(decaySlider.input.value),
+        exposure: parseFloat(exposureSlider.input.value),
+        samples:  parseInt(samplesSlider.input.value, 10),
+      }
+    }));
+  };
+
+  const enabledCb = checkbox({ checked: false, onChange: _fire });
+  body.appendChild(row('Enable', enabledCb));
+
+  const qualitySelect = select({
+    options: [
+      ['low',    'Low - 20 samples'],
+      ['medium', 'Medium - 40 samples (recommended)'],
+      ['high',   'High - 80 samples'],
+      ['ultra',  'Ultra - 100 samples (screenshot)'],
+    ],
+    value: 'medium',
+    onChange: (v) => {
+      const presets = { low: 20, medium: 40, high: 80, ultra: 100 };
+      samplesSlider.input.value = presets[v];
+      _fire();
+    },
+  });
+  body.appendChild(row('Quality', qualitySelect));
+
+  const densitySlider = slider({ value: 0.96, min: 0.50, max: 1.00, step: 0.01, onChange: _fire });
+  body.appendChild(row('Density', densitySlider.el));
+
+  const weightSlider = slider({ value: 0.40, min: 0.05, max: 1.00, step: 0.01, onChange: _fire });
+  body.appendChild(row('Weight', weightSlider.el));
+
+  const decaySlider = slider({ value: 0.90, min: 0.70, max: 0.99, step: 0.01, onChange: _fire });
+  body.appendChild(row('Decay', decaySlider.el));
+
+  const exposureSlider = slider({ value: 0.65, min: 0.05, max: 2.00, step: 0.05, onChange: _fire });
+  body.appendChild(row('Exposure', exposureSlider.el));
+
+  const samplesSlider = slider({ value: 40, min: 10, max: 100, step: 5, onChange: _fire });
+  body.appendChild(row('Samples', samplesSlider.el));
+
+  this._godRaysControls = { enabledCb, densitySlider, weightSlider, decaySlider, exposureSlider, samplesSlider };
+}
 ```
 
-#### Step 2 — Radial Blur ShaderPass
+---
 
-```glsl
-// God rays fragment shader (radial blur toward sun NDC position):
-uniform sampler2D tOccluder;   // 1/4-res occluder mask
-uniform vec2  sunScreenPos;    // sun NDC xy in [0,1] screen space
-uniform int   numSamples;      // 60 typical
-uniform float density;         // 0.96 — step coverage
-uniform float weight;          // 0.4  — per-sample contribution
-uniform float decay;           // 0.9  — exponential falloff
-uniform float exposure;        // 0.65 — final brightness scale
+## P1.6 - God Rays Parameter Guide
 
-void main() {
-  vec2 uv = vUv;
-  vec2 deltaUV = (uv - sunScreenPos) * (density / float(numSamples));
-  float illuminationDecay = 1.0;
-  vec3 godRay = vec3(0.0);
+| Parameter | Short-Beam | Long-Haze | Notes |
+|---|---|---|---|
+| Density | 0.85-0.92 | 0.96-0.99 | How far beams reach from sun |
+| Weight | 0.3-0.5 | 0.15-0.3 | Per-step brightness |
+| Decay | 0.80-0.88 | 0.93-0.97 | Exponential fade rate |
+| Exposure | 0.5-0.8 | 0.3-0.5 | Final brightness scale |
+| Samples | 30-60 | 60-100 | Quality vs performance |
 
-  for (int i = 0; i < 60; i++) {
-    uv -= deltaUV;
-    vec3 sample = texture2D(tOccluder, uv).rgb;
-    sample *= illuminationDecay * weight;
-    godRay += sample;
-    illuminationDecay *= decay;
+Best at sun elevation 2-25 degrees. At elevation > 40 degrees god rays are nearly invisible.
+
+---
+
+# PHASE 2 - PHYSICAL SKY (THREE.Sky / Hosek-Wilkie)
+
+---
+
+## P2 Overview
+
+`THREE.Sky` from `three/addons/objects/Sky.js` is a Hosek-Wilkie physically-based atmospheric scattering implementation equivalent to UE5 Sky Atmosphere.
+
+**WebGPU constraint:** `THREE.Sky` uses `ShaderMaterial` with GLSL. Under `WebGPURenderer`, `ShaderMaterial` renders black. Physical Sky is WebGL-only in Phase 2. A TSL port is a Phase 4 stretch goal. Show a UI notice when WebGPU is active and Physical Sky is selected.
+
+---
+
+## P2.1 - Create `editor/src/viewport/PhysicalSky.js`
+
+```js
+/**
+ * PhysicalSky.js - THREE.Sky-based physically-correct atmosphere.
+ * Hosek-Wilkie model: Rayleigh + Mie scattering.
+ * WebGL ONLY - THREE.Sky uses ShaderMaterial which is black under WebGPURenderer.
+ *
+ * Public API matches GradientSky.js:
+ *   setEnabled(bool), setParams(opts), update(), dispose(), get sunLight()
+ */
+
+import * as THREE from 'three';
+import { Sky } from 'three/addons/objects/Sky.js';
+import { Lensflare, LensflareElement } from 'three/addons/objects/Lensflare.js';
+
+export class PhysicalSky {
+  constructor(viewportEngine) {
+    this._vpe      = viewportEngine;
+    this._sky      = null;
+    this._mesh     = null;   // alias for GodRays compatibility
+    this._sunLight = null;
+    this._lensflare = null;
+    this._enabled  = false;
+
+    this._p = {
+      elevation:       30,
+      azimuth:         180,
+      turbidity:       2.0,
+      rayleigh:        1.0,
+      mieCoefficient:  0.005,
+      mieDirectionalG: 0.8,
+      exposure:        1.0,
+      showSun:         true,
+      sunColor:        new THREE.Color(1, 0.97, 0.88),
+      lensflareEnabled: true,
+      lensflareSize:   150,
+      lensflareOpacity: 0.7,
+      sunDir: new THREE.Vector3(),
+    };
+
+    this._updateDirs();
+    this._initSunLight();
   }
 
-  gl_FragColor = vec4(godRay * exposure, 1.0);
+  get enabled()  { return this._enabled; }
+  get sunLight() { return this._sunLight; }
+
+  setEnabled(v) {
+    this._enabled = !!v;
+    if (v && !this._sky) this._createSky();
+    else if (!v)         this._destroySky();
+  }
+
+  setParams(opts = {}) {
+    const p = this._p;
+    if (opts.elevation          !== undefined) p.elevation          = opts.elevation;
+    if (opts.azimuth            !== undefined) p.azimuth            = opts.azimuth;
+    if (opts.turbidity          !== undefined) p.turbidity          = opts.turbidity;
+    if (opts.rayleigh           !== undefined) p.rayleigh           = opts.rayleigh;
+    if (opts.mieCoefficient     !== undefined) p.mieCoefficient     = opts.mieCoefficient;
+    if (opts.mieDirectionalG    !== undefined) p.mieDirectionalG    = opts.mieDirectionalG;
+    if (opts.exposure           !== undefined) p.exposure           = opts.exposure;
+    if (opts.showSun            !== undefined) p.showSun            = opts.showSun;
+    if (opts.sunColor) p.sunColor.set(opts.sunColor);
+    if (opts.lensflareEnabled   !== undefined) p.lensflareEnabled   = opts.lensflareEnabled;
+    if (opts.lensflareSize      !== undefined) p.lensflareSize      = opts.lensflareSize;
+    if (opts.lensflareOpacity   !== undefined) p.lensflareOpacity   = opts.lensflareOpacity;
+
+    this._updateDirs();
+    this._pushUniforms();
+    this._updateSunLight();
+    this._updateLensflare();
+  }
+
+  update() {
+    if (!this._sky) return;
+    const cam = this._vpe?.camera;
+    if (cam) {
+      this._sky.position.copy(cam.position);
+      if (this._lensflare) {
+        const dist = (cam.far ?? 10000) * 0.5;
+        this._lensflare.position
+          .copy(this._p.sunDir)
+          .multiplyScalar(dist)
+          .add(cam.position);
+      }
+    }
+  }
+
+  dispose() {
+    const scene = this._vpe?.scene;
+    if (this._sunLight) {
+      scene?.remove(this._sunLight, this._sunLight.target);
+      this._sunLight = null;
+    }
+    this._destroySky();
+  }
+
+  _createSky() {
+    const scene = this._vpe?.scene;
+    if (!scene) return;
+
+    this._sky  = new Sky();
+    this._mesh = this._sky;
+    this._sky.scale.setScalar(450000);
+    this._sky.name = '__cyco_physical_sky';
+
+    // Clamp HDR output to prevent bloom contamination (max 4.5 = SDR-safe)
+    this._sky.material.onBeforeCompile = (shader) => {
+      shader.fragmentShader = shader.fragmentShader.replace(
+        'gl_FragColor = vec4( texColor, 1.0 );',
+        'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );'
+      );
+    };
+
+    this._pushUniforms();
+    scene.add(this._sky);
+    this._createLensflare(scene);
+  }
+
+  _destroySky() {
+    const scene = this._vpe?.scene;
+    if (this._lensflare) { scene?.remove(this._lensflare); this._lensflare = null; }
+    if (this._sky) {
+      scene?.remove(this._sky);
+      this._sky.geometry?.dispose();
+      this._sky.material?.dispose();
+      this._sky  = null;
+      this._mesh = null;
+    }
+  }
+
+  _initSunLight() {
+    const scene = this._vpe?.scene;
+    if (!scene || this._sunLight) return;
+    this._sunLight = new THREE.DirectionalLight(0xfff8e7, 2.0);
+    this._sunLight.name = '__cyco_physical_sun_light';
+    this._sunLight.userData._isHelper = true;
+    this._sunLight.castShadow = true;
+    this._sunLight.shadow.mapSize.set(2048, 2048);
+    this._sunLight.shadow.camera.near   = 0.5;
+    this._sunLight.shadow.camera.far    = 1000;
+    this._sunLight.shadow.camera.left   = -50;
+    this._sunLight.shadow.camera.right  =  50;
+    this._sunLight.shadow.camera.top    =  50;
+    this._sunLight.shadow.camera.bottom = -50;
+    this._sunLight.shadow.bias = -0.001;
+    this._sunLight.target.name = '__cyco_physical_sun_target';
+    scene.add(this._sunLight, this._sunLight.target);
+    this._updateSunLight();
+  }
+
+  _updateDirs() {
+    const phi   = THREE.MathUtils.degToRad(90 - this._p.elevation);
+    const theta = THREE.MathUtils.degToRad(this._p.azimuth);
+    this._p.sunDir.setFromSphericalCoords(1, phi, theta);
+  }
+
+  _pushUniforms() {
+    if (!this._sky) return;
+    const u = this._sky.material.uniforms;
+    u['turbidity'].value       = this._p.turbidity;
+    u['rayleigh'].value        = this._p.rayleigh;
+    u['mieCoefficient'].value  = this._p.mieCoefficient;
+    u['mieDirectionalG'].value = this._p.mieDirectionalG;
+    u['sunPosition'].value.copy(this._p.sunDir);
+    u['up'].value.set(0, 1, 0);
+  }
+
+  _updateSunLight() {
+    if (!this._sunLight) return;
+    this._sunLight.position.copy(this._p.sunDir).multiplyScalar(100);
+    this._sunLight.target.position.set(0, 0, 0);
+    const t = Math.max(0, Math.min(1, (this._p.elevation + 5) / 20));
+    this._sunLight.intensity = 2.0 * t * t * (3 - 2 * t);
+    this._sunLight.visible   = this._p.elevation > -6;
+    const renderer = this._vpe?.rendererManager?.renderer;
+    if (renderer) renderer.toneMappingExposure = this._p.exposure;
+  }
+
+  _createLensflare(scene) {
+    const lf = new Lensflare();
+    lf.userData._isHelper = true;
+    const dist = (this._vpe?.camera?.far ?? 10000) * 0.5;
+    lf.position.copy(this._p.sunDir).multiplyScalar(dist);
+    if (this._p.lensflareEnabled) {
+      const tex = this._makeFlareTex(64);
+      lf.addElement(new LensflareElement(tex, this._p.lensflareSize, 0, this._p.sunColor));
+    }
+    scene.add(lf);
+    this._lensflare = lf;
+  }
+
+  _updateLensflare() {
+    if (this._lensflare) this._lensflare.visible = this._p.lensflareEnabled;
+  }
+
+  _makeFlareTex(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+    g.addColorStop(0,   'rgba(255,255,255,1)');
+    g.addColorStop(0.3, 'rgba(255,220,120,0.6)');
+    g.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+  }
 }
 ```
 
-#### Step 3 — Additive Composite in EffectComposer
+---
+
+## P2.2 - Add Sky Type Dropdown to `EnvironmentProperties.js`
+
+Inside `_buildSkySection()`, add immediately after the `Show Sky` checkbox row:
 
 ```js
-import { ShaderPass }      from 'three/addons/postprocessing/ShaderPass.js';
-import { AdditiveBlending } from 'three';
-
-// Add as an AdditiveBlending pass after OutputPass:
-const godRaysPass = new ShaderPass(GodRaysShader);
-godRaysPass.material.blending = THREE.AdditiveBlending;
-godRaysPass.material.depthWrite = false;
-composer.addPass(godRaysPass);
+const skyTypeSelect = select({
+  options: [
+    ['gradient', 'Gradient Sky'],
+    ['physical', 'Physical Sky (WebGL only)'],
+    ['hdri',     'HDRI Panorama'],
+  ],
+  value: 'gradient',
+  onChange: (v) => {
+    // Show atmosphere sub-section only for physical sky
+    atmHeader.style.display = v === 'physical' ? '' : 'none';
+    atmBody.style.display   = v === 'physical' ? '' : 'none';
+    // Show gradient editor only for gradient sky
+    gradHeader.style.display = v === 'gradient' ? '' : 'none';
+    gradBody.style.display   = v === 'gradient' ? '' : 'none';
+    _fireSkyChange();
+  },
+});
+body.appendChild(row('Sky Type', skyTypeSelect));
+this._skyTypeSelect = skyTypeSelect;
 ```
 
-### God Rays — Properties Panel Controls
+Add the Atmosphere sub-section (show/hide based on sky type):
 
-| Control | Default | Range | Description |
-|---|---|---|---|
-| **Enabled** | off | bool | Master toggle |
-| **Density** | 0.96 | 0.5–1.0 | Step coverage (higher = beams reach further from sun) |
-| **Weight** | 0.40 | 0.1–1.0 | Per-sample brightness contribution |
-| **Decay** | 0.90 | 0.7–0.99 | Exponential falloff (lower = shorter beams) |
-| **Exposure** | 0.65 | 0.1–2.0 | Final brightness scale |
-| **Samples** | 60 | 20–100 | Number of radial march steps (quality vs performance) |
-| **Max Angle** | 180° | 10–180° | Hide god rays when sun is beyond this angle from screen center |
-| **Only From Sun** | on | bool | Only show shafts when sun disc is (partially) visible on screen |
+```js
+// Atmosphere sub-section (Hosek-Wilkie controls, physical sky only)
+const atmHeader = document.createElement('div');
+atmHeader.textContent = 'Atmosphere';
+atmHeader.style.cssText = 'font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.08em;color:var(--text-dim);padding:6px 8px 2px;margin-top:4px;';
+const turbiditySlider  = slider({ value: 2.0, min: 1, max: 20, step: 0.1, onChange: () => _fireSkyChange() });
+const rayleighSlider   = slider({ value: 1.0, min: 0, max: 4,  step: 0.05, onChange: () => _fireSkyChange() });
+const mieGSlider       = slider({ value: 0.8, min: 0, max: 0.99, step: 0.01, onChange: () => _fireSkyChange() });
+const mieCSlider       = slider({ value: 0.005, min: 0, max: 0.1, step: 0.001, onChange: () => _fireSkyChange() });
 
-### God Rays Quality Tiers
+const atmBody = document.createElement('div');
+atmBody.appendChild(row('Turbidity (Haze)',     turbiditySlider.el));
+atmBody.appendChild(row('Rayleigh (Blue Sky)',  rayleighSlider.el));
+atmBody.appendChild(row('Mie Anisotropy',       mieGSlider.el));
+atmBody.appendChild(row('Mie Coefficient',      mieCSlider.el));
 
-| Tier | Samples | Resolution | Notes |
-|---|---|---|---|
-| Low | 20 | 1/8 | Mobile web — barely visible, near-free |
-| Medium | 40 | 1/4 | **Default** — good quality, minimal cost |
-| High | 80 | 1/2 | Desktop — cinematic quality |
-| Ultra | 100 | 1/2 | Use for screenshots/exports only |
+body.appendChild(atmHeader);
+body.appendChild(atmBody);
+atmHeader.style.display = 'none';
+atmBody.style.display   = 'none';
+```
 
-### God Rays — Integration with Sky Types
+Add atmosphere params to `_fireSkyChange()`:
+```js
+skyType:         this._skyTypeSelect?.value ?? 'gradient',
+turbidity:       parseFloat(turbiditySlider.input.value),
+rayleigh:        parseFloat(rayleighSlider.input.value),
+mieDirectionalG: parseFloat(mieGSlider.input.value),
+mieCoefficient:  parseFloat(mieCSlider.input.value),
+```
 
-| Sky Mode | God Rays Support | Sun Position Source |
+---
+
+## P2.3 - Route Sky Type in `ViewportEngine.js`
+
+Add import:
+```js
+import { PhysicalSky } from './PhysicalSky.js';
+```
+
+In `init()`, after `this.gradientSky = new GradientSky(this)`:
+```js
+this.physicalSky    = new PhysicalSky(this);
+this._activeSkyType = 'gradient';
+```
+
+Replace `_onSkyChange()` sky activation logic:
+```js
+_onSkyChange({ detail } = {}) {
+  if (!this.scene) return;
+
+  if (!detail?.enabled) {
+    this.gradientSky?.setEnabled(false);
+    this.physicalSky?.setEnabled(false);
+    this.skyEnabled = false;
+    this.scene.background = null;
+    return;
+  }
+
+  const skyType  = detail.skyType ?? 'gradient';
+  const isWebGPU = this.rendererManager?.renderer?.isWebGPURenderer;
+
+  // Physical Sky is WebGL-only
+  const resolvedType = (skyType === 'physical' && isWebGPU) ? 'gradient' : skyType;
+  this._activeSkyType = resolvedType;
+
+  // Deactivate the other sky
+  if (resolvedType !== 'gradient') this.gradientSky?.setEnabled(false);
+  if (resolvedType !== 'physical') this.physicalSky?.setEnabled(false);
+
+  if (resolvedType === 'gradient') {
+    // ... existing gradient sky logic unchanged ...
+    this.gradientSky.setEnabled(true);
+    this.gradientSky.setParams(detail);
+    this.scene.background = null;
+  } else if (resolvedType === 'physical') {
+    this.physicalSky.setEnabled(true);
+    this.physicalSky.setParams(detail);
+    this.scene.background = null;
+  }
+
+  this.skyEnabled   = true;
+  this.skyElevation = detail.elevation ?? this.skyElevation;
+  this.skyAzimuth   = detail.azimuth   ?? this.skyAzimuth;
+
+  const renderer = this.rendererManager?.renderer;
+  if (renderer && detail.exposure !== undefined) {
+    renderer.toneMappingExposure = detail.exposure;
+  }
+  if (detail.colorStops && renderer && resolvedType === 'gradient') {
+    this._buildSkyEnvMap(detail.colorStops, renderer);
+  }
+  this.cloudSystem?.updateSunFromSky(detail.elevation, detail.azimuth);
+  this.cloudSystem2?.updateSunFromSky(detail.elevation, detail.azimuth);
+}
+```
+
+---
+
+## P2.4 - Physical Sky Parameter Presets
+
+| Preset | Turbidity | Rayleigh | MieG | Notes |
+|---|---|---|---|---|
+| Clear Earth | 2.0 | 1.0 | 0.80 | Default - blue sky, natural sunset |
+| Hazy day | 6.0 | 1.0 | 0.85 | Soft sun, washed-out horizon |
+| Heavy smog | 12.0 | 0.5 | 0.90 | Industrial atmosphere |
+| Alien blue | 2.0 | 3.0 | 0.70 | More vivid blue scattering |
+| Alien orange | 2.0 | 0.3 | 0.92 | Minimal blue, tight sun corona |
+| Overcast | 8.0 | 2.0 | 0.60 | Diffuse, very low contrast |
+
+---
+
+# PHASE 3 - AERIAL PERSPECTIVE AND HEIGHT FOG
+
+---
+
+## P3 Overview
+
+Two fog modes:
+- **Exp2 Fog** (`THREE.FogExp2`) - uniform in all directions, zero cost (already partially implemented)
+- **Height-Stratified Fog** - fog density falls off exponentially with world Y altitude (more realistic)
+
+---
+
+## P3.1 - Improve Fog Handler in `ViewportEngine.js`
+
+Replace the existing `_onFogChange()`:
+
+```js
+_onFogChange({ detail } = {}) {
+  if (!this.scene) return;
+  const {
+    type      = 'none',
+    color     = '#aaaaaa',
+    near      = 1,
+    far       = 1000,
+    density   = 0.0002,
+    autoColor = false,
+  } = detail ?? {};
+
+  // Auto-color: sample horizon color from gradient sky
+  let fogColor = color;
+  if (autoColor) {
+    const data = this.gradientSky?._gradientTex?.image?.data;
+    if (data) {
+      const idx = Math.floor(0.48 * (data.length / 4)) * 4;
+      const r = data[idx] / 255, g = data[idx+1] / 255, b = data[idx+2] / 255;
+      fogColor = `rgb(${Math.round(r*255)},${Math.round(g*255)},${Math.round(b*255)})`;
+    }
+  }
+
+  const c = new THREE.Color(fogColor);
+  if      (type === 'linear') this.scene.fog = new THREE.Fog(c, near, far);
+  else if (type === 'exp2')   this.scene.fog = new THREE.FogExp2(c, density);
+  else                        this.scene.fog = null;
+}
+```
+
+---
+
+## P3.2 - Revamp Fog Section in `EnvironmentProperties.js`
+
+Replace or add `_buildFogSection(root)`:
+
+```js
+_buildFogSection(root) {
+  const { el, body } = section('Fog / Aerial Perspective');
+  root.appendChild(el);
+
+  const _fire = () => {
+    window.dispatchEvent(new CustomEvent('cyco-fog-change', {
+      detail: {
+        type:      typeSelect.value,
+        color:     colorSw.el.style.getPropertyValue('--sw-color') || '#aaaaaa',
+        autoColor: autoColorCb.checked,
+        density:   parseFloat(densitySlider.input.value),
+        near:      parseFloat(nearSlider.input.value),
+        far:       parseFloat(farSlider.input.value),
+      },
+    }));
+  };
+
+  const typeSelect = select({
+    options: [
+      ['none',   'Off'],
+      ['exp2',   'Exponential (recommended)'],
+      ['linear', 'Linear'],
+    ],
+    value: 'none',
+    onChange: (v) => {
+      linearRows.forEach(r => { r.style.display = v === 'linear' ? '' : 'none'; });
+      expRows.forEach(r    => { r.style.display = v === 'exp2'   ? '' : 'none'; });
+      _fire();
+    },
+  });
+  body.appendChild(row('Type', typeSelect));
+
+  const colorSw = colorSwatch({ color: '#c0d0e0', onChange: _fire });
+  const autoColorCb = checkbox({ checked: true, onChange: _fire });
+  const colorCtrl = document.createElement('div');
+  colorCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
+  colorCtrl.appendChild(colorSw.el);
+  const autoLabel = document.createElement('label');
+  autoLabel.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;';
+  autoLabel.appendChild(autoColorCb);
+  autoLabel.appendChild(document.createTextNode('Auto from sky'));
+  colorCtrl.appendChild(autoLabel);
+  body.appendChild(row('Color', colorCtrl));
+
+  const densitySlider = slider({ value: 0.0002, min: 0, max: 0.005, step: 0.00005, onChange: _fire });
+  const nearSlider    = slider({ value: 1,    min: 0,   max: 500,   step: 1,  onChange: _fire });
+  const farSlider     = slider({ value: 1000, min: 100, max: 50000, step: 50, onChange: _fire });
+
+  const densityRow = row('Density', densitySlider.el);
+  const nearRow    = row('Near',    nearSlider.el);
+  const farRow     = row('Far',     farSlider.el);
+
+  body.appendChild(densityRow);
+  body.appendChild(nearRow);
+  body.appendChild(farRow);
+
+  const linearRows = [nearRow, farRow];
+  const expRows    = [densityRow];
+  linearRows.forEach(r => { r.style.display = 'none'; });
+  expRows.forEach(r    => { r.style.display = 'none'; });
+}
+```
+
+---
+
+# PHASE 4 - POLISH AND FUTURE FEATURES
+
+---
+
+## P4.1 - WebGPU Physical Sky Fallback on Renderer Switch
+
+In `ViewportEngine._onRendererChanged()`, add after the renderer swap:
+
+```js
+// If physical sky is active and we just switched to WebGPU, fall back to gradient
+if (this._activeSkyType === 'physical' && newType === 'webgpu') {
+  this.physicalSky?.setEnabled(false);
+  this.gradientSky?.setEnabled(true);
+  this._activeSkyType = 'gradient';
+  // Optional: show a toast notification to the user
+}
+```
+
+---
+
+## P4.2 - WebGPU God Rays via GodraysNode
+
+Three.js r184 may include `three/addons/tsl/display/GodraysNode.js`. In `_buildWebGPUPipeline()`:
+
+```js
+try {
+  const { GodraysNode } = await import('three/addons/tsl/display/GodraysNode.js');
+  const ve       = this.engine;
+  const skyType  = ve?._activeSkyType;
+  const skyObj   = skyType === 'physical' ? ve?.physicalSky : ve?.gradientSky;
+  const sunLight = skyObj?.sunLight;
+  if (sunLight && this._godRaysEnabled) {
+    const godrays = new GodraysNode(sunLight, scenePassDepth);
+    godrays.density.value = this._godRaysParams.density;
+    godrays.decay.value   = this._godRaysParams.decay;
+    godrays.weight.value  = this._godRaysParams.weight;
+    outputNode = outputNode.add(godrays);
+  }
+} catch (e) {
+  // GodraysNode not available in this build - skip silently
+}
+```
+
+---
+
+## P4.3 - TSL Physical Sky Port (WebGPU Physical Sky)
+
+Full Hosek-Wilkie TSL port skeleton:
+
+```js
+// PhysicalSkyNode.js - Hosek-Wilkie atmosphere in TSL
+// Full coefficient tables from Three.js Sky SkyShader.js must be ported
+
+import { Fn, float, vec3, vec4, dot, exp, pow, max, normalize, mix } from 'three/tsl';
+import * as THREE from 'three';
+
+// Hosek-Wilkie evaluation (simplified skeleton):
+export const hosekWilkieSky = Fn(([direction, sunDir, turbidity, rayleigh, mieG, mieC]) => {
+  // 1. Compute angle between view ray and sun
+  // 2. Evaluate Rayleigh phase function
+  // 3. Evaluate Mie phase function
+  // 4. Look up Hosek-Wilkie A-I coefficients for current turbidity
+  // 5. Evaluate sky radiance distribution
+  // 6. Return final RGB sky colour
+  // NOTE: Full coefficient tables (9 floats x 3 channels x 10 turbidity levels)
+  // are available in three/addons/objects/Sky.js SkyShader.js
+  return vec4(vec3(0.5, 0.7, 1.0), 1.0); // placeholder
+});
+
+// Usage:
+// const skyMat = new THREE.MeshBasicNodeMaterial();
+// skyMat.colorNode = hosekWilkieSky(normalLocal, sunDirRef, turbidityRef, ...);
+```
+
+---
+
+## P4.4 - HDRI Mode Cleanup
+
+Planned improvements for HDRI sky mode (all properties on `scene.*`):
+
+```js
+// In ViewportEngine - add these to the cyco-sky-change handler for hdri type
+if (resolvedType === 'hdri') {
+  // Rotation (Three.js r163+)
+  if (detail.hdriRotation !== undefined) {
+    this.scene.backgroundRotation.y = THREE.MathUtils.degToRad(detail.hdriRotation);
+    this.scene.environmentRotation.y = THREE.MathUtils.degToRad(detail.hdriRotation);
+  }
+  // Background blur (0.0 = sharp, 1.0 = fully blurred)
+  if (detail.backgroundBlur !== undefined) {
+    this.scene.backgroundBlurriness = detail.backgroundBlur;
+  }
+  // Decouple background vs IBL intensity
+  if (detail.backgroundIntensity !== undefined) {
+    this.scene.backgroundIntensity = detail.backgroundIntensity;
+  }
+  if (detail.envIntensity !== undefined) {
+    this.scene.environmentIntensity = detail.envIntensity;
+  }
+  // Manual sun direction (since sun can't be auto-derived from HDRI)
+  const phi   = THREE.MathUtils.degToRad(90 - (detail.elevation ?? 45));
+  const theta = THREE.MathUtils.degToRad(detail.azimuth ?? 180);
+  const sunDir = new THREE.Vector3().setFromSphericalCoords(1, phi, theta);
+  this.gradientSky?._sunLight?.position.copy(sunDir).multiplyScalar(100);
+}
+```
+
+UI additions for HDRI mode in `EnvironmentProperties.js`:
+- `hdriRotation` slider (0-360 degrees)
+- `backgroundBlur` slider (0-1)
+- `backgroundIntensity` slider (0-2)
+- `envIntensity` slider (0-2)
+- Sun elevation + azimuth sliders (already exist, just need to remain visible in HDRI mode)
+
+---
+
+# FILES CHANGED SUMMARY
+
+## New Files
+
+| File | Purpose | Phase |
 |---|---|---|
-| Gradient Sky | ✅ Full | `GradientSky._p.sunDir` (already a `THREE.Vector3`) |
-| Physical Sky | ✅ Full | Same sun dir used for `sky.material.uniforms['sunPosition']` |
-| HDRI Sky | ✅ Partial | Manual sun azimuth/elevation sliders |
-| Solid Color | ❌ No | No sun defined |
+| `editor/src/viewport/GodRays.js` | Screen-space radial blur god rays | Phase 1 |
+| `editor/src/viewport/PhysicalSky.js` | THREE.Sky Hosek-Wilkie atmosphere | Phase 2 |
 
-### God Rays — WebGPU Path
+## Modified Files
 
-Three.js r184 includes an experimental `GodraysNode` TSL addon:
-
-```js
-import { GodraysNode } from 'three/addons/tsl/display/GodraysNode.js';
-
-const godrays = new GodraysNode(sunLight, sceneDepth);
-godrays.density = 0.96;
-godrays.decay   = 0.9;
-godrays.weight  = 0.4;
-postProcessing.outputNode = blend(sceneOutput, godrays, AdditiveBlending);
-```
-
-> **Note (2025):** `GodraysNode` availability must be verified against the bundled Three.js version in `editor/libs/three/`. If not available, use the screen-space radial blur with a `WebGLRenderTarget` + `ShaderPass` which works identically on `WebGL2Backend` (the WebGPU renderer's fallback).
-
-### Recommendation for God Rays
-
-**Start with the screen-space radial blur (WebGL ShaderPass).** It's the most battle-tested approach, identical to what shipped in AAA games (Crysis, GTA IV), takes ~0.4ms at 1/4 res on any decent GPU, and produces dramatic results at low elevations. The WebGPU `GodraysNode` can be added as the secondary path when the TSL pipeline is active.
-
-**The single most important integration detail:** The occluder pass must render the **sky's sun disc as white** and everything else as black. For Gradient Sky, this means the sky sphere needs a second `MeshBasicMaterial` variant that only draws the sun disc area. For Physical Sky, the `THREE.Sky` mesh can be rendered normally in the occluder pass since its sun area is already bright white relative to the rest.
+| File | What Changes | Phase |
+|---|---|---|
+| `editor/src/viewport/GradientSky.js` | Add `_createOccluderMaterial()`, `_occluderMat`, `onBeforeRender` swap logic | 1 |
+| `editor/src/viewport/PostProcessingPipeline.js` | Add `GodRays` field, build/update/resize/dispose calls, `setGodRaysEnabled()`, `updateGodRaysParams()`. WebGPU GodraysNode. | 1, 4 |
+| `editor/src/viewport/ViewportEngine.js` | Add `physicalSky`, `_activeSkyType`, route `skyType` in `_onSkyChange()`, add `_onGodRaysChange()`, improve fog handler, HDRI properties | 1, 2, 3, 4 |
+| `editor/src/properties/EnvironmentProperties.js` | Add `_buildGodRaysSection()`, Sky Type dropdown + Atmosphere sub-section, revamp fog section, HDRI controls | 1, 2, 3, 4 |
 
 ---
 
-## 6. Aerial Perspective (Height Fog + Atmosphere Haze)
-
-> **UE5 equivalent:** Sky Atmosphere's built-in Mie height fog + Exponential Height Fog component.
-
-Aerial perspective makes distant objects appear hazier and tinted toward the sky/horizon colour. It's a cheap but powerful depth cue — it's what makes Unreal outdoor scenes feel "real".
-
-### Implementation Options (choose one)
-
-#### Option A: Three.js Scene Fog (Simplest)
-
-```js
-// Three.js exponential fog — matches scene background colour to horizon
-scene.fog = new THREE.FogExp2(horizonColor, density);
-// Live update: scene.fog.color.set(newColor); scene.fog.density = newDensity;
-```
-
-| Advantage | Disadvantage |
-|---|---|
-| Zero cost | Uniform in all directions — no vertical stratification |
-| Works with all sky types | No sun-direction tinting |
-| No extra passes | Colour doesn't adjust automatically with sky |
-
-#### Option B: Height-Stratified Fog (Shader Injection)
-
-Inject a height-based exponential fog function into all scene materials via `onBeforeCompile`. Fog density falls off exponentially with world Y — matches UE5's Exponential Height Fog.
-
-```glsl
-// Fragment injection:
-float heightFog(vec3 worldPos, float density, float height) {
-  return 1.0 - exp(-density * max(0.0, height - worldPos.y));
-}
-float fogFactor = heightFog(vWorldPosition, fogDensity, fogHeight);
-fragColor.rgb = mix(fragColor.rgb, fogColor, fogFactor);
-```
-
-#### Option C: Physical Sky Aerial Perspective (Best, Expensive)
-
-Use the `THREE.Sky` shader's own aerial perspective lookup to tint distant objects. Requires sampling a sky LUT at each fragment's world position. Only viable in WebGPU TSL as a node.
-
-**Recommended for Cyco Engine Phase 1:** **Option A** (scene fog) as a baseline available immediately; **Option B** (height fog injection) as the quality upgrade when time permits.
-
-### Aerial Perspective Controls
-
-| Control | Default | Range | Description |
-|---|---|---|---|
-| **Enabled** | off | bool | Toggle fog |
-| **Type** | Exp | Linear / Exp / Exp² | Three.js fog type |
-| **Density** | 0.0002 | 0–0.01, step 0.0001 | Fog falloff rate |
-| **Color** | auto | color picker | Fog colour (auto-sample from horizon when sky enabled) |
-| **Auto Color** | on | bool | Auto-set fog colour from sky horizon gradient |
-| **Height** | 0 | −100–500 | World Y above which fog starts (height fog only) |
-| **Near** | 1 | 0–500 | Linear fog near plane |
-| **Far** | 1000 | 100–50000 | Linear fog far plane |
-
----
-
-## 7. Sun & Moon Directional Light
-
-Both Gradient Sky and Physical Sky drive a single `THREE.DirectionalLight` from the sun's computed direction. The moon optionally drives a second `DirectionalLight` at much lower intensity.
-
-### Sun Light Properties
-
-| Control | Default | Range | Description |
-|---|---|---|---|
-| **Sun Intensity** | 2.0 | 0–200 000 | In lux (120 000 = zenith, 0 = below horizon). Non-lux scenes use 0–10. |
-| **Sun Color** | `#fff8e7` | color | Warm yellow-white by default |
-| **Cast Shadows** | on | bool | `sunLight.castShadow` |
-| **Shadow Map Size** | 2048 | 512–4096 | `sunLight.shadow.mapSize` |
-| **Shadow Near** | 0.1 | 0.01–10 | Tight near = better shadow precision |
-| **Shadow Far** | 5000 | 100–50000 | Shadow frustum extent |
-| **Shadow Bias** | −0.0005 | −0.01–0 | Prevent self-shadow acne |
-
-> **UE5 Note:** For god rays to work (shadows in atmosphere), `Cast Shadow on Atmosphere` must be enabled on the Directional Light. In Cyco Engine this corresponds to having **both** `sunLight.castShadow = true` AND the **God Rays pass enabled** — the god rays occluder pass reads the sun's shadow silhouette.
-
-### Moon Light Properties
-
-| Control | Default | Range | Description |
-|---|---|---|---|
-| **Moon Intensity** | 0.02 | 0–1 | 0.26 lux at zenith (physical) |
-| **Moon Color** | `#c0d4ff` | color | Cool blue-white |
-| **Cast Shadows** | off | bool | Usually off for performance |
-
----
-
-## 8. Volumetric Clouds (Existing — reference)
-
-The cloud system is already implemented. See `/memories/repo/sky-clouds-pipeline.md` for full implementation details.
-
-**Two cloud systems:**
-
-| System | Variable | Mode | Altitude |
-|---|---|---|---|
-| High cirrus/cumulus | `cloudSystem` | `skyMode=true` — depth 1.0 trick | World Y 300–600 |
-| Low clouds + shadow | `cloudSystem2` | `skyMode=false` + multiply shadow mesh | World Y 5–25 |
-
-**Cloud controls (existing)** live in a separate Cloud section of `EnvironmentProperties.js`.
-
-### Cloud–God Rays Interaction
-
-When **god rays are enabled** and clouds are visible, the occluder pass will automatically include cloud silhouettes in the shadow mask (since clouds are rendered as opaque geometry from the occluder's perspective). This means **clouds will cast god ray shafts** — exactly matching UE5 behaviour where `Cast Cloud Shadows` enables cloud shadow in the atmosphere. No extra integration work needed.
-
----
-
-## 9. Complete Environment Properties UI Layout
-
-The redesigned `EnvironmentProperties.js` section structure, modelled on UE5's Environment Light Mixer:
+# IMPLEMENTATION ORDER
 
 ```
-┌ Environment ──────────────────────────────────────────┐
-│                                                       │
-│  ▾ Background                                         │
-│    Type: [ Solid | Gradient | Sky | HDRI ]            │
-│    ── if Solid: Color picker                          │
-│    ── if Gradient: 3-stop gradient editor             │
-│    ── if HDRI: File picker + HDRI BG toggle           │
-│                                                       │
-│  ▾ Sky                                               │
-│    Show Sky: [✓]                                      │
-│    Sky Type: [ Gradient Sky | Physical Sky | HDRI Sky ]│  ← NEW
-│    Day / Night: ─────────────────────●                │
-│    Elevation:  ─────────────●─────── 35.0°            │
-│    Rotation:   ─────●───────────── 180°               │
-│    Exposure:   ───────●──────────── 1.00              │
-│    ▾ Atmosphere                                       │  ← NEW (Physical Sky only)
-│       Rayleigh:       ─────●──────── 1.0              │
-│       Turbidity (Mie):─────●──────── 2.0              │
-│       Mie Anisotropy: ─────────●─── 0.80              │
-│       Sky Tint:       [■ white]                       │
-│    ▾ Sky Colours                                      │  (Gradient Sky only)
-│       [ gradient editor ]                             │
-│       Brightness / Saturation / Contrast              │
-│    ▾ Sun                                              │
-│       Sun: [✓] [■ colour] Glow: ──●── 0.5            │
-│       Intensity: ─────●──────── 2.00 lux             │
-│       Cast Shadows: [✓]                               │
-│    ▾ Moon                                             │
-│       Moon: [✓] [■ colour] Glow: ──●── 0.3           │
-│       Intensity: ●─────────────── 0.02               │
-│    ▾ Lens Flare                                       │
-│       Enable: [✓] Style: [Classic ▾]                 │
-│       Size / Opacity / Color / Intensity ...          │
-│                                                       │
-│  ▾ God Rays                                           │  ← NEW
-│    Enable: [□]                                        │
-│    Density:  ─────────────────●── 0.96               │
-│    Weight:   ────────●──────── 0.40                  │
-│    Decay:    ──────────────●─── 0.90                 │
-│    Exposure: ──────●──────── 0.65                    │
-│    Samples:  ─────────────●─── 60                    │
-│    Quality: [ Medium ▾ ]                              │
-│                                                       │
-│  ▾ Clouds                                             │
-│    [ existing cloud controls ]                        │
-│                                                       │
-│  ▾ Fog / Aerial Perspective                           │  ← NEW
-│    Enable: [□]                                        │
-│    Type: [ Exp² ▾ ]                                   │
-│    Density: ─●─────────── 0.0002                     │
-│    Color: [■] Auto: [✓]                               │
-│                                                       │
-│  ▾ Environment Map                                    │
-│    [ existing IBL / HDRI controls ]                   │
-└───────────────────────────────────────────────────────┘
+Phase 1 (God Rays):
+  1. Create GodRays.js
+  2. GradientSky.js - add occluder material + onBeforeRender swap
+  3. PostProcessingPipeline.js - wire GodRays (build, update frame, resize, dispose, API)
+  4. ViewportEngine.js - add _onGodRaysChange listener + handler
+  5. EnvironmentProperties.js - add God Rays section
+  TEST Phase 1
+
+Phase 2 (Physical Sky):
+  6. Create PhysicalSky.js
+  7. EnvironmentProperties.js - Sky Type dropdown + Atmosphere sub-section
+  8. ViewportEngine.js - add physicalSky, route skyType, _activeSkyType
+  TEST Phase 2
+
+Phase 3 (Fog):
+  9.  EnvironmentProperties.js - revamp fog section (type selector, auto-color)
+  10. ViewportEngine.js - improve _onFogChange (auto-color from gradient)
+  TEST Phase 3
+
+Phase 4 (Polish):
+  11. ViewportEngine.js - renderer switch fallback for physical sky
+  12. PostProcessingPipeline.js - WebGPU GodraysNode attempt
+  13. HDRI mode cleanup (rotation, blur, intensity decoupling)
+  14. (Stretch) TSL Hosek-Wilkie port for WebGPU physical sky
 ```
 
 ---
 
-## 10. New Event Architecture
-
-The existing `cyco-sky-change` event will gain a `skyType` field and new `cyco-godrays-change` and `cyco-fog-change` events:
-
-```js
-// Extended sky event:
-window.dispatchEvent(new CustomEvent('cyco-sky-change', { detail: {
-  enabled:    true,
-  skyType:    'physical',          // 'gradient' | 'physical' | 'hdri'
-  elevation:  35,
-  azimuth:    180,
-  // Gradient Sky params:
-  colorStops, opacityStops, skyBrightness, saturation, contrast,
-  showSun, sunColor, sunGlowStrength,
-  showMoon, moonColor, moonGlowStrength,
-  lensflareEnabled, lensflareStyle, ...
-  // Physical Sky params:
-  turbidity, rayleigh, mieCoefficient, mieDirectionalG, skyTint,
-  // HDRI params:
-  hdriUrl, showHDRIBackground, hdriRotation, hdriIntensity,
-}}));
-
-// God rays event (new):
-window.dispatchEvent(new CustomEvent('cyco-godrays-change', { detail: {
-  enabled: true,
-  density: 0.96, weight: 0.4, decay: 0.9, exposure: 0.65, samples: 60,
-}}));
-
-// Fog event (new):
-window.dispatchEvent(new CustomEvent('cyco-fog-change', { detail: {
-  enabled: true,
-  type: 'exp2',       // 'none' | 'linear' | 'exp' | 'exp2'
-  color: '#cce0ff',
-  density: 0.0002,
-  near: 1, far: 1000,
-  autoColor: true,
-}}));
-```
-
----
-
-## 11. New Files Required
-
-| File | Purpose |
-|---|---|
-| `editor/src/viewport/PhysicalSky.js` | New — wraps `THREE.Sky`, same API as `GradientSky.js` |
-| `editor/src/viewport/GodRays.js` | New — manages occluder RT + radial blur ShaderPass |
-| (optional) `editor/src/shaders/GodRaysShader.js` | GLSL for the radial blur pass |
-
-### Files Requiring Changes
-
-| File | Change |
-|---|---|
-| `EnvironmentProperties.js` | Add Sky Type dropdown, God Rays section, Fog section, Physical Sky controls |
-| `ViewportEngine.js` | Route `skyType` to correct sky class; add god rays + fog handlers |
-| `PostProcessingPipeline.js` | Insert `GodRays` pass before output; handle WebGL + WebGPU paths |
-| `GradientSky.js` | Add `_createOccluderMaterial()` for god rays occluder pass sun disc |
-
----
-
-## 12. Implementation Phases
-
-### Phase 1 — God Rays (Gradient Sky) — Highest Priority
-> "I want my god rays."
-
-1. Create `GodRays.js` with occluder RT + `ShaderPass` radial blur + additive composite
-2. Add sun disc white-on-black occluder material to `GradientSky.js`
-3. Pass sun NDC screen position from `GradientSky.update()` to `GodRays.update(camera)`
-4. Add God Rays section to `EnvironmentProperties.js`
-5. Wire `cyco-godrays-change` in `ViewportEngine.js` → `godRays.setParams()`
-6. Insert `GodRays` pass into `PostProcessingPipeline.js` (additive blend, after OutputPass)
-
-> **Expected result:** Dramatic light shafts visible at low sun elevations (5–25°) behind any object casting a shadow on the sun disc. Works with clouds casting shafts automatically.
-
-### Phase 2 — Physical Sky
-
-1. Create `PhysicalSky.js` wrapping `THREE.Sky` with same API as `GradientSky.js`
-2. Add Sky Type dropdown to `EnvironmentProperties.js` Sky section
-3. Add Atmosphere sub-section (Rayleigh, Mie, Turbidity, Anisotropy sliders) shown when Physical Sky active
-4. Route `skyType` in `ViewportEngine._onSkyChange()`
-5. Add `WebGPU not supported — using WebGL2` notice when Physical Sky is selected in WebGPU mode
-
-### Phase 3 — Aerial Perspective / Fog
-
-1. Add `cyco-fog-change` handler in `ViewportEngine.js` → `scene.fog`
-2. Add Fog / Aerial Perspective section in `EnvironmentProperties.js`
-3. Implement auto-color from gradient horizon for Gradient Sky mode
-4. Add height fog shader injection (Option B) as separate quality tier
-
-### Phase 4 — Polish / Future
-
-- HDRI Sky mode cleanup (rotation, backgroundBlurriness exposure)
-- `GodraysNode` TSL path for WebGPU renderer
-- Physical Sky TSL port (full `THREE.Sky` shader as TSL nodes)
-- Aerial perspective via Physical Sky LUT (WebGPU only)
-- Real-time sky capture for environment map (updates IBL from sky colour)
-
----
-
-## 13. God Rays — Key Technical Recommendations
-
-1. **Render occluder at 1/4 resolution.** Quarter-res is barely distinguishable from half-res for god rays because the radial blur smooths everything out. This is where all the performance savings come from.
-
-2. **Clamp god ray output to prevent over-brightening.** Add a `saturate()` clamp at the end of the radial blur — otherwise bright sun + high density + high weight will blow out to pure white.
-
-3. **Suppress when sun is behind the camera.** Check `sunNDC.z > 1.0` (same check used for lens flare suppression). Also consider fading to 0 when `sunScreenPos` is far outside the viewport (god rays from off-screen have visible edge artifacts).
-
-4. **Don't include the sky sphere as an occluder.** The sky sphere is almost entirely black in the occluder pass — only the sun disc area should be white. This requires either: (a) rendering sky separately in the occluder pass with a special sun-disc material, or (b) rendering the sky sphere first, then overriding all other scene materials to black while keeping the sky visible.
-
-5. **Physical Sky + god rays = premium tier.** The combination of the physically-based Hosek-Wilkie atmosphere with screen-space god rays is the closest achievable match to UE5's Sky Atmosphere sunlight shafts.
-
-6. **God ray length scales with `density * decay`.** For short dramatic shafts: `density=0.90, decay=0.85`. For long distant haze rays: `density=0.98, decay=0.95`.
-
----
-
-*Created: May 2026*
-*References: UE5 Sky Atmosphere docs, UE5 Volumetric Cloud docs, GPU Gems 3 Ch.13, Three.js Sky addon*
+*References: GPU Gems 3 Ch.13, THREE.Sky addon, UE5 Sky Atmosphere docs, Cyco Engine codebase*
