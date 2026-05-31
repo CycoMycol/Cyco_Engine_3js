@@ -157,9 +157,10 @@ void main() {
   vec3 ro = cameraPosition;
   vec3 rd = normalize(vWorldPos - ro);
 
-  // Discard near-horizontal rays: steep rays only.  The fade below is applied
-  // per-sample so the boundary dissolves into natural wisps rather than a hard circle.
-  float horizonFade = smoothstep(0.30, 0.75, abs(rd.y));
+  // Fade out near-horizontal rays to avoid runaway density on very shallow angles.
+  // Use a gentle fade starting at 3° from horizontal so clouds extend far toward
+  // the horizon like a vast rectangular slab rather than a tight circular cone.
+  float horizonFade = smoothstep(0.05, 0.22, abs(rd.y));
   if (horizonFade < 0.001) discard;
 
   // Elevation density scale: converts path-length opacity to column opacity.
@@ -205,10 +206,10 @@ void main() {
     if (t > tEnd) break;
     vec3  pos = ro + rd * t;
 
-    // Horizontal world-space distance fade — prevents the box boundary from being
-    // visible as a hard edge and naturally dissolves clouds into the far distance.
-    float hDist    = length(pos.xz - ro.xz);
-    float distFade = 1.0 - smoothstep(650.0, 870.0, hDist);
+    // Horizontal world-space distance fade using Chebyshev (box) distance so the
+    // cloud boundary is a square/rectangular slab rather than a circular cone.
+    float hDist    = max(abs(pos.x - ro.x), abs(pos.z - ro.z));
+    float distFade = 1.0 - smoothstep(1800.0, 2600.0, hDist);
 
     // Apply all three fades to density so the cloud SHAPE thins out naturally
     // (wispy edges, breaks up near the boundary) rather than cutting alpha hard.
@@ -377,6 +378,7 @@ export class VolumetricClouds {
       animated:            true,   // when false, uTime freezes so clouds stay in place
       morphSpeed:          0.08,   // how fast cloud shapes evolve (independent of wind drift)
       renderMode:          'ultra', // 'ultra'|'high'|'medium'|'fast'|'halfres'|'impostor'|'compute'
+      cameraRelativeHeight: false, // true → cloudBase/cloudTop are offsets from cam Y each frame
       sunDir:     new THREE.Vector3(0.45, 0.87, 0.22),
       sunColor:   new THREE.Color(1.0, 0.97, 0.88),
       skyHorizon: new THREE.Color(0.55, 0.70, 0.90),
@@ -593,16 +595,17 @@ export class VolumetricClouds {
     }
 
     // ── Compute absolute cloud slab heights ───────────────────────────────────
-    // skyMode=true  → cloudBase/cloudTop are absolute world Y (high sky layer).
-    // skyMode=false → treat cloudBase/cloudTop as offsets from camera Y so the
-    //                 surround slab always floats around the camera, not the ground.
+    // cameraRelativeHeight=true → cloudBase/cloudTop are offsets from camera Y
+    //   (used for low/surround clouds — always float around the camera).
+    // cameraRelativeHeight=false → absolute world Y (used for high sky clouds).
+    // skyMode only controls depth test / depth node — NOT height computation.
     if (cam) {
-      if (this._p.skyMode) {
-        this._absCloudBase = this._p.cloudBase;
-        this._absCloudTop  = this._p.cloudTop;
-      } else {
+      if (this._p.cameraRelativeHeight) {
         this._absCloudBase = cam.position.y + this._p.cloudBase;
         this._absCloudTop  = cam.position.y + this._p.cloudTop;
+      } else {
+        this._absCloudBase = this._p.cloudBase;
+        this._absCloudTop  = this._p.cloudTop;
       }
       // WebGL: push updated abs values to uniforms so the GLSL shader sees the
       // camera-relative heights (overrides the static push from _pushUniforms).
@@ -935,7 +938,9 @@ export class VolumetricClouds {
         const rd = normalize(positionWorld.sub(ro));
 
         // Discard near-horizontal rays; fade used per sample below
-        const horizonFade = smoothstep(float(0.30), float(0.75), abs(rd.y));
+        // Low threshold (0.05) lets clouds extend far toward the horizon like a
+        // vast rectangular slab instead of a tight circular cone.
+        const horizonFade = smoothstep(float(0.05), float(0.22), abs(rd.y));
         If(horizonFade.lessThan(float(0.001)), () => { Discard(); });
 
         const elevScale = clamp(abs(rd.y).mul(float(2.0)), float(0.0), float(1.0));
@@ -965,9 +970,10 @@ export class VolumetricClouds {
 
           const pos = ro.add(rd.mul(t));
 
-          // Horizontal distance fade prevents hard box boundary edge
-          const hDist    = length(pos.xz.sub(ro.xz));
-          const distFade = float(1.0).sub(smoothstep(float(650.0), float(870.0), hDist));
+          // Box (Chebyshev) distance fade — gives a rectangular cloud boundary
+          // instead of the circular/spherical cone the old length() produced.
+          const hDist    = max(abs(pos.x.sub(ro.x)), abs(pos.z.sub(ro.z)));
+          const distFade = float(1.0).sub(smoothstep(float(1800.0), float(2600.0), hDist));
 
           const d = cloudDensityFn(pos)
             .mul(elevScale).mul(horizonFade).mul(distFade).toVar();

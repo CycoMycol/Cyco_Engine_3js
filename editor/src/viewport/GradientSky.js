@@ -259,6 +259,7 @@ export class GradientSky {
       lensflareRingOpacity:    0.7,     // ring ghost opacity (independent from sun glow opacity)
       sunDir:             new THREE.Vector3(),
       moonDir:            new THREE.Vector3(),
+      skyShape:           'sphere',  // 'sphere' | 'cube'
     };
 
     this._updateDirs();
@@ -282,6 +283,27 @@ export class GradientSky {
     this._enabled = !!v;
     if (v && !this._mesh) this._createMesh();
     else if (!v)          this._destroyMesh();
+  }
+
+  /**
+   * Switch the sky dome geometry between sphere and cube without rebuilding the material.
+   * @param {'sphere'|'cube'} shape
+   */
+  setSkyShape(shape) {
+    if (shape !== 'sphere' && shape !== 'cube') return;
+    this._p.skyShape = shape;
+    if (this._mesh) {
+      const oldGeo = this._mesh.geometry;
+      this._mesh.geometry = this._makeSkyGeo();
+      oldGeo.dispose();
+    }
+  }
+
+  /** Build the appropriate sky geometry based on `this._p.skyShape`. */
+  _makeSkyGeo() {
+    return this._p.skyShape === 'cube'
+      ? new THREE.BoxGeometry(900000, 900000, 900000)
+      : new THREE.SphereGeometry(450000, 32, 16);
   }
 
   /** Dispatch to WebGL or WebGPU mesh creation based on the active renderer. */
@@ -548,7 +570,7 @@ export class GradientSky {
       mat.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
       mat.colorNode = colorNode;
 
-      this._mesh = new THREE.Mesh(new THREE.SphereGeometry(450000, 32, 16), mat);
+      this._mesh = new THREE.Mesh(this._makeSkyGeo(), mat);
       this._mesh.name = '__cyco_gradient_sky';
       this._mesh.renderOrder = -1;
       this._mesh.raycast = () => {};
@@ -557,7 +579,6 @@ export class GradientSky {
       const cam = this._vpe?.camera;
       if (cam) this._mesh.position.copy(cam.position);
 
-      // Lensflare is WebGL-only — skip under WebGPU.
       scene.add(this._mesh);
       console.log('[GradientSky] WebGPU fallback sky created (gradient only).');
     } catch (err2) {
@@ -600,7 +621,7 @@ export class GradientSky {
     });
 
     this._mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(450000, 32, 16),
+      this._makeSkyGeo(),
       mat
     );
     this._mesh.name = '__cyco_gradient_sky';
@@ -715,7 +736,7 @@ export class GradientSky {
     material.colorNode = skyColorNode;
 
     this._mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(450000, 32, 16),
+      this._makeSkyGeo(),
       material
     );
     this._mesh.name = '__cyco_gradient_sky';

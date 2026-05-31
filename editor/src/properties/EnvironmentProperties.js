@@ -198,6 +198,19 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Rotation', azimuthSlider.el));
 
+    // Sky dome geometry shape
+    const skyShapeSelect = select({
+      options: [
+        ['sphere', 'Sphere'],
+        ['cube',   'Cube'],
+      ],
+      value: ve?.gradientSky?._p?.skyShape ?? 'sphere',
+      onChange: (v) => {
+        window.__cyco?.gradientSky?.setSkyShape(v);
+      },
+    });
+    body.appendChild(row('Sky Shape', skyShapeSelect));
+
     // ── Exposure / Saturation / Contrast ────────────────────────────────────────
     const exposureSlider = slider({
       value: ve?.rendererManager?.renderer?.toneMappingExposure ?? 1.0,
@@ -654,15 +667,8 @@ export class EnvironmentProperties {
       checked: cs2()?._p?.skyMode ?? false,
       onChange: (v) => {
         cs2()?.setSkyMode(v);
-        // Sky-layer siblings (sun, moon, lens flare) follow any sky-layer toggle
-        const sky = window.__cyco?.gradientSky;
-        if (sky) sky.setParams({ showSun: v, showMoon: v, lensflareEnabled: v });
-        const sc = this._skyControls;
-        if (sc) {
-          sc.showSunCb.checked          = v;
-          sc.showMoonCb.checked         = v;
-          sc.lensflareEnabledCb.checked = v;
-        }
+        // Low clouds sky layer only changes depth-test behaviour.
+        // Do NOT sync sun/moon/lens-flare — those belong to the sky system, not the cloud layer.
       },
     });
 
