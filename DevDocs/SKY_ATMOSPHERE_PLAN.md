@@ -1297,6 +1297,49 @@ UI additions for HDRI mode in `EnvironmentProperties.js`:
 
 Replace the current 5-preset-style system in `GradientSky.js` with a fully granular set of controls that match the Ultimate Lens Flare API. The new system gives the user direct control over every parameter rather than choosing from presets.
 
+### Dispose + Debounce Strategy
+
+**Critical:** Every time the flare is rebuilt, the old canvas `CanvasTexture` instances must be disposed or they leak GPU memory. The rebuild must also be debounced so slider drag events don't fire it hundreds of times per second.
+
+```js
+// In GradientSky._rebuildWebGLFlares():
+// 1. Dispose old elements first
+if (this._lensflare) {
+  for (const el of this._lensflare.elements) {
+    el.texture?.dispose();  // dispose each CanvasTexture
+  }
+  this._lensflare.elements.length = 0;  // clear without removing from scene
+}
+
+// 2. Re-add all elements with new params
+// ... addElement() calls here ...
+```
+
+**Debounce rule:** Only parameters that change the *structure* of the flare (star points count, anamorphic toggle, secondary ghosts toggle, star burst toggle) should trigger `_rebuildWebGLFlares()`. Parameters that only change size/opacity/color should update `LensflareElement` properties directly without a full rebuild:
+
+```js
+// Live-update (no rebuild needed):
+// - Opacity    → this._lensflare.elements[i].size
+// - Size       → this._lensflare.elements[i].size
+// - Color Gain → this._lensflare.elements[i].color
+
+// Structural (requires rebuild + dispose):
+// - Star Points, Anamorphic, Secondary Ghosts, Star Burst
+```
+
+For the UI, add a 150ms debounce on `_fireSkyChange()` when called from slider `onChange` (not from checkbox/select `onChange`):
+
+```js
+// In _buildSkySection, for lens flare sliders only:
+let _flareDebounce = null;
+const _fireSkyDebounced = () => {
+  clearTimeout(_flareDebounce);
+  _flareDebounce = setTimeout(_fireSkyChange, 150);
+};
+// Use _fireSkyDebounced for size/opacity/color sliders,
+// use _fireSkyChange directly for checkboxes/selects.
+```
+
 Reference: [R3F Ultimate Lens Flare](https://ultimate-lens-flare.vercel.app/) — all the parameters in the target UI layout are taken directly from this reference implementation.
 
 **Applies to:** Both `GradientSky.js` (WebGL) and `PhysicalSky.js` (WebGL). The WebGPU Sprite-based fallback continues to use a simplified version.
@@ -1586,11 +1629,25 @@ lensflareAnamorphic:        anamorphicCb.checked,
 
 Add a dedicated **Post Processing** section to `EnvironmentProperties.js` that surfaces controls for all post-processing effects. Currently `PostProcessingPipeline.js` has Bloom, AO, LUT, etc. but there is no UI to control them from the Environment panel.
 
-Also add three new effects: **Chromatic Aberration**, **Vignette**, and **Film Grain** as `ShaderPass` instances in `PostProcessingPipeline.js`.
+Also add three new effects: **Chromatic Aberration**, **Vignette**, and **Film Grain**.
 
-**Pipeline order after Phase 6:**
+- **WebGL path:** `ShaderPass` instances inserted into the `EffectComposer` pipeline.
+- **WebGPU path:** Native TSL nodes from `three/addons/tsl/display/`. These exist in Three.js r184+:
+  - `ChromaticAberrationNode` (`ChromaticAberrationNode.js`) — official TSL node
+  - `FilmNode` (`FilmNode.js`) — official TSL node
+  - Vignette — **no official TSL node exists**, use a custom `Fn()` (see P6.7)
+
+**Required:** Copy `ChromaticAberrationNode.js` and `FilmNode.js` from the Three.js source into `editor/libs/three/addons/tsl/display/` alongside the existing `GTAONode.js` and `BloomNode.js`.
+
+**Pipeline order after Phase 6 (WebGL):**
 ```
 RenderPass → [AO] → BloomPass → OutlinePass → SMAA → OutputPass → [GodRays] → [ChromaticAberration] → [Vignette] → [FilmGrain] → FXAA → LUT
+```
+
+**TSL pipeline order after Phase 6 (WebGPU):**
+```
+pass(scene, camera) → [ao] → .add(bloom) → .add([godrays]) → chromaticAberration() → film() → vignetteNode()
+→ RenderPipeline.outputNode
 ```
 
 ---
@@ -1917,6 +1974,100 @@ _onPostFxChange({ detail } = {}) {
 
 ---
 
+## P6.7 - WebGPU TSL Post Processing Nodes
+
+The WebGPU pipeline uses TSL nodes instead of `ShaderPass`. These must be wired in `_buildWebGPUPipeline()`. The pattern matches how `bloom()` is already wired.
+
+**Step 1 — Add to `editor/libs/three/addons/tsl/display/`:**
+
+Download from Three.js r184 source:
+- `ChromaticAberrationNode.js` → `editor/libs/three/addons/tsl/display/ChromaticAberrationNode.js`
+- `FilmNode.js` → `editor/libs/three/addons/tsl/display/FilmNode.js`
+
+**Step 2 — Wire in `_buildWebGPUPipeline()`:**
+
+```js
+// Add these imports at the top of the try block (alongside GTAONode, BloomNode):
+const [{ ao }, { bloom: bloomFn }, { chromaticAberration }, { film }] = await Promise.all([
+  import('three/addons/tsl/display/GTAONode.js'),
+  import('three/addons/tsl/display/BloomNode.js'),
+  import('three/addons/tsl/display/ChromaticAberrationNode.js'),
+  import('three/addons/tsl/display/FilmNode.js'),
+]);
+
+// Store references for live param updates:
+// (declared above in the method, before TSL code)
+const { uniform, Fn, float, vec4, uv, smoothstep, distance: dist2 } = TSL;
+
+// After bloom wiring (outputNode.add(bloomNode)), chain effects:
+
+// Chromatic Aberration
+this._tslChromaStrength = uniform(this._chromaStrength ?? 0.002);
+this._tslChromaEnabled  = uniform(this._chromaEnabled  ? 1.0 : 0.0);
+if (this._chromaEnabled) {
+  // Only wrap if enabled — can be toggled by rebuilding or by setting strength to 0
+  const chromaNode = chromaticAberration(
+    outputNode,
+    this._tslChromaStrength,
+    null,   // center defaults to (0.5, 0.5)
+    1.1,
+  );
+  // Store for toggling: set strength to 0 to disable without rebuild
+  this._tslChromaNode = chromaNode;
+  outputNode = chromaNode;
+}
+
+// Film Grain
+this._tslGrainIntensity = uniform(this._filmGrainIntensity ?? 0.08);
+if (this._filmGrainEnabled) {
+  const grainNode = film(outputNode, this._tslGrainIntensity);
+  this._tslGrainNode = grainNode;
+  outputNode = grainNode;
+}
+
+// Vignette (custom TSL Fn — no official VignetteNode in Three.js)
+// Uses uniform()'d offset and darkness so live updates don't need a rebuild.
+this._tslVigOffset   = uniform(this._vignetteOffset   ?? 1.0);
+this._tslVigDarkness = uniform(this._vignetteDarkness ?? 1.0);
+const VignetteFn = Fn(([texColor, vigOffset, vigDarkness]) => {
+  const uvCoord = uv();
+  const d = dist2(uvCoord, vec4(0.5, 0.5, 0, 0).xy);
+  const vignette = smoothstep(0.8, vigOffset.mul(0.799), d.mul(vigDarkness.add(vigOffset)));
+  return vec4(texColor.rgb.mul(vignette), texColor.a);
+});
+if (this._vignetteEnabled) {
+  const vigNode = VignetteFn(outputNode, this._tslVigOffset, this._tslVigDarkness);
+  this._tslVigNode = vigNode;
+  outputNode = vigNode;
+}
+```
+
+**Step 3 — Live uniform update in `_onPostFxChange`:**
+
+Because all three effects use `uniform()` nodes, param changes update live without a pipeline rebuild:
+
+```js
+if (detail.chroma) {
+  // WebGL:
+  if (pp.chromaPass) { ... }
+  // WebGPU:
+  if (pp._tslChromaStrength) pp._tslChromaStrength.value = detail.chroma.strength ?? pp._tslChromaStrength.value;
+  // Note: toggling enable/disable requires a pipeline REBUILD (call pp.rebuild()) because
+  // the node must be inserted/removed from the outputNode chain.
+}
+if (detail.grain) {
+  if (pp._tslGrainIntensity) pp._tslGrainIntensity.value = detail.grain.intensity ?? pp._tslGrainIntensity.value;
+}
+if (detail.vignette) {
+  if (pp._tslVigOffset)   pp._tslVigOffset.value   = detail.vignette.offset   ?? pp._tslVigOffset.value;
+  if (pp._tslVigDarkness) pp._tslVigDarkness.value = detail.vignette.darkness ?? pp._tslVigDarkness.value;
+}
+```
+
+> **TSL Toggle Caveat:** Unlike WebGL `ShaderPass` (where `pass.enabled = false` just skips it), TSL nodes are baked into the `outputNode` chain at build time. Toggling an effect on/off in WebGPU mode requires calling `pp.rebuild()` to reconstruct the pipeline with the node included or excluded. This is a ~100ms async operation. To avoid this for "disable", you can set `strength` / `intensity` to `0` instead of a hard toggle — this produces a passthrough visually without a rebuild.
+
+---
+
 # FILES CHANGED SUMMARY
 
 ## New Files
@@ -1959,29 +2110,50 @@ Phase 3 (Fog):
   10. ViewportEngine.js - improve _onFogChange (auto-color from gradient)
   TEST Phase 3
 
-Phase 4 (Polish):
-  11. ViewportEngine.js - renderer switch fallback for physical sky
-  12. PostProcessingPipeline.js - WebGPU GodraysNode attempt
-  13. HDRI mode cleanup (rotation, blur, intensity decoupling)
-  14. (Stretch) TSL Hosek-Wilkie port for WebGPU physical sky
-  TEST Phase 4
+Phase 6 (Post Processing Controls Panel) — DO THIS FIRST:
+  1.  Copy ChromaticAberrationNode.js + FilmNode.js into editor/libs/three/addons/tsl/display/
+  2.  PostProcessingPipeline.js - add ChromaticAberrationShader + chromaPass (WebGL)
+  3.  PostProcessingPipeline.js - add VignetteShader + vignettePass (WebGL)
+  4.  PostProcessingPipeline.js - add FilmGrainShader + filmGrainPass, animate time (WebGL)
+  5.  PostProcessingPipeline.js - wire TSL chromaticAberration + film + vignetteFn nodes (WebGPU)
+  6.  PostProcessingPipeline.js - add setToneMapping() method
+  7.  ViewportEngine.js - add _onPostFxChange() handler
+  8.  EnvironmentProperties.js - add _buildPostProcessingSection() and call from _build()
+  TEST Phase 6
+
+Phase 3 (Fog):
+  9.  EnvironmentProperties.js - revamp fog section (type selector, auto-color, color ctrl)
+  10. ViewportEngine.js - improve _onFogChange (auto-color from gradient)
+  TEST Phase 3
 
 Phase 5 (Lens Flare Revamp):
-  15. GradientSky.js - add _makeGlareTex, _makeHaloTex, _makeGhostTex, _makeStreakTex, _makeStarBurstTex helpers
-  16. GradientSky.js - rewrite _createWebGLFlares() to use new granular _p params
-  17. GradientSky._p - replace style-based params with granular params
-  18. EnvironmentProperties.js - rewrite Lens Flare sub-section in _buildSkySection()
-  19. EnvironmentProperties.js - update _fireSkyChange() to emit new lens flare fields
+  11. GradientSky.js - add _makeGlareTex, _makeHaloTex, _makeGhostTex, _makeStreakTex, _makeStarBurstTex
+  12. GradientSky.js - rewrite _createWebGLFlares() / _rebuildWebGLFlares() with dispose() + new params
+  13. GradientSky._p - replace style-based params with granular params
+  14. EnvironmentProperties.js - rewrite Lens Flare sub-section, add debounce for sliders
+  15. EnvironmentProperties.js - update _fireSkyChange() to emit new lens flare fields
   TEST Phase 5
 
-Phase 6 (Post Processing Controls Panel):
-  20. PostProcessingPipeline.js - add ChromaticAberrationShader + chromaPass
-  21. PostProcessingPipeline.js - add VignetteShader + vignettePass
-  22. PostProcessingPipeline.js - add FilmGrainShader + filmGrainPass (animate time in render loop)
-  23. PostProcessingPipeline.js - add setToneMapping() method
-  24. ViewportEngine.js - add _onPostFxChange() handler
-  25. EnvironmentProperties.js - add _buildPostProcessingSection() and call from _build()
-  TEST Phase 6
+Phase 1 (God Rays):
+  16. Create GodRays.js
+  17. GradientSky.js - add occluder material + onBeforeRender swap
+  18. PostProcessingPipeline.js - wire GodRays (build, update frame, resize, dispose, API)
+  19. ViewportEngine.js - add _onGodRaysChange listener + handler
+  20. EnvironmentProperties.js - add God Rays section
+  TEST Phase 1
+
+Phase 2 (Physical Sky):
+  21. Create PhysicalSky.js
+  22. EnvironmentProperties.js - Sky Type dropdown + Atmosphere sub-section
+  23. ViewportEngine.js - add physicalSky, route skyType, _activeSkyType
+  TEST Phase 2
+
+Phase 4 (Polish):
+  24. ViewportEngine.js - renderer switch fallback for physical sky
+  25. PostProcessingPipeline.js - WebGPU GodraysNode attempt
+  26. HDRI mode cleanup (rotation, blur, intensity decoupling)
+  27. (Stretch) TSL Hosek-Wilkie port for WebGPU physical sky
+  TEST Phase 4
 ```
 
 ---
