@@ -117,7 +117,7 @@ export class GridProperties {
       onChange: v => { s.divisions = Math.round(Math.max(1, v)); this._save(); } });
     this._addRow(gBody, 'Divisions', divInp, STD);
 
-    const sizeInp = numInput({ value: s.size, step: 1, min: 1, max: 1000, decimals: 1,
+    const sizeInp = numInput({ value: s.size, step: 1, min: 1, max: 100000, decimals: 1,
       onChange: v => { s.size = Math.max(1, v); this._save(); } });
     this._addRow(gBody, 'Size', sizeInp, STD);
 
@@ -130,7 +130,7 @@ export class GridProperties {
     this._addRow(gBody, 'Center Color', centColorSw.el, STD);
 
     // ── Infinite-only controls ────────────────────────────────────────────────
-    const cellInp = numInput({ value: s.cellSize ?? 4.0, step: 0.5, min: 0.5, max: 500, decimals: 2,
+    const cellInp = numInput({ value: s.cellSize ?? 4.0, step: 1, min: 0.5, max: 100000, decimals: 2,
       onChange: v => { s.cellSize = Math.max(0.5, v); this._save(); } });
     this._addRow(gBody, 'Cell Size', cellInp, INF);
 
@@ -143,7 +143,7 @@ export class GridProperties {
     this._addRow(gBody, 'Z Axis Color', zAxisSw.el, INF);
 
     // ── Checkered-only controls ───────────────────────────────────────────────
-    const chkSzInp = numInput({ value: s.checkerSize ?? 4.0, step: 0.5, min: 0.5, max: 500, decimals: 2,
+    const chkSzInp = numInput({ value: s.checkerSize ?? 4.0, step: 1, min: 0.5, max: 100000, decimals: 2,
       onChange: v => { s.checkerSize = Math.max(0.5, v); this._save(); } });
     this._addRow(gBody, 'Checker Size', chkSzInp, CHK);
 
