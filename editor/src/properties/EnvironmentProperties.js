@@ -198,19 +198,6 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Rotation', azimuthSlider.el));
 
-    // Sky dome geometry shape
-    const skyShapeSelect = select({
-      options: [
-        ['sphere', 'Sphere'],
-        ['cube',   'Cube'],
-      ],
-      value: ve?.gradientSky?._p?.skyShape ?? 'sphere',
-      onChange: (v) => {
-        window.__cyco?.gradientSky?.setSkyShape(v);
-      },
-    });
-    body.appendChild(row('Sky Shape', skyShapeSelect));
-
     // ── Exposure / Saturation / Contrast ────────────────────────────────────────
     const exposureSlider = slider({
       value: ve?.rendererManager?.renderer?.toneMappingExposure ?? 1.0,
