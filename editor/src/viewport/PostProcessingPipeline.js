@@ -34,6 +34,96 @@ import { SAOPass }         from 'three/addons/postprocessing/SAOPass.js';
 import { SSAOPass }        from 'three/addons/postprocessing/SSAOPass.js';
 import { FXAAShader }      from 'three/addons/shaders/FXAAShader.js';
 import { LUTCubeLoader }   from 'three/addons/loaders/LUTCubeLoader.js';
+import { GodRays }         from './GodRays.js';
+
+// ─── WebGL post-FX shader definitions ────────────────────────────────────────
+
+const ChromaticAberrationShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    strength: { value: 0.002 },
+    enabled:  { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    uniform float enabled;
+    varying vec2 vUv;
+    void main() {
+      if (enabled < 0.5) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 offset = (vUv - 0.5) * strength;
+      float r = texture2D(tDiffuse, vUv + offset).r;
+      float g = texture2D(tDiffuse, vUv        ).g;
+      float b = texture2D(tDiffuse, vUv - offset).b;
+      gl_FragColor = vec4(r, g, b, 1.0);
+    }
+  `,
+};
+
+const VignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    offset:   { value: 1.0 },
+    darkness: { value: 1.0 },
+    enabled:  { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float offset;
+    uniform float darkness;
+    uniform float enabled;
+    varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      if (enabled > 0.5) {
+        float dist = distance(vUv, vec2(0.5));
+        color.rgb *= smoothstep(0.8, offset * 0.799, dist * (darkness + offset));
+      }
+      gl_FragColor = color;
+    }
+  `,
+};
+
+const FilmGrainShader = {
+  uniforms: {
+    tDiffuse:  { value: null },
+    time:      { value: 0.0 },
+    intensity: { value: 0.1 },
+    enabled:   { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    uniform float intensity;
+    uniform float enabled;
+    varying vec2 vUv;
+    float rand(vec2 co) {
+      return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453);
+    }
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      if (enabled > 0.5) {
+        float grain = rand(vUv + vec2(time * 0.001)) * 2.0 - 1.0;
+        color.rgb += grain * intensity;
+      }
+      gl_FragColor = color;
+    }
+  `,
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export class PostProcessingPipeline {
   /**
@@ -153,6 +243,43 @@ export class PostProcessingPipeline {
     /** Bloom parameters persisted across pipeline rebuilds (shared by WebGL & TSL) */
     this._bloomParams = { enabled: true, strength: 0.8, radius: 0.4, threshold: 0.85 };
 
+    // ── Chromatic Aberration ──────────────────────────────────────────────────
+    /** @type {ShaderPass|null} */
+    this.chromaPass        = null;
+    this._chromaEnabled    = false;
+    this._chromaStrength   = 0.002;
+
+    // ── Vignette ─────────────────────────────────────────────────────────────
+    /** @type {ShaderPass|null} */
+    this.vignettePass       = null;
+    this._vignetteEnabled   = false;
+    this._vignetteOffset    = 1.0;
+    this._vignetteDarkness  = 1.0;
+
+    // ── Film Grain ───────────────────────────────────────────────────────────
+    /** @type {ShaderPass|null} */
+    this.filmGrainPass       = null;
+    this._filmGrainEnabled   = false;
+    this._filmGrainIntensity = 0.1;
+
+    // ── God Rays ──────────────────────────────────────────────────────────────
+    this.godRays         = new GodRays(viewportEngine);
+    this._godRaysEnabled = false;
+    this._godRaysParams  = { density: 0.96, weight: 0.40, decay: 0.90, exposure: 0.65, samples: 60 };
+
+    /**
+     * Live-update param store for TSL reference nodes (WebGPU post FX).
+     * Reference nodes read from this object every frame, so setting a property
+     * here is the only update needed — no uniform.needsUpdate required.
+     * @type {{ chromaStrength: number, grainIntensity: number, vigOffset: number, vigDarkness: number }}
+     */
+    this._pp = {
+      chromaStrength: 0.0,
+      grainIntensity: 0.0,
+      vigOffset:      1.0,
+      vigDarkness:    0.0,
+    };
+
     this._onVpReady           = this._onVpReady.bind(this);
     this._onRendererChanged   = this._onRendererChanged.bind(this);
     this._onTick              = this._onTick.bind(this);
@@ -161,6 +288,7 @@ export class PostProcessingPipeline {
     this._onDeselectAll       = this._onDeselectAll.bind(this);
     this._onHoverObject       = this._onHoverObject.bind(this);
     this._onPpSettings        = this._onPpSettings.bind(this);
+    this._onPostFxChange      = this._onPostFxChange.bind(this);
     this._onSceneChildAdded    = this._onSceneChildAdded.bind(this);
     this._onVpTool             = this._onVpTool.bind(this);
     this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
@@ -173,6 +301,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-deselect-all',            this._onDeselectAll);
     window.addEventListener('cyco-hover-object',            this._onHoverObject);
     window.addEventListener('cyco-pp-settings',             this._onPpSettings);
+    window.addEventListener('cyco-postfx-change',           this._onPostFxChange);
     window.addEventListener('cyco-vp-tool',                 this._onVpTool);
     window.addEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
   }
@@ -238,7 +367,26 @@ export class PostProcessingPipeline {
     // 5. OutputPass — applies tone mapping + sRGB output conversion
     this._composer.addPass(new OutputPass());
 
-    // 6. FXAA — must come AFTER OutputPass (operates on final LDR/sRGB image).
+    // 6. Chromatic Aberration — operates on the SDR/sRGB image after tone mapping.
+    this.chromaPass = new ShaderPass(ChromaticAberrationShader);
+    this.chromaPass.uniforms['enabled'].value  = this._chromaEnabled  ? 1.0 : 0.0;
+    this.chromaPass.uniforms['strength'].value = this._chromaStrength;
+    this._composer.addPass(this.chromaPass);
+
+    // 7. Vignette
+    this.vignettePass = new ShaderPass(VignetteShader);
+    this.vignettePass.uniforms['enabled'].value  = this._vignetteEnabled  ? 1.0 : 0.0;
+    this.vignettePass.uniforms['offset'].value   = this._vignetteOffset;
+    this.vignettePass.uniforms['darkness'].value = this._vignetteDarkness;
+    this._composer.addPass(this.vignettePass);
+
+    // 8. Film Grain — time is updated every tick in _onTick().
+    this.filmGrainPass = new ShaderPass(FilmGrainShader);
+    this.filmGrainPass.uniforms['enabled'].value   = this._filmGrainEnabled  ? 1.0 : 0.0;
+    this.filmGrainPass.uniforms['intensity'].value = this._filmGrainIntensity;
+    this._composer.addPass(this.filmGrainPass);
+
+    // 9. FXAA — must come AFTER OutputPass (operates on final LDR/sRGB image).
     this.fxaaPass = new ShaderPass(FXAAShader);
     this.fxaaPass.material.uniforms['resolution'].value.set(1 / (w * dpr), 1 / (h * dpr));
     this.fxaaPass.enabled = (this._aaMode === 'fxaa');
@@ -250,6 +398,12 @@ export class PostProcessingPipeline {
     this.lutPass.intensity = this._lutIntensity;
     if (this._lutTexture) this.lutPass.lut = this._lutTexture;
     this._composer.addPass(this.lutPass);
+
+    // 8. God Rays — additive screen-space radial blur, rendered over the final LDR frame.
+    this.godRays.build(renderer, w, h);
+    this.godRays.setEnabled(this._godRaysEnabled);
+    this.godRays.setParams(this._godRaysParams);
+    this._composer.addPass(this.godRays.pass);
 
     // Apply AO debug state: in non-composite output modes, bloom/outlines must be
     // disabled so the raw debug buffers aren't overwhelmed by bloom/outlines.
@@ -290,6 +444,10 @@ export class PostProcessingPipeline {
     this.smaaPass    = null;
     this.lutPass     = null;
     this.aoPass      = null;
+    this.chromaPass    = null;
+    this.vignettePass  = null;
+    this.filmGrainPass = null;
+    this.godRays?.dispose();
     this.engine.setPipelineActive(false);
   }
 
@@ -327,11 +485,14 @@ export class PostProcessingPipeline {
       const { RenderPipeline, TSL } = webgpuMod;
       const {
         pass, mrt, normalView, output,
-        vec3, vec4,
+        vec2, vec3, vec4, float,
+        Fn, uv, smoothstep, reference,
       } = TSL;
-      const [{ ao }, { bloom: bloomFn }] = await Promise.all([
+      const [{ ao }, { bloom: bloomFn }, { chromaticAberration }, { film }] = await Promise.all([
         import('three/addons/tsl/display/GTAONode.js'),
         import('three/addons/tsl/display/BloomNode.js'),
+        import('three/addons/tsl/display/ChromaticAberrationNode.js'),
+        import('three/addons/tsl/display/FilmNode.js'),
       ]);
 
       this._tslPipeline = new RenderPipeline(renderer);
@@ -405,6 +566,37 @@ export class PostProcessingPipeline {
         const initStrength = (bp.enabled !== false) ? (bp.strength ?? 0.8) : 0;
         this._tslBloomNode = bloomFn(sceneColorNode, initStrength, bp.radius ?? 0.4, bp.threshold ?? 0.85);
         outputNode = outputNode.add(this._tslBloomNode);
+      }
+
+      // ── Post FX: Chromatic Aberration, Film Grain, Vignette (WebGPU) ──────────
+      // Use reference() nodes so live updates to this._pp propagate every frame
+      // without any uniform.needsUpdate call or pipeline rebuild.
+      {
+        const pp = this._pp;
+        pp.chromaStrength = this._chromaEnabled   ? (this._chromaStrength   ?? 0.002) : 0.0;
+        pp.grainIntensity = this._filmGrainEnabled ? (this._filmGrainIntensity ?? 0.1)  : 0.0;
+        pp.vigOffset      = this._vignetteOffset   ?? 1.0;
+        pp.vigDarkness    = this._vignetteEnabled  ? (this._vignetteDarkness ?? 1.0)   : 0.0;
+
+        const chromaRef = reference('chromaStrength', 'float', pp);
+        const grainRef  = reference('grainIntensity',  'float', pp);
+        const vigOffRef = reference('vigOffset',       'float', pp);
+        const vigDrkRef = reference('vigDarkness',     'float', pp);
+
+        // Chromatic Aberration (native TSL node)
+        outputNode = chromaticAberration(outputNode, chromaRef, null, 1.1);
+
+        // Film Grain (native TSL node — uses built-in `time` node, no manual tick needed)
+        outputNode = film(outputNode, grainRef);
+
+        // Vignette (custom TSL Fn — no official VignetteNode in Three.js r184)
+        const VignetteFn = Fn(([texColor, vigOffset, vigDarkness]) => {
+          const uvCoord  = uv();
+          const dist     = uvCoord.sub(vec2(0.5, 0.5)).length();
+          const vignette = smoothstep(float(0.8), vigOffset.mul(0.799), dist.mul(vigDarkness.add(vigOffset)));
+          return vec4(texColor.rgb.mul(vignette), texColor.a);
+        });
+        outputNode = VignetteFn(outputNode, vigOffRef, vigDrkRef);
       }
 
       this._tslPipeline.outputNode = outputNode;
@@ -554,6 +746,18 @@ export class PostProcessingPipeline {
     if (this.lutPass) this.lutPass.intensity = v;
   }
 
+  // ─── God Rays API ─────────────────────────────────────────────────────────────
+
+  setGodRaysEnabled(v) {
+    this._godRaysEnabled = !!v;
+    this.godRays?.setEnabled(v);
+  }
+
+  updateGodRaysParams(opts) {
+    Object.assign(this._godRaysParams, opts);
+    this.godRays?.setParams(opts);
+  }
+
   /**
    * Load a .cube LUT file and apply it to the LUT pass.
    * @param {File} file - A .cube file from an <input type="file"> element.
@@ -578,6 +782,26 @@ export class PostProcessingPipeline {
   /** @deprecated Use setAntiAliasMode('fxaa') / setAntiAliasMode('none') */
   setFxaaEnabled(v) {
     this.setAntiAliasMode(v ? 'fxaa' : 'none');
+  }
+
+  // ─── Tone Mapping API ─────────────────────────────────────────────────────────
+
+  /**
+   * Set the renderer tone mapping mode.
+   * @param {'aces'|'agx'|'reinhard'|'cineon'|'linear'|'none'} mode
+   */
+  setToneMapping(mode) {
+    const renderer = this.engine?.rendererManager?.renderer;
+    if (!renderer) return;
+    const map = {
+      aces:     THREE.ACESFilmicToneMapping,
+      agx:      THREE.AgXToneMapping,
+      reinhard: THREE.ReinhardToneMapping,
+      cineon:   THREE.CineonToneMapping,
+      linear:   THREE.LinearToneMapping,
+      none:     THREE.NoToneMapping,
+    };
+    renderer.toneMapping = map[mode] ?? THREE.ACESFilmicToneMapping;
   }
 
   // ─── Ambient Occlusion API ───────────────────────────────────────────────────
@@ -880,6 +1104,19 @@ export class PostProcessingPipeline {
         'color:#aaa'
       );
     }
+    // Animate film grain — update time uniform so the noise pattern changes each frame.
+    if (this.filmGrainPass) {
+      this.filmGrainPass.uniforms['time'].value = performance.now();
+    }
+
+    // Update god rays occluder pass each frame (runs BEFORE composer.render)
+    if (this._godRaysEnabled) {
+      const ve      = this.engine;
+      const skyObj  = ve?.gradientSky;
+      const sunDir  = skyObj?._p?.sunDir;
+      if (sunDir && ve.camera) this.godRays.update(ve.camera, sunDir);
+    }
+
     // Keep SSAO camera uniforms current each frame (projection matrix can change on FOV/aspect updates)
     if (this.aoPass instanceof SSAOPass && this.aoPass.ssaoMaterial) {
       const cam = this.engine.camera;
@@ -936,6 +1173,8 @@ export class PostProcessingPipeline {
     if (this.smaaPass) {
       this.smaaPass.setSize(w * dpr, h * dpr);
     }
+    // God rays occluder render target is 1/4 resolution — resize separately.
+    this.godRays?.resize(w, h);
   }
 
   _onSelectNode(event) {
@@ -1001,6 +1240,106 @@ export class PostProcessingPipeline {
     }
   }
 
+  // ─── cyco-postfx-change handler ───────────────────────────────────────────
+
+  /**
+   * Handles the `cyco-postfx-change` event dispatched by EnvironmentProperties.
+   * Updates both the WebGL ShaderPass uniforms and the WebGPU _pp reference-node
+   * values. No pipeline rebuild is needed for any param change.
+   */
+  _onPostFxChange({ detail } = {}) {
+    if (!detail) return;
+
+    // ── Bloom ────────────────────────────────────────────────────────────────
+    if (detail.bloom) {
+      const b = detail.bloom;
+      if (this.bloomPass) {
+        if (b.enabled   !== undefined) this.bloomPass.enabled   = b.enabled;
+        if (b.strength  !== undefined) this.bloomPass.strength  = b.strength;
+        if (b.radius    !== undefined) this.bloomPass.radius    = b.radius;
+        if (b.threshold !== undefined) this.bloomPass.threshold = b.threshold;
+      }
+      if (this._tslBloomNode) {
+        if (b.enabled !== undefined) {
+          this._bloomParams.enabled = b.enabled;
+          this._tslBloomNode.strength.value = b.enabled
+            ? (this._bloomParams.strength ?? 0.8)
+            : 0;
+        }
+        if (b.strength  !== undefined && this._bloomParams.enabled !== false) {
+          this._bloomParams.strength = b.strength;
+          this._tslBloomNode.strength.value = b.strength;
+        }
+        if (b.radius    !== undefined) { this._bloomParams.radius    = b.radius;    this._tslBloomNode.radius.value    = b.radius; }
+        if (b.threshold !== undefined) { this._bloomParams.threshold = b.threshold; this._tslBloomNode.threshold.value = b.threshold; }
+      }
+    }
+
+    // ── Chromatic Aberration ─────────────────────────────────────────────────
+    if (detail.chroma) {
+      const c = detail.chroma;
+      if (c.enabled  !== undefined) {
+        this._chromaEnabled = c.enabled;
+        if (this.chromaPass) this.chromaPass.uniforms['enabled'].value = c.enabled ? 1.0 : 0.0;
+        // WebGPU: set to 0 to passthrough without rebuild
+        this._pp.chromaStrength = c.enabled ? (this._chromaStrength ?? 0.002) : 0.0;
+      }
+      if (c.strength !== undefined) {
+        this._chromaStrength = c.strength;
+        if (this.chromaPass) this.chromaPass.uniforms['strength'].value = c.strength;
+        if (this._chromaEnabled) this._pp.chromaStrength = c.strength;
+      }
+    }
+
+    // ── Vignette ─────────────────────────────────────────────────────────────
+    if (detail.vignette) {
+      const v = detail.vignette;
+      if (v.enabled  !== undefined) {
+        this._vignetteEnabled = v.enabled;
+        if (this.vignettePass) this.vignettePass.uniforms['enabled'].value = v.enabled ? 1.0 : 0.0;
+        this._pp.vigDarkness = v.enabled ? (this._vignetteDarkness ?? 1.0) : 0.0;
+      }
+      if (v.offset   !== undefined) {
+        this._vignetteOffset = v.offset;
+        if (this.vignettePass) this.vignettePass.uniforms['offset'].value = v.offset;
+        this._pp.vigOffset = v.offset;
+      }
+      if (v.darkness !== undefined) {
+        this._vignetteDarkness = v.darkness;
+        if (this.vignettePass) this.vignettePass.uniforms['darkness'].value = v.darkness;
+        if (this._vignetteEnabled) this._pp.vigDarkness = v.darkness;
+      }
+    }
+
+    // ── Film Grain ───────────────────────────────────────────────────────────
+    if (detail.grain) {
+      const g = detail.grain;
+      if (g.enabled   !== undefined) {
+        this._filmGrainEnabled = g.enabled;
+        if (this.filmGrainPass) this.filmGrainPass.uniforms['enabled'].value = g.enabled ? 1.0 : 0.0;
+        this._pp.grainIntensity = g.enabled ? (this._filmGrainIntensity ?? 0.1) : 0.0;
+      }
+      if (g.intensity !== undefined) {
+        this._filmGrainIntensity = g.intensity;
+        if (this.filmGrainPass) this.filmGrainPass.uniforms['intensity'].value = g.intensity;
+        if (this._filmGrainEnabled) this._pp.grainIntensity = g.intensity;
+      }
+    }
+
+    // ── Tone Mapping ─────────────────────────────────────────────────────────
+    if (detail.toneMapping) {
+      this.setToneMapping(detail.toneMapping);
+    }
+
+    // ── LUT ──────────────────────────────────────────────────────────────────
+    if (detail.lut) {
+      const l = detail.lut;
+      if (l.enabled   !== undefined) this.setLutEnabled(l.enabled);
+      if (l.intensity !== undefined) this.setLutIntensity(l.intensity);
+      if (l.file)                    this.loadLutFromFile(l.file);
+    }
+  }
+
   // ─── Disposal ─────────────────────────────────────────────────────────────
 
   dispose() {
@@ -1013,7 +1352,9 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-deselect-all',      this._onDeselectAll);
     window.removeEventListener('cyco-hover-object',      this._onHoverObject);
     window.removeEventListener('cyco-pp-settings',       this._onPpSettings);
+    window.removeEventListener('cyco-postfx-change',     this._onPostFxChange);
     window.removeEventListener('cyco-vp-tool',                 this._onVpTool);
     window.removeEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
   }
 }
+

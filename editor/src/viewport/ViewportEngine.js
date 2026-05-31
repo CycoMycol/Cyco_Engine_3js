@@ -24,6 +24,7 @@ import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { VolumetricClouds } from './VolumetricClouds.js';
 import { GradientSky }     from './GradientSky.js';
+import { PhysicalSky }     from './PhysicalSky.js';
 import { ContactShadows }  from './ContactShadows.js';
 
 /** Sentinel value: no active focus animation. */
@@ -88,6 +89,7 @@ export class ViewportEngine {
     this._onSceneSwitch         = this._onSceneSwitch.bind(this);
     this._onSkyChange           = this._onSkyChange.bind(this);
     this._onFogChange           = this._onFogChange.bind(this);
+    this._onGodRaysChange       = this._onGodRaysChange.bind(this);
     this._onEnvMapChange        = this._onEnvMapChange.bind(this);
     this._onEnvBgToggle         = this._onEnvBgToggle.bind(this);
     this._onBackgroundChange    = this._onBackgroundChange.bind(this);
@@ -106,6 +108,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
     window.addEventListener('cyco-sky-change',              this._onSkyChange);
     window.addEventListener('cyco-fog-change',              this._onFogChange);
+    window.addEventListener('cyco-godrays-change',          this._onGodRaysChange);
     window.addEventListener('cyco-env-map-change',          this._onEnvMapChange);
     window.addEventListener('cyco-env-background-toggle',   this._onEnvBgToggle);
     window.addEventListener('cyco-background-change',       this._onBackgroundChange);
@@ -170,6 +173,10 @@ export class ViewportEngine {
     // Gradient sky + sun/moon system
     this.gradientSky = new GradientSky(this);
 
+    // Physical sky (Hosek-Wilkie — WebGL only)
+    this.physicalSky    = new PhysicalSky(this);
+    this._activeSkyType = 'gradient';
+
     // Contact shadow system (ground-plane fake shadows)
     this.contactShadows = new ContactShadows();
     this.contactShadows.init(this.rendererManager.renderer, this.scene);
@@ -229,27 +236,30 @@ export class ViewportEngine {
     if (newScene) this.replaceScene(newScene);
   }
 
-  /** Apply gradient sky + sun/moon to the active scene. */
+  /** Apply sky to the active scene (routes between gradient / physical sky). */
   _onSkyChange({ detail } = {}) {
     const {
       enabled,
+      skyType = 'gradient',
       elevation = 30, azimuth = 180,
       colorStops, opacityStops,
       showSun = true, sunColor, sunGlowStrength,
       showMoon = true, moonColor, moonGlowStrength,
       exposure, saturation, contrast,
+      turbidity, rayleigh, mieDirectionalG, mieCoefficient,
       lensflareEnabled, lensflareSize, lensflareOpacity,
       lensflareStyle, lensflareColor, lensflareColorIntensity, lensflareIntensity, lensflareGhostCount, lensflareStreakLength, lensflareBrightness,
       lensflareRingThickness, lensflareRingFill, lensflareRingSize, lensflareRingOpacity,
     } = detail ?? {};
     console.log(
-      `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  elevation=${elevation}°  azimuth=${azimuth}°` +
-      `  exposure=${exposure ?? 'n/a'}  saturation=${saturation ?? 'n/a'}  showSun=${showSun}  showMoon=${showMoon}`
+      `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  skyType=${skyType}  elevation=${elevation}°  azimuth=${azimuth}°` +
+      `  exposure=${exposure ?? 'n/a'}  saturation=${saturation ?? 'n/a'}`
     );
     if (!this.scene) return;
 
     if (!enabled) {
       this.gradientSky?.setEnabled(false);
+      this.physicalSky?.setEnabled(false);
       this.skyEnabled = false;
       // Only fall back to solid colour when the current bg type isn't gradient/hdri
       if (this._bgType !== 'gradient' && this._bgType !== 'hdri') {
@@ -260,45 +270,68 @@ export class ViewportEngine {
       return;
     }
 
-    const params = { elevation, azimuth, showSun, showMoon };
-    if (colorStops)               params.colorStops       = colorStops;
-    if (opacityStops)             params.opacityStops     = opacityStops;
-    if (sunColor)                 params.sunColor         = sunColor;
-    if (sunGlowStrength !== undefined) params.sunGlowStrength = sunGlowStrength;
-    if (moonColor)                params.moonColor        = moonColor;
-    if (moonGlowStrength !== undefined) params.moonGlowStrength = moonGlowStrength;
-    if (exposure !== undefined)   params.exposure         = exposure;
-    if (saturation !== undefined) params.saturation       = saturation;
-    if (contrast !== undefined)   params.contrast         = contrast;
-    if (lensflareEnabled      !== undefined) params.lensflareEnabled      = lensflareEnabled;
-    if (lensflareSize         !== undefined) params.lensflareSize         = lensflareSize;
-    if (lensflareOpacity      !== undefined) params.lensflareOpacity      = lensflareOpacity;
-    if (lensflareStyle        !== undefined) params.lensflareStyle        = lensflareStyle;
-    if (lensflareIntensity    !== undefined) params.lensflareIntensity    = lensflareIntensity;
-    if (lensflareGhostCount   !== undefined) params.lensflareGhostCount   = lensflareGhostCount;
-    if (lensflareStreakLength  !== undefined) params.lensflareStreakLength  = lensflareStreakLength;
-    if (lensflareBrightness   !== undefined) params.lensflareBrightness   = lensflareBrightness;
-    if (lensflareColor) params.lensflareColor = lensflareColor;
-    if (lensflareColorIntensity !== undefined) params.lensflareColorIntensity = lensflareColorIntensity;
-    if (lensflareRingThickness  !== undefined) params.lensflareRingThickness  = lensflareRingThickness;
-    if (lensflareRingFill        !== undefined) params.lensflareRingFill        = lensflareRingFill;
-    if (lensflareRingSize        !== undefined) params.lensflareRingSize        = lensflareRingSize;
-    if (lensflareRingOpacity     !== undefined) params.lensflareRingOpacity     = lensflareRingOpacity;
+    // Physical sky is WebGL-only — fall back to gradient when running WebGPU
+    const isWebGPU = this.rendererManager?.renderer?.isWebGPURenderer;
+    const resolvedType = (skyType === 'physical' && isWebGPU) ? 'gradient' : skyType;
+    this._activeSkyType = resolvedType;
 
-    this.gradientSky.setEnabled(true);
-    this.gradientSky.setParams(params);
+    // Disable whichever sky is NOT active
+    if (resolvedType !== 'gradient') this.gradientSky?.setEnabled(false);
+    if (resolvedType !== 'physical') this.physicalSky?.setEnabled(false);
+
+    if (resolvedType === 'physical') {
+      // ── Physical (Hosek-Wilkie) sky ─────────────────────────────────────────
+      const physParams = { elevation, azimuth, showSun, exposure };
+      if (turbidity       !== undefined) physParams.turbidity       = turbidity;
+      if (rayleigh        !== undefined) physParams.rayleigh        = rayleigh;
+      if (mieDirectionalG !== undefined) physParams.mieDirectionalG = mieDirectionalG;
+      if (mieCoefficient  !== undefined) physParams.mieCoefficient  = mieCoefficient;
+
+      this.physicalSky.setEnabled(true);
+      this.physicalSky.setParams(physParams);
+
+    } else {
+      // ── Gradient sky (default) ──────────────────────────────────────────────
+      const params = { elevation, azimuth, showSun, showMoon };
+      if (colorStops)               params.colorStops       = colorStops;
+      if (opacityStops)             params.opacityStops     = opacityStops;
+      if (sunColor)                 params.sunColor         = sunColor;
+      if (sunGlowStrength !== undefined) params.sunGlowStrength = sunGlowStrength;
+      if (moonColor)                params.moonColor        = moonColor;
+      if (moonGlowStrength !== undefined) params.moonGlowStrength = moonGlowStrength;
+      if (exposure !== undefined)   params.exposure         = exposure;
+      if (saturation !== undefined) params.saturation       = saturation;
+      if (contrast !== undefined)   params.contrast         = contrast;
+      if (lensflareEnabled      !== undefined) params.lensflareEnabled      = lensflareEnabled;
+      if (lensflareSize         !== undefined) params.lensflareSize         = lensflareSize;
+      if (lensflareOpacity      !== undefined) params.lensflareOpacity      = lensflareOpacity;
+      if (lensflareStyle        !== undefined) params.lensflareStyle        = lensflareStyle;
+      if (lensflareIntensity    !== undefined) params.lensflareIntensity    = lensflareIntensity;
+      if (lensflareGhostCount   !== undefined) params.lensflareGhostCount   = lensflareGhostCount;
+      if (lensflareStreakLength  !== undefined) params.lensflareStreakLength  = lensflareStreakLength;
+      if (lensflareBrightness   !== undefined) params.lensflareBrightness   = lensflareBrightness;
+      if (lensflareColor) params.lensflareColor = lensflareColor;
+      if (lensflareColorIntensity !== undefined) params.lensflareColorIntensity = lensflareColorIntensity;
+      if (lensflareRingThickness  !== undefined) params.lensflareRingThickness  = lensflareRingThickness;
+      if (lensflareRingFill       !== undefined) params.lensflareRingFill       = lensflareRingFill;
+      if (lensflareRingSize       !== undefined) params.lensflareRingSize       = lensflareRingSize;
+      if (lensflareRingOpacity    !== undefined) params.lensflareRingOpacity    = lensflareRingOpacity;
+
+      this.gradientSky.setEnabled(true);
+      this.gradientSky.setParams(params);
+
+      // Build a sky-gradient env map so metals/glass reflect the sky colours.
+      const renderer = this.rendererManager?.renderer;
+      if (colorStops && renderer) {
+        this._lastSkyColorStops = colorStops;
+        this._buildSkyEnvMap(colorStops, renderer);
+      }
+    }
 
     // Update renderer exposure from sky exposure slider
     const renderer = this.rendererManager?.renderer;
     if (renderer && exposure !== undefined) {
       renderer.toneMappingExposure = exposure;
-    }
-
-    // Build a sky-gradient env map so metals/glass reflect the sky colours.
-    // Only regenerate when the gradient colours actually change (not on every elevation tick).
-    if (colorStops && renderer) {
-      this._lastSkyColorStops = colorStops;
-      this._buildSkyEnvMap(colorStops, renderer);
     }
 
     // Sky mesh handles the background — clear any solid/colour background
@@ -315,18 +348,42 @@ export class ViewportEngine {
   /** Apply fog to the active scene. */
   _onFogChange({ detail } = {}) {
     if (!this.scene) return;
-    const { type, color = '#aaaaaa', near = 1, far = 1000, density = 0.002 } = detail ?? {};
-    console.log(
-      `[CYCO:ENV] cyco-fog-change  type=${type ?? 'none'}  color=${color}  near=${near}  far=${far}  density=${density}`
-    );
-    const c = new THREE.Color(color);
-    if (type === 'linear') {
-      this.scene.fog = new THREE.Fog(c, near, far);
-    } else if (type === 'exp2') {
-      this.scene.fog = new THREE.FogExp2(c, density);
-    } else {
-      this.scene.fog = null;
+    const {
+      type      = 'none',
+      color     = '#aaaaaa',
+      near      = 1,
+      far       = 1000,
+      density   = 0.0002,
+      autoColor = false,
+    } = detail ?? {};
+
+    // Auto-color: sample the horizon from the gradient sky texture
+    let fogColor = color;
+    if (autoColor) {
+      const data = this.gradientSky?._gradientTex?.image?.data;
+      if (data) {
+        const idx = Math.floor(0.48 * (data.length / 4)) * 4;
+        const r = data[idx], g = data[idx + 1], b = data[idx + 2];
+        fogColor = `rgb(${r},${g},${b})`;
+      }
     }
+
+    console.log(
+      `[CYCO:ENV] cyco-fog-change  type=${type}  color=${fogColor}  near=${near}  far=${far}  density=${density}  auto=${autoColor}`
+    );
+    const c = new THREE.Color(fogColor);
+    if      (type === 'linear') this.scene.fog = new THREE.Fog(c, near, far);
+    else if (type === 'exp2')   this.scene.fog = new THREE.FogExp2(c, density);
+    else                        this.scene.fog = null;
+  }
+
+  /** Enable/disable god rays and update parameters. */
+  _onGodRaysChange({ detail } = {}) {
+    const pp = window.__cyco?.postPipeline;
+    if (!pp) return;
+    const { enabled, ...params } = detail ?? {};
+    if (enabled !== undefined) pp.setGodRaysEnabled(enabled);
+    if (Object.keys(params).length) pp.updateGodRaysParams(params);
   }
 
   /** Load and apply an HDR/EXR environment map. */
@@ -615,7 +672,12 @@ export class ViewportEngine {
 
     if (d.gridVisible === false) return;
 
-    if (newStyle === 'infinite') {
+    // TSL-based grids require WebGPU rendering. MeshBasicNodeMaterial has no
+    // GLSL strings and will crash WebGLProgram compilation. Fall through to the
+    // standard GridHelper when the active renderer is not WebGPU.
+    const _tslOk = this.rendererManager?.activeType === 'webgpu';
+
+    if (newStyle === 'infinite' && _tslOk) {
       const gen = this._gridGen;
       this._makeInfiniteGrid(d).then(mesh => {
         if (this._gridGen !== gen || !mesh || !this.scene) return;
@@ -624,7 +686,7 @@ export class ViewportEngine {
         this.scene.add(mesh);
       });
 
-    } else if (newStyle === 'checkered' || newStyle === 'checkered-infinite') {
+    } else if ((newStyle === 'checkered' || newStyle === 'checkered-infinite') && _tslOk) {
       const gen = this._gridGen;
       this._makeCheckerGrid(d).then(mesh => {
         if (this._gridGen !== gen || !mesh || !this.scene) return;
@@ -1390,6 +1452,8 @@ export class ViewportEngine {
 
     // Gradient sky follows camera
     this.gradientSky?.update();
+    // Physical sky follows camera
+    this.physicalSky?.update();
 
     // Contact shadows — renders depth pass + blur before main frame
     if (_D && this.contactShadows) {
@@ -1693,6 +1757,24 @@ export class ViewportEngine {
       this.gradientSky.setEnabled(false);
       this.gradientSky.setEnabled(true);
     }
+    if (this.skyEnabled && this._activeSkyType === 'physical' && this.physicalSky) {
+      this.physicalSky.setEnabled(false);
+      this.physicalSky.setEnabled(true);
+    }
+
+    // Rebuild grid: TSL grids (infinite/checkered) use MeshBasicNodeMaterial which
+    // is WebGPU-only. Rebuild so the correct material type is used for the new renderer.
+    {
+      const gridDefaults = { divisions: 20, size: 2000, gridColor: '#444444',
+        centerColor: '#888888', opacity: 1.0, gridVisible: true, axesVisible: true,
+        style: 'standard', cellSize: 100, checkerSize: 100 };
+      try {
+        const saved = JSON.parse(localStorage.getItem('cyco-grid-settings') ?? '{}');
+        this._onGridSettings({ detail: { ...gridDefaults, ...saved } });
+      } catch (_) {
+        this._onGridSettings({ detail: gridDefaults });
+      }
+    }
 
     // TransformControls will re-wire via its own cyco-renderer-changed listener
   }
@@ -1721,6 +1803,7 @@ export class ViewportEngine {
     window.removeEventListener('cyco-scene-switch',             this._onSceneSwitch);
     window.removeEventListener('cyco-sky-change',               this._onSkyChange);
     window.removeEventListener('cyco-fog-change',               this._onFogChange);
+    window.removeEventListener('cyco-godrays-change',           this._onGodRaysChange);
     window.removeEventListener('cyco-env-map-change',           this._onEnvMapChange);
     window.removeEventListener('cyco-env-background-toggle',    this._onEnvBgToggle);
     window.removeEventListener('cyco-env-preset',               this._onEnvPreset);
@@ -1732,6 +1815,10 @@ export class ViewportEngine {
     window.removeEventListener('cyco-loading-error',            this._onLoadingError);
     clearTimeout(this._loadingHideTimer);
     this._loadingOverlay?.remove();
+
+    // Dispose sky systems
+    this.gradientSky?.dispose();
+    this.physicalSky?.dispose();
 
     // Dispose scene objects
     this.contactShadows?.dispose();

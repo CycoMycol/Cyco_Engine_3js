@@ -39,7 +39,9 @@ export class EnvironmentProperties {
     this._buildCloudSection(root);
     this._buildLowCloudsSection(root);
     this._buildFogSection(root);
+    this._buildGodRaysSection(root);
     this._buildEnvMapSection(root);
+    this._buildPostProcessingSection(root);
 
     return root;
   }
@@ -174,6 +176,25 @@ export class EnvironmentProperties {
     this._skyEnabledCb = enabledCb;
     body.appendChild(row('Show Sky', enabledCb));
 
+    // ── Sky Type dropdown ─────────────────────────────────────────────────────
+    const skyTypeSelect = select({
+      options: [
+        ['gradient', 'Gradient Sky'],
+        ['physical', 'Physical Sky (WebGL only)'],
+      ],
+      value: ve?._activeSkyType ?? 'gradient',
+      onChange: () => {
+        const t = skyTypeSelect.value;
+        atmHdr.style.display  = t === 'physical' ? '' : 'none';
+        atmBody.style.display = t === 'physical' ? '' : 'none';
+        gradHdr.style.display  = t === 'gradient' ? '' : 'none';
+        gradBody.style.display = t === 'gradient' ? '' : 'none';
+        _fire(true);
+      },
+    });
+    this._skyTypeSelect = skyTypeSelect;
+    body.appendChild(row('Sky Type', skyTypeSelect));
+
     // Day/Night slider: 0 = night (elevation -5), 1 = midday (elevation 70)
     const dayNightSlider = slider({
       value: 0.47, min: 0, max: 1, step: 0.01,
@@ -218,7 +239,32 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Contrast', contrastSlider.el));
 
-    // ── Sky gradient (collapsible) ───────────────────────────────────────────
+    // ── Atmosphere sub-section (Physical Sky only — Hosek-Wilkie params) ────
+    const atmHdr = document.createElement('div');
+    atmHdr.style.cssText =
+      'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
+      'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
+      'border-top:1px solid rgba(255,255,255,0.04);display:none;';
+    atmHdr.textContent = 'Atmosphere';
+    body.appendChild(atmHdr);
+
+    const atmBody = document.createElement('div');
+    atmBody.style.display = 'none';
+
+    const turbiditySlider = slider({ value: ve?.physicalSky?._p?.turbidity       ?? 2.0,  min: 1,   max: 20,   step: 0.1,   onChange: () => _fire() });
+    const rayleighSlider  = slider({ value: ve?.physicalSky?._p?.rayleigh        ?? 1.0,  min: 0,   max: 4,    step: 0.05,  onChange: () => _fire() });
+    const mieGSlider      = slider({ value: ve?.physicalSky?._p?.mieDirectionalG ?? 0.8,  min: 0,   max: 0.99, step: 0.01,  onChange: () => _fire() });
+    const mieCSlider      = slider({ value: ve?.physicalSky?._p?.mieCoefficient  ?? 0.005,min: 0,   max: 0.1,  step: 0.001, onChange: () => _fire() });
+
+    atmBody.appendChild(row('Turbidity (Haze)',    turbiditySlider.el));
+    atmBody.appendChild(row('Rayleigh (Blue Sky)', rayleighSlider.el));
+    atmBody.appendChild(row('Mie Anisotropy',      mieGSlider.el));
+    atmBody.appendChild(row('Mie Coefficient',     mieCSlider.el));
+    body.appendChild(atmBody);
+
+    this._atmControls = { turbiditySlider, rayleighSlider, mieGSlider, mieCSlider };
+
+    // ── Sky gradient (collapsible) ────────────────────────────────────────
     const gradHdr = document.createElement('div');
     gradHdr.style.cssText =
       'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
@@ -232,6 +278,10 @@ export class EnvironmentProperties {
     gradHdr.appendChild(document.createTextNode('Sky Colours'));
     body.appendChild(gradHdr);
 
+    // gradBody wraps gradient editor so skyTypeSelect can show/hide it
+    const gradBody = document.createElement('div');
+    body.appendChild(gradBody);
+
     // Read back current gradient if sky is already active
     const initGrad = ve?.gradientSky?.getGradient();
     const gradEditor = new GradientEditor({
@@ -239,7 +289,7 @@ export class EnvironmentProperties {
       onChange: () => _fire(true),
     });
     gradEditor.element.style.padding = '0 4px 4px';
-    body.appendChild(gradEditor.element);
+    gradBody.appendChild(gradEditor.element);
 
     gradHdr.addEventListener('click', () => {
       const open = gradEditor.element.style.display !== 'none';
@@ -248,6 +298,8 @@ export class EnvironmentProperties {
     });
 
     // ── Helper: sub-section collapsible header ───────────────────────────────
+    // Sub-sections (Sun, Moon, Lens Flare) are gradient-sky-only, so they are
+    // appended inside gradBody so they hide when switching to Physical Sky.
     const _subSection = (label) => {
       const hdr = document.createElement('div');
       hdr.style.cssText =
@@ -266,8 +318,8 @@ export class EnvironmentProperties {
         arrow.textContent = open ? '▸' : '▾';
         rows.forEach(r => { r.style.display = open ? 'none' : ''; });
       });
-      body.appendChild(hdr);
-      return { addRow: (r) => { rows.push(r); body.appendChild(r); } };
+      gradBody.appendChild(hdr);
+      return { addRow: (r) => { rows.push(r); gradBody.appendChild(r); } };
     };
 
     // ── Sun controls ────────────────────────────────────────────────────────
@@ -310,125 +362,46 @@ export class EnvironmentProperties {
     });
     moonSec.addRow(row('Glow', moonGlowSlider.el));
 
-    // ── Lens Flare ──────────────────────────────────────────────────────────
-    const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: () => _fire() });
-
+    // ── Lens Flare (Phase 5 granular controls) ───────────────────────────────
     const flareSec = _subSection('Lens Flare');
 
-    flareSec.addRow(row('Enable', lensflareEnabledCb));
-
-    const lensflareStyleSelect = select({
-      options: [
-        ['classic',    'Classic'   ],
-        ['natural',    'Natural'   ],
-        ['cinematic',  'Cinematic' ],
-        ['anamorphic', 'Anamorphic'],
-        ['subtle',     'Subtle'    ],
-      ],
-      value: _skyP?.lensflareStyle ?? 'classic',
-      onChange: () => { _updateFlareStyleRows(); _fire(); },
-    });
-    flareSec.addRow(row('Style', lensflareStyleSelect));
-
-    const lensflareColorSw = colorSwatch({
-      color: _skyP ? ('#' + (_skyP.lensflareColor?.getHexString?.() ?? 'fff8e7')) : '#fff8e7',
+    const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: () => _fire() });
+    const opacitySlider      = slider({ value: _skyP?.lensflareOpacity      ?? 0.7,  min: 0,  max: 1,   step: 0.01, onChange: () => _fire() });
+    const glareSizeSlider    = slider({ value: _skyP?.lensflareGlareSize    ?? 0.4,  min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
+    const starPointsSlider   = slider({ value: _skyP?.lensflareStarPoints   ?? 6,    min: 0,  max: 12,  step: 1,    onChange: () => _fire() });
+    const flareSizeSlider    = slider({ value: _skyP?.lensflareFlareSize    ?? 0.25, min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
+    const flareSpeedSlider   = slider({ value: _skyP?.lensflareFlareSpeed   ?? 0.0,  min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
+    const haloScaleSlider    = slider({ value: _skyP?.lensflareHaloScale    ?? 0.5,  min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
+    const ghostScaleSlider   = slider({ value: _skyP?.lensflareGhostScale   ?? 0.3,  min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
+    const colorGainSw        = colorSwatch({
+      color: _skyP ? ('#' + (_skyP.lensflareColorGain?.getHexString?.() ?? 'fff8e0')) : '#fff8e0',
       onChange: () => _fire(),
     });
-    flareSec.addRow(row('Color', lensflareColorSw.el));
-
-    const lensflareColorIntensitySlider = slider({
-      value: _skyP?.lensflareColorIntensity ?? 1.5, min: 0, max: 5, step: 0.1,
+    const flareShapeSelect   = select({
+      options: [['0', 'Circular'], ['1', 'Oval'], ['2', 'Streak']],
+      value: String(_skyP?.lensflareFlareShape ?? 0),
       onChange: () => _fire(),
     });
-    flareSec.addRow(row('Color Intensity', lensflareColorIntensitySlider.el));
+    const secondaryGhostsCb  = checkbox({ checked: _skyP?.lensflareSecondaryGhosts   ?? true,  onChange: () => _fire() });
+    const addStreaksCb        = checkbox({ checked: _skyP?.lensflareAdditionalStreaks ?? false, onChange: () => _fire() });
+    const starBurstCb         = checkbox({ checked: _skyP?.lensflareStarBurst        ?? false, onChange: () => _fire() });
+    const anamorphicCb        = checkbox({ checked: _skyP?.lensflareAnamorphic       ?? false, onChange: () => _fire() });
 
-    const lensflareSizeSlider = slider({
-      value: _skyP?.lensflareSize ?? 150, min: 20, max: 500, step: 5,
-      onChange: () => _fire(),
-    });
-    const _sizeRow = row('Size', lensflareSizeSlider.el);
-    flareSec.addRow(_sizeRow);
+    flareSec.addRow(row('Enable',           lensflareEnabledCb));
+    flareSec.addRow(row('Opacity',          opacitySlider.el));
+    flareSec.addRow(row('Glare Size',       glareSizeSlider.el));
+    flareSec.addRow(row('Star Points',      starPointsSlider.el));
+    flareSec.addRow(row('Flare Size',       flareSizeSlider.el));
+    flareSec.addRow(row('Flare Speed',      flareSpeedSlider.el));
+    flareSec.addRow(row('Flare Shape',      flareShapeSelect));
+    flareSec.addRow(row('Halo Scale',       haloScaleSlider.el));
+    flareSec.addRow(row('Color Gain',       colorGainSw.el));
+    flareSec.addRow(row('Ghost Scale',      ghostScaleSlider.el));
+    flareSec.addRow(row('Secondary Ghosts', secondaryGhostsCb));
+    flareSec.addRow(row('Extra Streaks',    addStreaksCb));
+    flareSec.addRow(row('Star Burst',       starBurstCb));
+    flareSec.addRow(row('Anamorphic',       anamorphicCb));
 
-    const lensflareOpacitySlider = slider({
-      value: _skyP?.lensflareOpacity ?? 0.7, min: 0, max: 1, step: 0.05,
-      onChange: () => _fire(),
-    });
-    flareSec.addRow(row('Opacity', lensflareOpacitySlider.el));
-
-    // ── Per-style controls (shown/hidden based on selected style) ────────────
-    const lensflareIntensitySlider = slider({
-      value: _skyP?.lensflareIntensity ?? 1.0, min: 0.5, max: 3.0, step: 0.05,
-      onChange: () => _fire(),
-    });
-    const _intensityRow = row('Intensity', lensflareIntensitySlider.el);
-
-    const lensflareGhostCountSlider = slider({
-      value: _skyP?.lensflareGhostCount ?? 4, min: 2, max: 10, step: 1,
-      onChange: () => _fire(),
-    });
-    const _ghostRow = row('Ghost Count', lensflareGhostCountSlider.el);
-
-    const lensflareStreakLengthSlider = slider({
-      value: _skyP?.lensflareStreakLength ?? 1.0, min: 0.3, max: 3.0, step: 0.05,
-      onChange: () => _fire(),
-    });
-    const _streakRow = row('Streak Length', lensflareStreakLengthSlider.el);
-
-    const lensflareBrightnessSlider = slider({
-      value: _skyP?.lensflareBrightness ?? 1.2, min: 0.5, max: 2.5, step: 0.05,
-      onChange: () => _fire(),
-    });
-    const _brightnessRow = row('Brightness', lensflareBrightnessSlider.el);
-
-    const lensflareRingThicknessSlider = slider({
-      value: _skyP?.lensflareRingThickness ?? 0.12, min: 0.02, max: 0.50, step: 0.01,
-      onChange: () => _fire(),
-    });
-    const _ringThicknessRow = row('Ring Thickness', lensflareRingThicknessSlider.el);
-
-    const lensflareRingFillSlider = slider({
-      value: _skyP?.lensflareRingFill ?? 0, min: 0, max: 1, step: 0.05,
-      onChange: () => _fire(),
-    });
-    const _ringFillRow = row('Ring Fill', lensflareRingFillSlider.el);
-
-    const lensflareRingSizeSlider = slider({
-      value: _skyP?.lensflareRingSize ?? 40, min: 5, max: 200, step: 5,
-      onChange: () => _fire(),
-    });
-    const _ringSizeRow = row('Ring Size', lensflareRingSizeSlider.el);
-
-    const lensflareRingOpacitySlider = slider({
-      value: _skyP?.lensflareRingOpacity ?? 0.7, min: 0, max: 1, step: 0.05,
-      onChange: () => _fire(),
-    });
-    const _ringOpacityRow = row('Ring Opacity', lensflareRingOpacitySlider.el);
-
-    // Add all per-style rows to section (initially hidden)
-    flareSec.addRow(_intensityRow);
-    flareSec.addRow(_ghostRow);
-    flareSec.addRow(_streakRow);
-    flareSec.addRow(_brightnessRow);
-    flareSec.addRow(_ringThicknessRow);
-    flareSec.addRow(_ringFillRow);
-    flareSec.addRow(_ringSizeRow);
-    flareSec.addRow(_ringOpacityRow);
-
-    /** Show/hide per-style rows based on the current style selection. */
-    const _updateFlareStyleRows = () => {
-      const styleVal = lensflareStyleSelect.value ?? 'classic';
-      _intensityRow.style.display      = styleVal === 'cinematic'  ? '' : 'none';
-      _ghostRow.style.display          = styleVal === 'cinematic'  ? '' : 'none';
-      _streakRow.style.display         = styleVal === 'anamorphic' ? '' : 'none';
-      _brightnessRow.style.display     = styleVal === 'natural'    ? '' : 'none';
-      _sizeRow.style.display           = styleVal === 'anamorphic' ? 'none' : '';
-      // Ring controls hidden for anamorphic (uses streaks not rings)
-      _ringThicknessRow.style.display  = styleVal === 'anamorphic' ? 'none' : '';
-      _ringFillRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
-      _ringSizeRow.style.display       = styleVal === 'anamorphic' ? 'none' : '';
-      _ringOpacityRow.style.display    = styleVal === 'anamorphic' ? 'none' : '';
-    };
-    _updateFlareStyleRows();
 
     // Store all references
     this._skyControls = {
@@ -437,12 +410,10 @@ export class EnvironmentProperties {
       gradEditor,
       showSunCb, sunColorSw, sunGlowSlider,
       showMoonCb, moonColorSw, moonGlowSlider,
-      lensflareEnabledCb, lensflareSizeSlider, lensflareOpacitySlider,
-      lensflareStyleSelect, lensflareColorSw, lensflareColorIntensitySlider,
-      lensflareIntensitySlider, lensflareGhostCountSlider,
-      lensflareStreakLengthSlider, lensflareBrightnessSlider,
-      lensflareRingThicknessSlider, lensflareRingFillSlider,
-      lensflareRingSizeSlider, lensflareRingOpacitySlider,
+      lensflareEnabledCb, opacitySlider, glareSizeSlider, starPointsSlider,
+      flareSizeSlider, flareSpeedSlider, flareShapeSelect, haloScaleSlider,
+      colorGainSw, ghostScaleSlider, secondaryGhostsCb, addStreaksCb,
+      starBurstCb, anamorphicCb,
     };
   }
 
@@ -470,20 +441,25 @@ export class EnvironmentProperties {
         showMoon:          s.showMoonCb.checked,
         moonColor,
         moonGlowStrength:  parseFloat(s.moonGlowSlider.input.value),
+        skyType:           this._skyTypeSelect?.value ?? 'gradient',
+        turbidity:         parseFloat(this._atmControls?.turbiditySlider.input.value ?? 2),
+        rayleigh:          parseFloat(this._atmControls?.rayleighSlider.input.value  ?? 1),
+        mieDirectionalG:   parseFloat(this._atmControls?.mieGSlider.input.value      ?? 0.8),
+        mieCoefficient:    parseFloat(this._atmControls?.mieCSlider.input.value      ?? 0.005),
         lensflareEnabled:      s.lensflareEnabledCb.checked,
-        lensflareSize:         parseFloat(s.lensflareSizeSlider.input.value),
-        lensflareOpacity:      parseFloat(s.lensflareOpacitySlider.input.value),
-        lensflareStyle:        s.lensflareStyleSelect?.value ?? 'classic',
-        lensflareColor:        s.lensflareColorSw.el.style.getPropertyValue('--sw-color') || '#fff8e7',
-        lensflareColorIntensity: parseFloat(s.lensflareColorIntensitySlider.input.value),
-        lensflareIntensity:    parseFloat(s.lensflareIntensitySlider.input.value),
-        lensflareGhostCount:   parseFloat(s.lensflareGhostCountSlider.input.value),
-        lensflareStreakLength:  parseFloat(s.lensflareStreakLengthSlider.input.value),
-        lensflareBrightness:   parseFloat(s.lensflareBrightnessSlider.input.value),
-        lensflareRingThickness: parseFloat(s.lensflareRingThicknessSlider.input.value),
-        lensflareRingFill:       parseFloat(s.lensflareRingFillSlider.input.value),
-        lensflareRingSize:       parseFloat(s.lensflareRingSizeSlider.input.value),
-        lensflareRingOpacity:    parseFloat(s.lensflareRingOpacitySlider.input.value),
+        lensflareOpacity:      parseFloat(s.opacitySlider.input.value),
+        lensflareGlareSize:    parseFloat(s.glareSizeSlider.input.value),
+        lensflareStarPoints:   parseInt(s.starPointsSlider.input.value, 10),
+        lensflareFlareSize:    parseFloat(s.flareSizeSlider.input.value),
+        lensflareFlareSpeed:   parseFloat(s.flareSpeedSlider.input.value),
+        lensflareFlareShape:   parseInt(s.flareShapeSelect.value, 10),
+        lensflareHaloScale:    parseFloat(s.haloScaleSlider.input.value),
+        lensflareColorGain:    s.colorGainSw.el.style.getPropertyValue('--sw-color') || '#fff8e0',
+        lensflareGhostScale:   parseFloat(s.ghostScaleSlider.input.value),
+        lensflareSecondaryGhosts:   s.secondaryGhostsCb.checked,
+        lensflareAdditionalStreaks: s.addStreaksCb.checked,
+        lensflareStarBurst:    s.starBurstCb.checked,
+        lensflareAnamorphic:   s.anamorphicCb.checked,
       }
     }));
   }
@@ -761,97 +737,138 @@ export class EnvironmentProperties {
   // ── Fog ───────────────────────────────────────────────────────────────────
 
   _buildFogSection(root) {
-    const { el, body } = section('Fog');
+    const { el, body } = section('Fog / Aerial Perspective');
     root.appendChild(el);
 
-    const scene = window.__cyco?.viewportEngine?.scene;
-    const fogType = scene?.fog instanceof THREE.FogExp2 ? 'exp2'
-                  : scene?.fog instanceof THREE.Fog      ? 'linear'
-                  : 'none';
-    const fogColor = '#' + (scene?.fog?.color?.getHexString() ?? 'aaaaaa');
+    let _typeVal    = 'none';
+    let _colorVal   = '#c0d0e0';
+    let _autoColor  = true;
+    let _density    = 0.0002;
+    let _near       = 1;
+    let _far        = 1000;
 
-    const linearRows = [];
-    const exp2Rows   = [];
+    const _fire = () => {
+      window.dispatchEvent(new CustomEvent('cyco-fog-change', {
+        detail: {
+          type:      _typeVal,
+          color:     _colorVal,
+          autoColor: _autoColor,
+          density:   _density,
+          near:      _near,
+          far:       _far,
+        },
+      }));
+    };
 
     const typeSelect = select({
       options: [
-        ['none',   'None'],
+        ['none',   'Off'],
+        ['exp2',   'Exponential (recommended)'],
         ['linear', 'Linear'],
-        ['exp2',   'Exponential²'],
       ],
-      value: fogType,
+      value: 'none',
       onChange: (v) => {
-        const color = colorSw.el.style.getPropertyValue('--sw-color') || fogColor;
-        this._applyFogType(v, color,
-          parseFloat(nearSlider.input.value), parseFloat(farSlider.input.value),
-          parseFloat(densitySlider.input.value));
-        for (const r of linearRows) r.style.display = v === 'linear' ? '' : 'none';
-        for (const r of exp2Rows)   r.style.display = v === 'exp2'   ? '' : 'none';
+        _typeVal = v;
+        linearRows.forEach(r => { r.style.display = v === 'linear' ? '' : 'none'; });
+        expRows.forEach(r    => { r.style.display = v === 'exp2'   ? '' : 'none'; });
+        _fire();
       },
     });
     body.appendChild(row('Type', typeSelect));
 
     const colorSw = colorSwatch({
-      color: fogColor,
-      onChange: (c) => {
-        const fog = window.__cyco?.viewportEngine?.scene?.fog;
-        if (fog) fog.color.set(c);
-        window.dispatchEvent(new CustomEvent('cyco-fog-change', { detail: this._fogState() }));
-      },
+      color: _colorVal,
+      onChange: (c) => { _colorVal = c; _fire(); },
     });
-    body.appendChild(row('Color', colorSw.el));
+    const autoColorCb = checkbox({
+      checked: _autoColor,
+      onChange: (v) => { _autoColor = v; _fire(); },
+    });
+    const colorCtrl = document.createElement('div');
+    colorCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
+    colorCtrl.appendChild(colorSw.el);
+    const autoLabel = document.createElement('label');
+    autoLabel.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;';
+    autoLabel.appendChild(autoColorCb);
+    autoLabel.appendChild(document.createTextNode('Auto from sky'));
+    colorCtrl.appendChild(autoLabel);
+    body.appendChild(row('Color', colorCtrl));
 
-    const curFog = scene?.fog;
-    const nearSlider = slider({
-      value: curFog instanceof THREE.Fog ? curFog.near : 1, min: 0, max: 500, step: 0.5,
-      onChange: () => { if (scene?.fog instanceof THREE.Fog) scene.fog.near = parseFloat(nearSlider.input.value); },
-    });
-    const nearRow = row('Near', nearSlider.el);
-    nearRow.style.display = fogType === 'linear' ? '' : 'none';
-    linearRows.push(nearRow);
+    const densitySlider = slider({ value: _density, min: 0, max: 0.005, step: 0.00005,
+      onChange: (v) => { _density = v; _fire(); } });
+    const nearSlider    = slider({ value: _near,    min: 0,   max: 500,   step: 1,
+      onChange: (v) => { _near = v; _fire(); } });
+    const farSlider     = slider({ value: _far,     min: 100, max: 50000, step: 50,
+      onChange: (v) => { _far = v; _fire(); } });
+
+    const densityRow = row('Density', densitySlider.el);
+    const nearRow    = row('Near',    nearSlider.el);
+    const farRow     = row('Far',     farSlider.el);
+
+    body.appendChild(densityRow);
     body.appendChild(nearRow);
-
-    const farSlider = slider({
-      value: curFog instanceof THREE.Fog ? curFog.far : 200, min: 0, max: 5000, step: 1,
-      onChange: () => { if (scene?.fog instanceof THREE.Fog) scene.fog.far = parseFloat(farSlider.input.value); },
-    });
-    const farRow = row('Far', farSlider.el);
-    farRow.style.display = fogType === 'linear' ? '' : 'none';
-    linearRows.push(farRow);
     body.appendChild(farRow);
 
-    // Density max increased: 0 → 1.0 for much denser exponential fog
-    const densitySlider = slider({
-      value: curFog instanceof THREE.FogExp2 ? curFog.density : 0.002,
-      min: 0, max: 1.0, step: 0.0001,
-      onChange: () => {
-        if (scene?.fog instanceof THREE.FogExp2)
-          scene.fog.density = parseFloat(densitySlider.input.value);
+    const linearRows = [nearRow, farRow];
+    const expRows    = [densityRow];
+    linearRows.forEach(r => { r.style.display = 'none'; });
+    expRows.forEach(r    => { r.style.display = 'none'; });
+  }
+
+  // ── God Rays ──────────────────────────────────────────────────────────────
+
+  _buildGodRaysSection(root) {
+    const { el, body } = section('God Rays');
+    root.appendChild(el);
+
+    const _fire = () => {
+      window.dispatchEvent(new CustomEvent('cyco-godrays-change', {
+        detail: {
+          enabled:  enabledCb.checked,
+          density:  parseFloat(densitySlider.input.value),
+          weight:   parseFloat(weightSlider.input.value),
+          decay:    parseFloat(decaySlider.input.value),
+          exposure: parseFloat(exposureSlider.input.value),
+          samples:  parseInt(samplesSlider.input.value, 10),
+        }
+      }));
+    };
+
+    const enabledCb = checkbox({ checked: false, onChange: _fire });
+    body.appendChild(row('Enable', enabledCb));
+
+    const qualitySelect = select({
+      options: [
+        ['low',    'Low — 20 samples'],
+        ['medium', 'Medium — 40 samples'],
+        ['high',   'High — 80 samples'],
+        ['ultra',  'Ultra — 100 samples'],
+      ],
+      value: 'medium',
+      onChange: (v) => {
+        const presets = { low: 20, medium: 40, high: 80, ultra: 100 };
+        samplesSlider.input.value = presets[v];
+        _fire();
       },
     });
-    const densityRow = row('Density', densitySlider.el);
-    densityRow.style.display = fogType === 'exp2' ? '' : 'none';
-    exp2Rows.push(densityRow);
-    body.appendChild(densityRow);
-  }
+    body.appendChild(row('Quality', qualitySelect));
 
-  _applyFogType(type, colorHex, near, far, density) {
-    const scene = window.__cyco?.viewportEngine?.scene;
-    if (!scene) return;
-    if (type === 'none')       { scene.fog = null; }
-    else if (type === 'linear'){ scene.fog = new THREE.Fog(colorHex, near, far); }
-    else if (type === 'exp2')  { scene.fog = new THREE.FogExp2(colorHex, density); }
-    window.dispatchEvent(new CustomEvent('cyco-fog-change', {
-      detail: { type, color: colorHex, near, far, density }
-    }));
-  }
+    const densitySlider  = slider({ value: 0.96, min: 0.50, max: 1.00, step: 0.01, onChange: _fire });
+    body.appendChild(row('Density',  densitySlider.el));
 
-  _fogState() {
-    const fog = window.__cyco?.viewportEngine?.scene?.fog;
-    if (!fog) return { type: 'none' };
-    if (fog instanceof THREE.FogExp2)
-      return { type: 'exp2', color: '#' + fog.color.getHexString(), density: fog.density };
-    return { type: 'linear', color: '#' + fog.color.getHexString(), near: fog.near, far: fog.far };
+    const weightSlider   = slider({ value: 0.40, min: 0.05, max: 1.00, step: 0.01, onChange: _fire });
+    body.appendChild(row('Weight',   weightSlider.el));
+
+    const decaySlider    = slider({ value: 0.90, min: 0.70, max: 0.99, step: 0.01, onChange: _fire });
+    body.appendChild(row('Decay',    decaySlider.el));
+
+    const exposureSlider = slider({ value: 0.65, min: 0.05, max: 2.00, step: 0.05, onChange: _fire });
+    body.appendChild(row('Exposure', exposureSlider.el));
+
+    const samplesSlider  = slider({ value: 40,   min: 10,   max: 100,  step: 5,    onChange: _fire });
+    body.appendChild(row('Samples',  samplesSlider.el));
+
+    this._godRaysControls = { enabledCb, qualitySelect, densitySlider, weightSlider, decaySlider, exposureSlider, samplesSlider };
   }
 
   // ── Environment Map ───────────────────────────────────────────────────────
@@ -981,6 +998,128 @@ export class EnvironmentProperties {
       }));
       if (statusLabel) statusLabel.textContent = preset.label;
     }
+  }
+
+  // ── Post Processing ───────────────────────────────────────────────────────
+
+  _buildPostProcessingSection(root) {
+    const { el, body } = section('Post Processing');
+    root.appendChild(el);
+
+    const _firePP = (opts) => {
+      window.dispatchEvent(new CustomEvent('cyco-postfx-change', { detail: opts }));
+    };
+
+    // Helper: sub-section divider heading
+    const _sub = (label) => {
+      const h = document.createElement('div');
+      h.style.cssText =
+        'font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;' +
+        'color:var(--text-secondary,#888);padding:7px 0 2px;margin-top:2px;' +
+        'border-top:1px solid var(--border-color,#2a2a2a);';
+      h.textContent = label;
+      return h;
+    };
+
+    // ── Bloom ──────────────────────────────────────────────────────────────
+    body.appendChild(_sub('Bloom'));
+    const bloomEnabledCb = checkbox({
+      checked: true,
+      onChange: (v) => _firePP({ bloom: { enabled: v } }),
+    });
+    const bloomThreshSlider = slider({ value: 0.85, min: 0, max: 2, step: 0.01,
+      onChange: (v) => _firePP({ bloom: { threshold: v } }) });
+    const bloomStrengthSlider = slider({ value: 0.8, min: 0, max: 3, step: 0.05,
+      onChange: (v) => _firePP({ bloom: { strength: v } }) });
+    const bloomRadiusSlider = slider({ value: 0.4, min: 0, max: 1, step: 0.01,
+      onChange: (v) => _firePP({ bloom: { radius: v } }) });
+    body.appendChild(row('Enable',    bloomEnabledCb));
+    body.appendChild(row('Threshold', bloomThreshSlider.el));
+    body.appendChild(row('Intensity', bloomStrengthSlider.el));
+    body.appendChild(row('Radius',    bloomRadiusSlider.el));
+
+    // ── Chromatic Aberration ───────────────────────────────────────────────
+    body.appendChild(_sub('Chromatic Aberration'));
+    const chromaEnabledCb = checkbox({
+      checked: false,
+      onChange: (v) => _firePP({ chroma: { enabled: v } }),
+    });
+    const chromaStrengthSlider = slider({ value: 0.002, min: 0, max: 0.02, step: 0.0005,
+      onChange: (v) => _firePP({ chroma: { strength: v } }) });
+    body.appendChild(row('Enable',   chromaEnabledCb));
+    body.appendChild(row('Strength', chromaStrengthSlider.el));
+
+    // ── Vignette ──────────────────────────────────────────────────────────
+    body.appendChild(_sub('Vignette'));
+    const vigEnabledCb = checkbox({
+      checked: false,
+      onChange: (v) => _firePP({ vignette: { enabled: v } }),
+    });
+    const vigOffsetSlider = slider({ value: 1.0, min: 0.1, max: 2, step: 0.05,
+      onChange: (v) => _firePP({ vignette: { offset: v } }) });
+    const vigDarkSlider = slider({ value: 1.0, min: 0, max: 3, step: 0.05,
+      onChange: (v) => _firePP({ vignette: { darkness: v } }) });
+    body.appendChild(row('Enable',   vigEnabledCb));
+    body.appendChild(row('Offset',   vigOffsetSlider.el));
+    body.appendChild(row('Darkness', vigDarkSlider.el));
+
+    // ── Film Grain ────────────────────────────────────────────────────────
+    body.appendChild(_sub('Film Grain'));
+    const grainEnabledCb = checkbox({
+      checked: false,
+      onChange: (v) => _firePP({ grain: { enabled: v } }),
+    });
+    const grainIntensitySlider = slider({ value: 0.08, min: 0, max: 0.5, step: 0.005,
+      onChange: (v) => _firePP({ grain: { intensity: v } }) });
+    body.appendChild(row('Enable',    grainEnabledCb));
+    body.appendChild(row('Intensity', grainIntensitySlider.el));
+
+    // ── Tone Mapping ──────────────────────────────────────────────────────
+    body.appendChild(_sub('Tone Mapping'));
+    const tmSelect = select({
+      options: [
+        ['aces',     'ACES Filmic (default)'],
+        ['agx',      'AgX'],
+        ['reinhard', 'Reinhard'],
+        ['cineon',   'Cineon'],
+        ['linear',   'Linear'],
+        ['none',     'None (raw)'],
+      ],
+      value: 'aces',
+      onChange: (v) => _firePP({ toneMapping: v }),
+    });
+    body.appendChild(row('Mode', tmSelect));
+
+    // ── LUT Color Grading ─────────────────────────────────────────────────
+    body.appendChild(_sub('LUT Color Grading'));
+    const lutEnabledCb = checkbox({
+      checked: false,
+      onChange: (v) => _firePP({ lut: { enabled: v } }),
+    });
+    const lutIntensitySlider = slider({ value: 1.0, min: 0, max: 1, step: 0.01,
+      onChange: (v) => _firePP({ lut: { intensity: v } }) });
+
+    const lutLoadBtn = document.createElement('button');
+    lutLoadBtn.textContent = 'Load LUT .cube…';
+    lutLoadBtn.className   = 'ce-btn ce-btn-sm';
+    lutLoadBtn.style.cssText =
+      'font-size:11px;padding:3px 10px;border-radius:4px;cursor:pointer;' +
+      'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);' +
+      'color:var(--text-primary,#e0e0e0);';
+    lutLoadBtn.addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.type   = 'file';
+      inp.accept = '.cube';
+      inp.onchange = (e) => {
+        const file = e.target.files[0];
+        if (file) _firePP({ lut: { file } });
+      };
+      inp.click();
+    });
+
+    body.appendChild(row('Enable',    lutEnabledCb));
+    body.appendChild(row('Intensity', lutIntensitySlider.el));
+    body.appendChild(row('File',      lutLoadBtn));
   }
 
   dispose() {}

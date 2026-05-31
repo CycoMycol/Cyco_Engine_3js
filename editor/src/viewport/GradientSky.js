@@ -190,6 +190,25 @@ function buildGradientTex(colorStops, existing) {
   return tex;
 }
 
+// ── Occluder shader (god rays silhouette mask) ────────────────────────────────
+
+// Renders only the sun disc as white; everything else black.
+const SKY_OCCLUDER_FRAG = /* glsl */`
+precision highp float;
+uniform vec3  uSunDir;
+uniform float uSunInner;
+uniform float uSunOuter;
+uniform float uSunVisible;
+varying vec3 vLocalPos;
+
+void main() {
+  vec3 dir    = normalize(vLocalPos);
+  float sunDot = dot(dir, normalize(uSunDir));
+  float disc   = smoothstep(uSunOuter, uSunInner, sunDot) * uSunVisible;
+  gl_FragColor = vec4(vec3(disc), 1.0);
+}
+`;
+
 // ── Angle constants ───────────────────────────────────────────────────────────
 
 // Sun: inner = 1.5°, outer = 2.5° (soft edge between them)
@@ -257,6 +276,19 @@ export class GradientSky {
       lensflareRingFill:       0,       // inner fill radius 0=hollow ring, 1=full disc
       lensflareRingSize:       40,      // ring ghost pixel size (independent from sun glow size)
       lensflareRingOpacity:    0.7,     // ring ghost opacity (independent from sun glow opacity)
+      // Phase 5 granular params:
+      lensflareGlareSize:         0.4,
+      lensflareStarPoints:        6,
+      lensflareFlareSize:         0.25,
+      lensflareFlareSpeed:        0.0,
+      lensflareFlareShape:        0,
+      lensflareHaloScale:         0.5,
+      lensflareColorGain:         new THREE.Color(1, 0.97, 0.88),
+      lensflareGhostScale:        0.3,
+      lensflareSecondaryGhosts:   true,
+      lensflareAdditionalStreaks: false,
+      lensflareStarBurst:         false,
+      lensflareAnamorphic:        false,
       sunDir:             new THREE.Vector3(),
       moonDir:            new THREE.Vector3(),
     };
@@ -325,30 +357,25 @@ export class GradientSky {
     if (opts.exposure           !== undefined) p.exposure           = opts.exposure;
     if (opts.saturation         !== undefined) p.saturation         = opts.saturation;
     if (opts.contrast           !== undefined) p.contrast           = opts.contrast;
-    if (opts.lensflareEnabled      !== undefined) p.lensflareEnabled      = opts.lensflareEnabled;
-    if (opts.lensflareSize         !== undefined) p.lensflareSize         = opts.lensflareSize;
-    if (opts.lensflareOpacity      !== undefined) p.lensflareOpacity      = opts.lensflareOpacity;
-    if (opts.lensflareIntensity    !== undefined) p.lensflareIntensity    = opts.lensflareIntensity;
-    if (opts.lensflareGhostCount   !== undefined) p.lensflareGhostCount   = opts.lensflareGhostCount;
-    if (opts.lensflareStreakLength  !== undefined) p.lensflareStreakLength  = opts.lensflareStreakLength;
-    if (opts.lensflareBrightness   !== undefined) p.lensflareBrightness   = opts.lensflareBrightness;
-    // Capture old hex BEFORE setting new color so we can detect actual changes
-    const _prevColorHex = p.lensflareColor.getHexString();
-    if (opts.lensflareColor) p.lensflareColor.set(opts.lensflareColor);
-    // Only rebuild textures when color hex or colorIntensity actually changed value
-    const _colorChanged = (opts.lensflareColor !== undefined && p.lensflareColor.getHexString() !== _prevColorHex) ||
-                          (opts.lensflareColorIntensity !== undefined && opts.lensflareColorIntensity !== p.lensflareColorIntensity);
-    const _ringChanged  = (opts.lensflareRingThickness !== undefined && opts.lensflareRingThickness !== p.lensflareRingThickness) ||
-                          (opts.lensflareRingFill       !== undefined && opts.lensflareRingFill       !== p.lensflareRingFill) ||
-                          (opts.lensflareRingSize        !== undefined && opts.lensflareRingSize        !== p.lensflareRingSize);
-    if (opts.lensflareColorIntensity !== undefined) p.lensflareColorIntensity = opts.lensflareColorIntensity;
-    if (opts.lensflareRingThickness  !== undefined) p.lensflareRingThickness  = opts.lensflareRingThickness;
-    if (opts.lensflareRingFill       !== undefined) p.lensflareRingFill       = opts.lensflareRingFill;
-    if (opts.lensflareRingSize       !== undefined) p.lensflareRingSize       = opts.lensflareRingSize;
-    if (opts.lensflareRingOpacity    !== undefined) p.lensflareRingOpacity    = opts.lensflareRingOpacity;
-    const _styleChanged = opts.lensflareStyle !== undefined && opts.lensflareStyle !== p.lensflareStyle;
-    const _ghostChanged = opts.lensflareGhostCount !== undefined && opts.lensflareGhostCount !== p.lensflareGhostCount;
-    if (opts.lensflareStyle        !== undefined) p.lensflareStyle        = opts.lensflareStyle;
+    if (opts.lensflareEnabled   !== undefined) p.lensflareEnabled   = opts.lensflareEnabled;
+    if (opts.lensflareOpacity   !== undefined) p.lensflareOpacity   = opts.lensflareOpacity;
+    // Phase 5 granular params — detect structural changes before applying
+    const _starPointsChanged = opts.lensflareStarPoints      !== undefined && opts.lensflareStarPoints      !== p.lensflareStarPoints;
+    const _anamorphicChanged = opts.lensflareAnamorphic      !== undefined && opts.lensflareAnamorphic      !== p.lensflareAnamorphic;
+    const _secGhostsChanged  = opts.lensflareSecondaryGhosts !== undefined && opts.lensflareSecondaryGhosts !== p.lensflareSecondaryGhosts;
+    const _starBurstChanged  = opts.lensflareStarBurst       !== undefined && opts.lensflareStarBurst       !== p.lensflareStarBurst;
+    if (opts.lensflareGlareSize         !== undefined) p.lensflareGlareSize         = opts.lensflareGlareSize;
+    if (opts.lensflareStarPoints        !== undefined) p.lensflareStarPoints        = opts.lensflareStarPoints;
+    if (opts.lensflareFlareSize         !== undefined) p.lensflareFlareSize         = opts.lensflareFlareSize;
+    if (opts.lensflareFlareSpeed        !== undefined) p.lensflareFlareSpeed        = opts.lensflareFlareSpeed;
+    if (opts.lensflareFlareShape        !== undefined) p.lensflareFlareShape        = opts.lensflareFlareShape;
+    if (opts.lensflareHaloScale         !== undefined) p.lensflareHaloScale         = opts.lensflareHaloScale;
+    if (opts.lensflareColorGain)                       p.lensflareColorGain.set(opts.lensflareColorGain);
+    if (opts.lensflareGhostScale        !== undefined) p.lensflareGhostScale        = opts.lensflareGhostScale;
+    if (opts.lensflareSecondaryGhosts   !== undefined) p.lensflareSecondaryGhosts   = opts.lensflareSecondaryGhosts;
+    if (opts.lensflareAdditionalStreaks !== undefined) p.lensflareAdditionalStreaks = opts.lensflareAdditionalStreaks;
+    if (opts.lensflareStarBurst         !== undefined) p.lensflareStarBurst         = opts.lensflareStarBurst;
+    if (opts.lensflareAnamorphic        !== undefined) p.lensflareAnamorphic        = opts.lensflareAnamorphic;
     if (opts.sunColor)  p.sunColor.set(opts.sunColor);
     if (opts.moonColor) p.moonColor.set(opts.moonColor);
 
@@ -364,8 +391,8 @@ export class GradientSky {
     this._pushUniforms();
     this._updateSunLight();
 
-    // Recreate flare when style, ghost-count, ring texture, or color baking params change
-    if (_styleChanged || _ghostChanged || _ringChanged || _colorChanged) {
+    // Recreate flare when structural params change; otherwise just update sizes/opacity/color
+    if (_starPointsChanged || _anamorphicChanged || _secGhostsChanged || _starBurstChanged) {
       this._destroyFlares();
       this._createFlares();
     } else {
@@ -505,6 +532,12 @@ export class GradientSky {
     u.uMoonColor.value.copy(this._p.moonColor);
     u.uMoonVisible.value      = this._moonVisible();
     u.uMoonGlowStrength.value = this._p.moonGlowStrength;
+
+    // Keep occluder material in sync for god rays
+    if (this._occluderMat) {
+      this._occluderMat.uniforms.uSunDir.value.copy(this._p.sunDir);
+      this._occluderMat.uniforms.uSunVisible.value = this._sunVisible();
+    }
   }
 
   _updateSunLight() {
@@ -605,6 +638,20 @@ export class GradientSky {
     this._mesh.raycast = () => {};
     this._mesh.userData._isHelper = true;
 
+    // Store main material reference and create occluder material for god rays
+    this._mainMat     = mat;
+    this._occluderMat = this._createOccluderMaterial();
+    this._mesh.userData._occluderMat = this._occluderMat;
+
+    // Swap to occluder material during god rays occluder pass
+    this._mesh.onBeforeRender = () => {
+      if (this._mesh.userData._inOccluderPass) {
+        this._mesh.material = this._occluderMat;
+      } else {
+        this._mesh.material = this._mainMat;
+      }
+    };
+
     const cam = this._vpe?.camera;
     if (cam) this._mesh.position.copy(cam.position);
 
@@ -614,6 +661,23 @@ export class GradientSky {
 
     scene.add(this._mesh);
     if (this._lensflare) scene.add(this._lensflare);
+  }
+
+  /** Create occluder material: renders only the sun disc as white for god rays. */
+  _createOccluderMaterial() {
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        uSunDir:     { value: this._p.sunDir.clone() },
+        uSunInner:   { value: SUN_INNER },
+        uSunOuter:   { value: SUN_OUTER },
+        uSunVisible: { value: this._sunVisible() },
+      },
+      vertexShader:   SKY_VERT,
+      fragmentShader: SKY_OCCLUDER_FRAG,
+      side:       THREE.BackSide,
+      depthTest:  false,
+      depthWrite: false,
+    });
   }
 
   /** Create the sky mesh using TSL NodeMaterial for WebGPU renderers. */
@@ -738,6 +802,11 @@ export class GradientSky {
       this._mesh.material.dispose();
       this._mesh = null;
     }
+    if (this._occluderMat) {
+      this._occluderMat.dispose();
+      this._occluderMat = null;
+      this._mainMat     = null;
+    }
     if (this._lensflare) {
       scene?.remove(this._lensflare);
       this._lensflare = null;
@@ -767,6 +836,10 @@ export class GradientSky {
   _destroyFlares() {
     const scene = this._vpe?.scene;
     if (this._lensflare) {
+      // Dispose CanvasTexture instances to free GPU memory
+      for (const el of this._lensflare.elements) {
+        el.texture?.dispose();
+      }
       scene?.remove(this._lensflare);
       this._lensflare = null;
     }
@@ -803,13 +876,11 @@ export class GradientSky {
    * Dispatches to the appropriate implementation based on this._p.lensflareStyle.
    */
   _createLensflareWebGPU(scene) {
-    const style = this._p.lensflareStyle ?? 'classic';
-    if (style === 'natural') {
-      this._createLensflareNaturalWebGPU(scene); // async — falls back if LensflareMesh unavailable
-    } else if (style === 'anamorphic') {
+    // Phase 5: dispatch based on granular anamorphic flag
+    if (this._p.lensflareAnamorphic) {
       this._createLensflareAnamorphicWebGPU(scene);
     } else {
-      this._createLensflareSpritesWebGPU(scene, style);
+      this._createLensflareSpritesWebGPU(scene, 'classic');
     }
   }
 
@@ -1045,16 +1116,9 @@ export class GradientSky {
     });
   }
 
-  /** Build procedural flare textures and create the Lensflare object for the current style. Does NOT add to scene. */
+  /** Build the granular WebGL lens flare from the new Phase 5 params. */
   _createLensflare() {
-    const style = this._p.lensflareStyle ?? 'classic';
-    switch (style) {
-      case 'natural':    this._buildNaturalWebGL();    break;
-      case 'cinematic':  this._buildCinematicWebGL();  break;
-      case 'anamorphic': this._buildAnamorphicWebGL(); break;
-      case 'subtle':     this._buildSubtleWebGL();     break;
-      default:           this._buildClassicWebGL();    break;
-    }
+    this._buildGranularWebGL();
   }
 
   _buildClassicWebGL() {
@@ -1151,16 +1215,92 @@ export class GradientSky {
     this._lensflare.addElement(new LensflareElement(glowTex, p.lensflareSize * 0.8, 0, c));
   }
 
-  /** Update lensflare position, visibility and opacity (WebGL + LensflareMesh). */
+  /** Phase 5 unified WebGL flare builder using granular params. */
+  _buildGranularWebGL() {
+    this._lensflare = new Lensflare();
+    this._lensflare.userData._isHelper = true;
+    const p = this._p;
+    const c = new THREE.Color().copy(p.lensflareColorGain);
+
+    // Base glare disc (with optional diffraction spikes)
+    const glareTex = this._makeGlareTex(128, p.lensflareStarPoints);
+    this._lensflare.addElement(new LensflareElement(
+      glareTex,
+      p.lensflareGlareSize * 200,
+      0,
+      c
+    ));
+
+    // Halo ring
+    if (p.lensflareHaloScale > 0) {
+      const haloTex = this._makeHaloTex(128);
+      this._lensflare.addElement(new LensflareElement(
+        haloTex,
+        p.lensflareHaloScale * 300,
+        0.6,
+        c
+      ));
+    }
+
+    // Flare train (ghost chain)
+    if (p.lensflareGhostScale > 0) {
+      const ghostTex  = this._makeGhostTex(64);
+      const offsets   = [0.3, -0.2, 0.7, -0.5, 1.1];
+      const sizeMults = [1.0,  0.7,  0.5,  0.3,  0.2];
+      offsets.forEach((off, i) => {
+        this._lensflare.addElement(new LensflareElement(
+          ghostTex,
+          p.lensflareGhostScale * 200 * sizeMults[i],
+          off * p.lensflareFlareSize,
+          c
+        ));
+      });
+      // Secondary ghosts
+      if (p.lensflareSecondaryGhosts) {
+        const secOffsets = [0.15, -0.35, 0.55, -0.75];
+        secOffsets.forEach((off, i) => {
+          this._lensflare.addElement(new LensflareElement(
+            ghostTex,
+            p.lensflareGhostScale * 100 * (0.5 + i * 0.1),
+            off,
+            c
+          ));
+        });
+      }
+    }
+
+    // Anamorphic horizontal streak
+    if (p.lensflareAnamorphic) {
+      const streakTex = this._makeStreakTex(256, 32);
+      this._lensflare.addElement(new LensflareElement(
+        streakTex,
+        p.lensflareFlareSize * 600,
+        0,
+        c
+      ));
+    }
+
+    // Star burst diffraction overlay
+    if (p.lensflareStarBurst) {
+      const starTex = this._makeStarBurstTex(128, p.lensflareStarPoints);
+      this._lensflare.addElement(new LensflareElement(
+        starTex,
+        p.lensflareGlareSize * 400,
+        0,
+        c
+      ));
+    }
+  }
+
+  /** Update lensflare visibility, opacity and color (WebGL + LensflareMesh). */
   _updateLensflare() {
     const p    = this._p;
     const vis  = this._sunVisible();
     const show = p.lensflareEnabled && vis > 0;
 
-    // Update LensflareMesh visibility (natural style, WebGPU)
+    // Update LensflareMesh visibility (WebGPU)
     if (this._lensflareMesh) {
       this._lensflareMesh.visible = show;
-      // Position is kept in sync each frame in update()
     }
 
     // Update WebGL Lensflare
@@ -1168,42 +1308,16 @@ export class GradientSky {
       this._lensflare.visible = show;
       if (!show) return;
 
-      // Position is kept within the camera frustum by update() every frame.
+      const opacityScale = (p.lensflareOpacity ?? 0.7) * vis;
+      const tint = p.lensflareColorGain;
+      for (const el of this._lensflare.elements) {
+        el.color.copy(tint).multiplyScalar(opacityScale);
+      }
+      // Live-update glare size (element[0])
+      if (this._lensflare.elements[0]) {
+        this._lensflare.elements[0].size = p.lensflareGlareSize * 200;
+      }
 
-      const style      = p.lensflareStyle ?? 'classic';
-      const intensity  = p.lensflareIntensity  ?? 1.0;
-      const brightness = p.lensflareBrightness ?? 1.2;
-      const streakLen  = p.lensflareStreakLength ?? 1.0;
-
-      const lfElems     = this._lensflare.elements;
-      const opacityScale = (p.lensflareOpacity ?? 1.0) * vis;
-      if (lfElems?.[0]) {
-        // element[0] color = grayscale opacity — user color is baked into the texture,
-        // multiplying by lensflareColor here would double-apply and cause white-wash.
-        lfElems[0].color.setScalar(opacityScale);
-        let mainSize;
-        switch (style) {
-          case 'cinematic':  mainSize = p.lensflareSize * 1.5 * intensity; break;
-          case 'natural':    mainSize = p.lensflareSize * brightness;      break;
-          case 'anamorphic': mainSize = p.lensflareSize * 0.6;             break;
-          case 'subtle':     mainSize = p.lensflareSize * 0.8;             break;
-          default:           mainSize = p.lensflareSize;                   break;
-        }
-        lfElems[0].size = mainSize;
-      }
-      if (lfElems?.[1]) {
-        switch (style) {
-          case 'cinematic':  lfElems[1].size = p.lensflareSize * 0.6 * intensity;   break;
-          case 'natural':    lfElems[1].size = p.lensflareSize * brightness * 0.35; break;
-          case 'anamorphic': lfElems[1].size = p.lensflareSize * 2.0 * streakLen;   break;
-          default:           lfElems[1].size = p.lensflareSize * 0.4;               break;
-        }
-      }
-      // Apply ring opacity to secondary elements independently from glow opacity
-      const ringOpacityScale = (p.lensflareRingOpacity ?? 0.7) * vis;
-      if (lfElems) {
-        for (let i = 1; i < lfElems.length; i++) lfElems[i].color.setScalar(ringOpacityScale);
-      }
     }
     // Sprite array visibility/size is updated per-frame in _updateLensflareWebGPU
   }
@@ -1340,5 +1454,103 @@ export class GradientSky {
 
     const tex = new THREE.CanvasTexture(canvas);
     return tex;
+  }
+
+  /** Phase 5: Glare disc with optional diffraction spikes. */
+  _makeGlareTex(size, starPoints = 6) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, r = size / 2;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0,   'rgba(255,255,255,1)');
+    g.addColorStop(0.1, 'rgba(255,240,200,0.8)');
+    g.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    if (starPoints > 0) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.strokeStyle = 'rgba(255,255,200,0.3)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i < starPoints; i++) {
+        const angle = (i / starPoints) * Math.PI;
+        ctx.beginPath();
+        ctx.moveTo(cx - Math.cos(angle) * r, cy - Math.sin(angle) * r);
+        ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+    return new THREE.CanvasTexture(c);
+  }
+
+  /** Phase 5: Halo ring texture. */
+  _makeHaloTex(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, r = size * 0.4;
+    const g = ctx.createRadialGradient(cx, cy, r * 0.8, cx, cy, r);
+    g.addColorStop(0,   'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(200,200,255,0.4)');
+    g.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+  }
+
+  /** Phase 5: Ghost element texture. */
+  _makeGhostTex(size) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, r = size / 2;
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0,   'rgba(255,220,180,0.8)');
+    g.addColorStop(0.5, 'rgba(200,180,255,0.3)');
+    g.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, size, size);
+    return new THREE.CanvasTexture(c);
+  }
+
+  /** Phase 5: Anamorphic horizontal streak texture. */
+  _makeStreakTex(w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0, 0, w, 0);
+    g.addColorStop(0,   'rgba(0,0,0,0)');
+    g.addColorStop(0.5, 'rgba(220,200,255,0.9)');
+    g.addColorStop(1,   'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, w, h);
+    return new THREE.CanvasTexture(c);
+  }
+
+  /** Phase 5: Star burst diffraction texture. */
+  _makeStarBurstTex(size, points = 6) {
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const ctx = c.getContext('2d');
+    const cx = size / 2, cy = size / 2, r = size / 2;
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    gradient.addColorStop(0, 'rgba(255,255,255,0.9)');
+    gradient.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = gradient;
+    for (let i = 0; i < points; i++) {
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate((i / points) * Math.PI);
+      ctx.beginPath();
+      ctx.ellipse(0, 0, r, r * 0.02, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+    ctx.restore();
+    return new THREE.CanvasTexture(c);
   }
 }
