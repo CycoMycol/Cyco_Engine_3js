@@ -737,9 +737,10 @@ export class ViewportEngine {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1a1a);
 
-    // Default camera
-    this.camera = new THREE.PerspectiveCamera(60, w / h, 0.1, 10000);
-    this.camera.position.set(5, 5, 5);
+    // Default camera — Unreal Engine conventions: 1 unit = 1 cm
+    // FOV 90°, near 10 cm, far 1 000 000 cm (10 km) for editor visibility
+    this.camera = new THREE.PerspectiveCamera(90, w / h, 10, 1000000);
+    this.camera.position.set(500, 300, 500);
     this.camera.lookAt(0, 0, 0);
 
     // Non-hierarchy lights (not shown in scene tree)
@@ -748,17 +749,18 @@ export class ViewportEngine {
     this.scene.add(this._ambientLight, this._hemisphereLight);
 
     // Grid + axes (non-selectable) — use saved settings if available
-    this.axesHelper = new THREE.AxesHelper(1);
+    this.axesHelper = new THREE.AxesHelper(100); // 100 cm = 1 m axis arms
     this.axesHelper.raycast = () => {};
     this.axesHelper.userData._isHelper = true;
     this.scene.add(this.axesHelper);
 
     // Apply persisted grid settings (may build infinite grid asynchronously)
+    // Defaults use UE cm units: 1 cell = 100 cm = 1 m, grid 2000 cm = 20 m across
     try {
       const saved = JSON.parse(localStorage.getItem('cyco-grid-settings') ?? '{}');
-      const gridDefaults = { divisions: 20, size: 20, gridColor: '#444444', centerColor: '#888888',
+      const gridDefaults = { divisions: 20, size: 2000, gridColor: '#444444', centerColor: '#888888',
         opacity: 1.0, gridVisible: true, axesVisible: true, style: 'standard',
-        cellSize: 4.0, checkerSize: 4.0 };
+        cellSize: 100, checkerSize: 100 };
       this._onGridSettings({ detail: { ...gridDefaults, ...saved } });
     } catch (_) {
       this.gridHelper = this._makeGrid(20, 20);

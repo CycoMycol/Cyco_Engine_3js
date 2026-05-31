@@ -150,9 +150,8 @@ export class ObjectFactory {
     clone.userData.cycoId = uid();
     clone.name = (source.name || 'Object') + ' (copy)';
     // Offset clone slightly so it's visible
-    clone.position.x += 0.5;
-    clone.position.z += 0.5;
-
+      clone.position.x += 50;
+      clone.position.z += 50;
     const cycoId = clone.userData.cycoId;
 
     // If called from CommandManager (via _duplicateSelected), store back on the command object
@@ -198,49 +197,49 @@ export class ObjectFactory {
   create(type, opts = {}) {
     switch (type) {
       // ── Primitives ─────────────────────────────────────────────────────
-      case 'Box':           return this._mesh(new THREE.BoxGeometry(1, 1, 1), type);
-      case 'Sphere':        return this._mesh(new THREE.SphereGeometry(0.5, 32, 16), type);
-      case 'Cylinder':      return this._mesh(new THREE.CylinderGeometry(0.5, 0.5, 1, 32), type);
-      case 'Cone':          return this._mesh(new THREE.ConeGeometry(0.5, 1, 32), type);
-      case 'Capsule':       return this._mesh(new THREE.CapsuleGeometry(0.5, 1, 4, 8), type);
+      case 'Box':           return this._mesh(new THREE.BoxGeometry(100, 100, 100), type);
+      case 'Sphere':        return this._mesh(new THREE.SphereGeometry(50, 32, 16), type);
+      case 'Cylinder':      return this._mesh(new THREE.CylinderGeometry(50, 50, 100, 32), type);
+      case 'Cone':          return this._mesh(new THREE.ConeGeometry(50, 100, 32), type);
+      case 'Capsule':       return this._mesh(new THREE.CapsuleGeometry(50, 100, 4, 8), type);
       case 'Plane': {
-        const planeMesh = this._mesh(new THREE.PlaneGeometry(1, 1), type);
+        const planeMesh = this._mesh(new THREE.PlaneGeometry(100, 100), type);
         planeMesh.rotation.x = -Math.PI / 2; // lay flat (XZ plane, facing up)
         return planeMesh;
       }
-      case 'Circle':        return this._mesh(new THREE.CircleGeometry(0.5, 32), type);
-      case 'Ring':          return this._mesh(new THREE.RingGeometry(0.1, 0.5, 32), type);
-      case 'Torus':         return this._mesh(new THREE.TorusGeometry(0.5, 0.2, 16, 100), type);
-      case 'TorusKnot':     return this._mesh(new THREE.TorusKnotGeometry(0.5, 0.15, 100, 16), type);
-      case 'Dodecahedron':  return this._mesh(new THREE.DodecahedronGeometry(0.5), type);
-      case 'Icosahedron':   return this._mesh(new THREE.IcosahedronGeometry(0.5), type);
-      case 'Octahedron':    return this._mesh(new THREE.OctahedronGeometry(0.5), type);
-      case 'Tetrahedron':   return this._mesh(new THREE.TetrahedronGeometry(0.5), type);
-      case 'RoundedBox':    return this._mesh(new RoundedBoxGeometry(1, 1, 1, 2, 0.1), type);
+      case 'Circle':        return this._mesh(new THREE.CircleGeometry(50, 32), type);
+      case 'Ring':          return this._mesh(new THREE.RingGeometry(10, 50, 32), type);
+      case 'Torus':         return this._mesh(new THREE.TorusGeometry(50, 20, 16, 100), type);
+      case 'TorusKnot':     return this._mesh(new THREE.TorusKnotGeometry(50, 15, 100, 16), type);
+      case 'Dodecahedron':  return this._mesh(new THREE.DodecahedronGeometry(50), type);
+      case 'Icosahedron':   return this._mesh(new THREE.IcosahedronGeometry(50), type);
+      case 'Octahedron':    return this._mesh(new THREE.OctahedronGeometry(50), type);
+      case 'Tetrahedron':   return this._mesh(new THREE.TetrahedronGeometry(50), type);
+      case 'RoundedBox':    return this._mesh(new RoundedBoxGeometry(100, 100, 100, 2, 5), type);
 
       // ── Lines / Points ─────────────────────────────────────────────────
       case 'Line': {
         const geo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(-1, 0, 0), new THREE.Vector3(1, 0, 0),
+          new THREE.Vector3(-100, 0, 0), new THREE.Vector3(100, 0, 0),
         ]);
         return this._named(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0xffffff })), 'Line');
       }
       case 'LineLoop': {
         const geo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0), new THREE.Vector3(1, 0, 0),
+          new THREE.Vector3(-100, 0, 0), new THREE.Vector3(0, 100, 0), new THREE.Vector3(100, 0, 0),
         ]);
         return this._named(new THREE.LineLoop(geo, new THREE.LineBasicMaterial({ color: 0xffffff })), 'LineLoop');
       }
       case 'LineSegments': {
         const geo = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(-1, 0, 0), new THREE.Vector3(0, 1, 0),
-          new THREE.Vector3(0, 1, 0),  new THREE.Vector3(1, 0, 0),
+          new THREE.Vector3(-100, 0, 0), new THREE.Vector3(0, 100, 0),
+          new THREE.Vector3(0, 100, 0),  new THREE.Vector3(100, 0, 0),
         ]);
         return this._named(new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: 0xffffff })), 'LineSegments');
       }
       case 'Points': {
-        const geo = new THREE.SphereGeometry(0.5, 8, 6);
-        const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 0.05, color: 0xffffff }));
+        const geo = new THREE.SphereGeometry(50, 8, 6);
+        const pts = new THREE.Points(geo, new THREE.PointsMaterial({ size: 5, color: 0xffffff }));
         return this._named(pts, 'Points');
       }
       case 'Sprite': {
@@ -255,7 +254,7 @@ export class ObjectFactory {
       case 'Bone':          return this._named(new THREE.Bone(), 'Bone');
       case 'InstancedMesh': {
         const count = opts.count ?? 100;
-        const geo   = new THREE.BoxGeometry(1, 1, 1);
+        const geo   = new THREE.BoxGeometry(100, 100, 100);
         const mat   = this._defaultMaterial();
         const im    = new THREE.InstancedMesh(geo, mat, count);
         im.castShadow = im.receiveShadow = true;
@@ -273,14 +272,15 @@ export class ObjectFactory {
       }
 
       // ── Cameras ────────────────────────────────────────────────────────
+      // UE defaults: FOV 90°, near 10 cm, far 10 000 cm (100 m)
       case 'PerspectiveCamera': {
-        const cam = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
-        cam.position.set(0, 1, 5);
+        const cam = new THREE.PerspectiveCamera(90, 1, 10, 10000);
+        cam.position.set(0, 100, 500);
         return this._named(cam, 'Camera');
       }
       case 'OrthographicCamera': {
-        const cam = new THREE.OrthographicCamera(-5, 5, 5, -5, 0.1, 1000);
-        cam.position.set(0, 1, 5);
+        const cam = new THREE.OrthographicCamera(-500, 500, 500, -500, 10, 10000);
+        cam.position.set(0, 100, 500);
         return this._named(cam, 'OrthoCamera');
       }
 

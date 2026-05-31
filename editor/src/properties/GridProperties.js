@@ -21,17 +21,17 @@ const DEFAULTS = {
   style:          'standard',  // 'standard' | 'infinite' | 'checkered' | 'checkered-infinite'
   // Standard-only
   divisions:      20,
-  size:           20,
+  size:           2000,      // 2000 cm = 20 m across (UE cm units)
   gridColor:      '#444444',
   centerColor:    '#888888',
   // Infinite-only
-  cellSize:       4.0,
+  cellSize:       100,       // 100 cm = 1 m per cell
   xAxisColor:     '#CC2222',
   zAxisColor:     '#2244CC',
   // Checkered (both checkered styles)
   checkerColor1:  '#333333',
   checkerColor2:  '#555555',
-  checkerSize:    4.0,
+  checkerSize:    100,       // 100 cm = 1 m per checker square
   // Common
   opacity:        1.0,
   gridVisible:    true,
