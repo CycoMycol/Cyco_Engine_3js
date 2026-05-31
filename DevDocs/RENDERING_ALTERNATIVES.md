@@ -187,6 +187,171 @@ import { SSGINode }   from 'three/addons/tsl/SSGINode.js';     // Screen-space G
 
 ---
 
+## Volumetric Lighting & God Rays
+
+> **Research Note (2025):** Both [CeralBnB](https://cerealbnb-demo.vercel.app/) (WebGL) and [Lumen Decor Studio](https://lumen-decor-studio.vercel.app/) (WebGPU/TSL) were analysed to extract production-ready approaches.
+
+### What Was Found in Reference Apps
+
+#### CeralBnB — Procedural Sun Disc (WebGL)
+CeralBnB does **not** implement god rays or crepuscular light scattering. What appears to be "sun rays" is actually a **procedural sun disc** inside the sky shader, using ray–disk and ray–sphere intersection tests taken from Shadertoy/Íñigo Quílez:
+
+```glsl
+// From: https://www.shadertoy.com/view/4tsBD7
+float diskIntersectWithBackFaceCulling(vec3 ro, vec3 rd, vec3 c, vec3 n, float r) {
+    float d = dot(rd, n);
+    if (d > 0.0) return 1e6;           // back-face culled
+    vec3  o = ro - c;
+    float t = -dot(n, o) / d;
+    vec3  q = o + rd * t;
+    return (dot(q, q) < r * r) ? t : 1e6;
+}
+// From: https://iquilezles.org/articles/intersectors/
+float sphereIntersect(vec3 ro, vec3 rd, vec3 ce, float ra) { ... }
+```
+
+This technique draws a hard-edged sun disc with a customisable angular size, used as a mask inside the sky colour computation. **No volumetric light marching is involved.**
+
+Shadow mapping: PCF with **Vogel disk sampling (5 taps)** + `interleavedGradientNoise` for jitter — standard Three.js built-in PCF.
+
+#### Lumen Decor Studio — TSL Volumetric Ray Marching (WebGPU)
+Lumen **does** implement full volumetric ray marching via a TSL node lighting model class (`Eue`). This is what drives their atmospheric/volumetric materials. The complete pattern:
+
+```js
+// TSL volumetric ray march — Eue class pattern (Three.js r184 WebGPU)
+start(e) {
+  const { material: t } = e;
+  // Choose near/far points along the ray:
+  //   if camera is far from the fragment, march camera→fragment
+  //   otherwise march fragment→camera (avoids degenerate case)
+  const n = pu("vec3"), s = pu("vec3");
+  Ht(cameraPosition.sub(positionWorld).length().greaterThan(threshold.mul(2)),
+    () => { n.assign(cameraPosition); s.assign(positionWorld); },
+    () => { n.assign(positionWorld);  s.assign(cameraPosition); }
+  );
+
+  const rayDir   = s.sub(n).normalize().toVar();
+  const stepSize = s.sub(n).length().div(steps).toVar();  // steps = material.steps
+  let   t_ray    = float(0).toVar();   // ray parameter
+  let   transmit = vec3(1).toVar();    // Beer-Lambert transmittance accumulator
+
+  if (t.offsetNode) t_ray.addAssign(t.offsetNode.mul(stepSize)); // dither offset
+
+  Loop(steps, () => {
+    const worldPos  = n.add(rayDir.mul(t_ray));
+    const viewPos   = cameraViewMatrix.mul(vec4(worldPos, 1)).xyz;
+
+    // Optional: early-out at scene depth
+    if (t.depthNode) {
+      sceneLinearDepth.assign(linearize(t.depthNode));
+      context.sceneDepthNode = sceneLinearDepth.toVar();
+    }
+
+    context.positionWorld       = worldPos;
+    context.shadowPositionWorld = worldPos;
+    context.positionView        = viewPos;
+
+    outgoingLight.assign(0);            // reset per-step light accumulator
+
+    // Evaluate ALL scene lights at this world position (expensive but accurate)
+    super.start(e);
+
+    // Optional phase function / density modulation
+    let scattering = t.scatteringNode?.({ positionRay: worldPos }) ?? null;
+    if (scattering) outgoingLight.mulAssign(scattering);
+
+    // Beer-Lambert step: T *= exp(-sigma_t * 0.01 * stepSize)
+    const stepTransmit = outgoingLight.mul(0.01).negate().mul(stepSize).exp();
+    transmit.mulAssign(stepTransmit);
+
+    t_ray.addAssign(stepSize);
+  });
+
+  // Add final absorption contribution
+  volumeOutput.addAssign(transmit.saturate().oneMinus());
+}
+```
+
+**Key properties on the material:**
+| Property | Type | Description |
+|---|---|---|
+| `steps` | `int` (onRenderUpdate) | March step count (8–64 typical) |
+| `depthNode` | `Node` | Scene depth texture for early-out |
+| `offsetNode` | `Node` | Per-pixel dither offset (0–1) to reduce banding |
+| `scatteringNode` | `fn({positionRay})` | Returns per-step density/phase multiplier |
+
+---
+
+### Implementing God Rays in Cyco Engine
+
+There are three viable approaches, ordered from cheapest to most accurate:
+
+#### Option 1: Screen-Space Radial Blur (WebGL + WebGPU) — **Recommended**
+Classic "Volumetric Light Scattering as a Post-Process" (Nvidia GPU Gems 3, Ch. 13). Cheap, controllable, works everywhere.
+
+```
+Pass 1 (occluder mask): Render scene to a 1/4-res texture.
+                         Sun pixels → white. Everything else → black (ShadowMaterial).
+Pass 2 (radial blur):    For each pixel, march toward sun NDC position in N steps,
+                         accumulate occluder texture samples with exponential decay.
+Pass 3 (composite):      Additively blend radial-blur result onto final frame.
+```
+
+**Three.js WebGL (EffectComposer):**
+```js
+// No built-in Three.js pass exists — use ShaderPass with custom GLSL:
+const godRaysPass = new ShaderPass({
+  uniforms: {
+    tDiffuse:     { value: null },
+    tOccluder:    { value: null },   // 1/4-res sun occluder mask
+    sunScreenPos: { value: new THREE.Vector2(0.5, 0.5) },
+    numSamples:   { value: 60 },
+    density:      { value: 0.96 },
+    weight:       { value: 0.4 },
+    decay:        { value: 0.9 },
+    exposure:     { value: 0.65 },
+  },
+  // vertexShader: pass-through, fragmentShader: radial march toward sunScreenPos
+});
+```
+
+**Three.js WebGPU (TSL GodraysNode):**
+```js
+import { GodraysNode } from 'three/addons/tsl/display/GodraysNode.js';
+const godrays = new GodraysNode(sunLight, sceneDepth);
+postProcessing.outputNode = godrays;
+```
+*Note: `GodraysNode` status in Three.js r184 is experimental — verify addon availability.*
+
+#### Option 2: Lumen-Style TSL Volumetric March (WebGPU only) — **High Quality**
+Adapt the `Eue` pattern above into a spot-light or directional-light cone volume:
+- Create a mesh (cone/frustum/box) aligned to the light's direction.
+- Apply a custom `NodeMaterial` whose lighting model uses the `Eue` march pattern.
+- Set `scatteringNode` to return 1 if the point is **not** in shadow (i.e. sun contribution = shadow map lookup), 0 if occluded.
+- `steps = 32–64`, use temporal dithering via `offsetNode` for smooth results.
+- Requires the scene to already have a shadow map for the sun/spot light.
+
+#### Option 3: Baked Light Shafts (All Platforms) — **Cheapest, Static Only**
+Pre-render light shaft textures as billboard sprites placed along the light beam. Works on mobile WebGL1 at zero runtime cost. Only usable for static/slow-moving light sources (e.g. a ceiling light in an interior).
+
+---
+
+### Interior Lighting Research Notes
+
+Both apps rely entirely on **standard Three.js PBR lights** for interior scenes:
+
+| What they use | Three.js Equivalent | Notes |
+|---|---|---|
+| Room / ceiling light | `PointLight` + shadows | `castShadow=true`, small `distance` |
+| Directional sun shaft | `DirectionalLight` + PCF shadow | Shadow `near` tuned tight to room scale |
+| Ambient fill | `AmbientLight` or `HemisphereLight` | No AO bake — cheap fill only |
+| Reflections | PMREM environment map | `scene.environment` from `RGBELoader` |
+| Material GI fake | `lightMap` + `lightMapIntensity` | Pre-baked; `ProgressiveLightMap` tool |
+
+**Key finding**: Neither app uses a specialised "interior lighting" technique. High-quality interiors in Three.js come from tuned shadow bias, tight light distances, and a good HDRI environment map — not from a special rendering pass.
+
+---
+
 ## Performance Tools
 
 ### Built into Three.js (works everywhere)

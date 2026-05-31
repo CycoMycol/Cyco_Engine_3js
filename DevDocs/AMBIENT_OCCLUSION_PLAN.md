@@ -511,3 +511,50 @@ subsequent passes (Bloom etc.) see the modified buffer automatically.
 | DepthLimitedBlurShader | `editor/libs/three/addons/shaders/DepthLimitedBlurShader.js` |
 | PostProcessingPipeline | `editor/src/viewport/PostProcessingPipeline.js` |
 | PostProcessingProperties | `editor/src/properties/PostProcessingProperties.js` |
+
+---
+
+## Reference App Research Notes (2025)
+
+### CeralBnB (WebGL)
+- Uses **only texture `aoMap`** — no screen-space AO pass of any kind.
+- `MeshStandardMaterial.aoMapIntensity` controls baked AO strength.
+- Confirms: texture AO is the lowest-cost baseline, but it only works for pre-baked/static scenes.
+
+### Lumen Decor Studio (WebGPU / TSL)
+- Uses a TSL **`AONode`** that injects into the PBR lighting model context via:
+  ```js
+  context.ambientOcclusion.mulAssign(this.aoNode);
+  ```
+  This is a multiplicative injection — exactly the same approach used by our planned `GTAONode`
+  pipeline (post-multiply onto the composite output). **Confirms the planned two-pass multiplicative
+  AO approach is correct.**
+
+- The TSL PBR model (`bw` class) applies AO in two places inside the lighting loop:
+  1. **Diffuse (indirect):** `indirectDiffuse.mulAssign(ao)` — standard irradiance darkening
+  2. **Specular horizon occlusion:** `reflectedLight.specularIndirect.mulAssign( dotNV.clamp().add(ao).sub(1.0).pow(exp2(-16*roughness-1)).clamp() )`
+     This is a horizon-based specular AO term that correctly removes specular leaking in crevices.
+  3. **Clearcoat, Sheen, Iridescence** — each also multiplied by AO.
+
+- `builtinAOContext` (the planned TSL helper that wraps the AO texture into a context node) was found
+  to **not work** in the engine's current two-pass setup. The correct working approach is:
+  ```js
+  // Correct: manually compose the AO result using multiply blend mode
+  const aoTexture = aoPass.getTextureNode().sample(screenUV).r;
+  outputNode = mul(scenePassColor, aoTexture);
+  ```
+
+### Key Takeaway
+Both apps confirm: **multiplicative AO compositing is the production standard** for screen-space AO
+in Three.js. No app surveyed uses additive AO or a separate light-masking AO pass. The `builtinAOContext`
+TSL helper is the intended API but has known integration issues; manual multiply-blend compositing
+is the reliable fallback.
+
+### TSL AO Pipeline Confirmation (from `webgpu-ao-pipeline.md` memory)
+```
+Pre-pass (MRT):  normals → directionToColor(normalView)  → normal texture
+AO pass:         ao(depthNode, normalNode, camera)        → AO texture (0=occluded, 1=open)
+Scene pass:      standard PBR render                     → color texture
+Composite:       sceneColor * aoValue                    → final output
+```
+AO value range in open spaces: ~0.89–1.0. Cavities/corners: ~0.4–0.7.

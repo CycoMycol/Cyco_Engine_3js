@@ -206,6 +206,76 @@ const tier = detectGPUTier(renderer);
 
 ---
 
+## Reference App Research Notes (2025)
+
+> Analysis of CeralBnB (WebGL) and Lumen Decor Studio (WebGPU/TSL) to extract shadow, interior lighting, and post-processing patterns.
+
+### Shadows
+
+**CeralBnB (WebGL):**
+- Uses standard Three.js PCF soft shadows (`THREE.PCFSoftShadowMap`).
+- The shadow GLSL (injected via `onBeforeCompile`) uses a **Vogel disk** pattern with 5 taps:
+  ```glsl
+  float phi = interleavedGradientNoise(gl_FragCoord.xy) * 6.28318530718;
+  for (int i = 0; i < 5; i++) {
+    vec2 offset = vogelDiskSample(i, 5, phi) * filterRadius;
+    shadow += texture2DShadowLerp(shadowMap, shadowCoord + offset);
+  }
+  shadow /= 5.0;
+  ```
+  Also uses VSM (Variance Shadow Maps) for some lights: shadow map stores `vec4(mean, std_dev, 0, 0)`.
+- **Conclusion:** Standard Three.js shadow maps. No custom shadow pipeline needed beyond tuning `shadowMap.type` and `light.shadow.radius`.
+
+**Lumen Decor Studio (WebGPU/TSL):**
+- Uses the Three.js TSL `ShadowNode` (`dI` class in the bundle) which wraps the same shadow logic in node form.
+- Three filter modes are available as TSL nodes:
+  | Mode | TSL Node | Description |
+  |---|---|---|
+  | PCF | `F$` class | Poisson/Vogel 5-tap + `QP(Mg.xy).mul(6.28318530718)` jitter |
+  | VSM | `V$` class | Ping-pong blur passes; stores mean + variance |
+  | Basic | `I$` class | Single tap |
+- Shadow intensity exposed as a uniform: `shadow.intensity` on the light node.
+- **Conclusion:** TSL shadow nodes are drop-in equivalents to WebGL shadow maps. When Cyco Engine moves to WebGPU primary, shadows require no special handling — Three.js TSL shadow nodes are automatic.
+
+### Interior Lighting Patterns
+
+Both apps use only **standard Three.js lights** for interior scenes. There is no custom "interior lighting" rendering technique in either app. High-quality results come from:
+
+1. **Tight shadow frustum** — Set `light.shadow.camera.near` and `.far` to tightly encompass only the room geometry. This maximizes shadow map resolution per texel.
+2. **Small `light.distance`** for point/spot lights** — Limits falloff to room scale; prevents lights from bleeding through walls.
+3. **PMREM environment map** — `scene.environment` from an interior HDRI (`RGBELoader`) handles realistic reflections and soft fill light. This is the single biggest quality driver for interior scenes.
+4. **Lightmap bake** — `material.lightMap` + `material.lightMapIntensity` for static indirect lighting. Use Three.js `ProgressiveLightMap` to bake in-engine.
+5. **Hemisphere light** for sky/ground ambient fill — prevents pure-black shadows in indirect areas.
+
+```js
+// Recommended interior light setup (from reference app analysis):
+const ceiling = new THREE.PointLight(0xfff5e0, 2, 8, 2); // warm, 8-unit radius, quadratic falloff
+ceiling.castShadow = true;
+ceiling.shadow.mapSize.set(1024, 1024);
+ceiling.shadow.camera.near = 0.1;
+ceiling.shadow.camera.far  = 10;     // tight frustum = sharp shadows
+
+const fill = new THREE.HemisphereLight(0x8888ff, 0x222200, 0.3); // soft sky/ground fill
+
+// PMREM IBL:
+const pmremGen = new THREE.PMREMGenerator(renderer);
+pmremGen.compileEquirectangularShader();
+const hdrTexture = await new RGBELoader().loadAsync('interior.hdr');
+scene.environment = pmremGen.fromEquirectangular(hdrTexture).texture;
+hdrTexture.dispose();
+pmremGen.dispose();
+```
+
+### IBL (Image-Based Lighting) — How Lumen Does It
+
+Lumen uses PMREM convolution internally (`BY`/`NY` functions): GGX importance sampling → spherical Gaussian blur → mip-chain. This is identical to Three.js's built-in `PMREMGenerator`. Two IBL contributions are computed per PBR fragment:
+- `iblIrradiance` — diffuse contribution (lowest mip, wide filter)
+- `radiance` (via `w_(...)` decode) — specular contribution (mip selected by roughness)
+
+**Conclusion:** Three.js's built-in `PMREMGenerator` + `scene.environment` is production-grade. No custom IBL pipeline is needed.
+
+---
+
 ## Files That Will Need Changes
 
 | File | Change |
