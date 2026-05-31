@@ -46,6 +46,176 @@ Background Type: [ Solid Color | Gradient | Sky | HDRI ]
 
 ---
 
+## Sky Type: Gradient / Physical / Hybrid
+
+The **Hybrid** type is a third mode: the Hosek-Wilkie atmosphere provides the sky color distribution, but the gradient editor color stops are blended on top as an artistic tint. This lets you have physically accurate light scattering AND custom color grading at the same time.
+
+| Value | Label | Gradient Editor | Atmosphere Params | Notes |
+|---|---|---|---|---|
+| `gradient` | Gradient Only | Visible, active | Hidden | Pure artistic mode |
+| `physical` | Physical | Hidden | Visible | Pure physics mode (WebGL only) |
+| `hybrid` | Hybrid | Visible (tint) | Visible | Physical sky + gradient tint (WebGL only) |
+
+---
+
+## Complete Target UI Layout (Full Panel Wireframe)
+
+This is the final target state of the Environment Properties panel after all phases are complete.
+
+```
+🌄 Sky Atmosphere
+   └ Type: [Gradient Only | Physical | Hybrid]
+   └ Rayleigh Scale          (Physical / Hybrid only)
+   └ Mie Scale               (Physical / Hybrid only)
+   └ Mie Anisotropy          (Physical / Hybrid only)
+   └ Ozone Absorption        (Physical / Hybrid only)
+   └ Atmosphere Height       (Physical / Hybrid only)
+   └ Aerial Perspective Scale (Physical / Hybrid only)
+   └ [Gradient color pickers — kept! Hidden in Physical mode]
+
+☀️ Sun & Moon
+   └ Sun Elevation (slider + text input)
+   └ Sun Azimuth   (slider + text input)
+   └ Sun Intensity
+   └ Sun Color     (color swatch)
+   └ Sun Disk Size
+   └ Sun Disk Visible (checkbox)
+   └ ─────────────
+   └ Moon Elevation
+   └ Moon Azimuth
+   └ Moon Intensity
+   └ Moon Color (color swatch)
+   └ Moon Disk Size
+
+☁️ Volumetric Clouds (High Altitude)
+   └ Enabled, Coverage, Density
+   └ Altitude Start / End (km)
+   └ Cloud Type Preset [Cumulus | Stratus | Cirrus | Cumulonimbus]
+   └ Wind Speed, Wind Direction
+   └ Multiple Scattering, Ground Contribution
+   └ Self Shadow, Shadow Quality
+
+☁️ Low Clouds (Atmospheric Layer)
+   └ (same controls, separate layer)
+
+🌫 Height Fog
+   └ Enabled
+   └ Type: [Off | Exp² | Linear]
+   └ Base Density
+   └ Height Falloff
+   └ Fog Color (color swatch)
+   └ Inscatter Color (color swatch)
+   └ Start Distance
+   └ Auto Color from Sky (checkbox)
+
+💥 Lens Flare
+   └ Enabled
+   └ Opacity (0–1)
+   └ Glare Size
+   └ Star Points
+   └ Flare Size
+   └ Flare Speed
+   └ Flare Shape [circular | oval | streak]
+   └ Halo Scale
+   └ Color Gain
+   └ Ghost Scale
+   └ Secondary Ghosts (checkbox)
+   └ Additional Streaks (checkbox)
+   └ Star Burst (checkbox)
+   └ Anamorphic (checkbox)
+
+🎨 Post Processing
+   └ Bloom:              Enabled | Threshold | Intensity | Radius
+   └ God Rays:          Enabled | Intensity | Samples
+   └ Chromatic Aberr.:  Enabled | Strength
+   └ Vignette:         Enabled | Offset | Darkness
+   └ Film Grain:        Enabled | Intensity
+   └ Tone Mapping:      [ACES | Linear | Reinhard | AgX | Cineon]
+   └ LUT:               [file load button] | Intensity
+
+🌍 Environment Map (IBL)
+   └ Load HDR/EXR
+   └ Show as Background (checkbox)
+   └ Rotation (0–360)
+   └ Background Blur
+   └ Background Intensity
+   └ Environment Intensity
+```
+
+---
+
+# PHASE 0 - PRE-IMPLEMENTATION AUDIT
+
+**Do this before writing any code.**
+
+This audit maps what currently exists in `EnvironmentProperties.js` against the target UI layout. The gap between "what exists" and "what's needed" defines the actual implementation work per phase.
+
+---
+
+## P0.1 - Existing `EnvironmentProperties.js` Sections
+
+| Section | Method | Status | Notes |
+|---|---|---|---|
+| Background | `_buildBackgroundSection()` | Done | Solid / Gradient / Sky / HDRI type selector |
+| Sky | `_buildSkySection()` | Partial | Has gradient, sun, moon, lens flare (5-style). Needs sky type dropdown, atmosphere sub-section, Hybrid type |
+| Clouds (Volumetric) | `_buildCloudSection()` | Done | High-altitude cloud layer |
+| Low Clouds | `_buildLowCloudsSection()` | Done | Atmospheric cloud layer |
+| Fog | `_buildFogSection()` | Partial | Basic type/color/density. Needs Inscatter Color, Height Falloff, Start Distance |
+| Environment Map | `_buildEnvMapSection()` | Partial | Load + background toggle. Needs rotation, blur, intensity decoupling |
+| **God Rays** | missing | Not started | Add in Phase 1 |
+| **Post Processing** | missing | Not started | Add in Phase 6 |
+
+## P0.2 - Existing Events Used
+
+| Event | Fired by | Handled by | Status |
+|---|---|---|---|
+| `cyco-sky-change` | `_fireSkyChange()` | `ViewportEngine._onSkyChange()` | Done |
+| `cyco-fog-change` | `_buildFogSection` fire fn | `ViewportEngine._onFogChange()` | Done |
+| `cyco-env-map-change` | `_buildEnvMapSection` | `ViewportEngine._onEnvMapChange()` | Done |
+| `cyco-env-background-toggle` | `_buildEnvMapSection` | `ViewportEngine._onEnvBgToggle()` | Done |
+| `cyco-background-change` | `_buildBackgroundSection` | `ViewportEngine._onBackgroundChange()` | Done |
+| `cyco-godrays-change` | missing | missing | Phase 1 |
+| `cyco-postfx-change` | missing | missing | Phase 6 |
+
+## P0.3 - Lens Flare Audit
+
+The current `GradientSky.js` lens flare has 5 preset styles (classic / natural / cinematic / anamorphic / subtle) with per-style parameter sets. The target is to replace this with a fully granular control set matching the Ultimate Lens Flare API:
+
+| Current Control | Target Control | Delta |
+|---|---|---|
+| Style dropdown (5 presets) | Removed — replaced by per-param controls | Replace |
+| Size slider | Flare Size | Rename |
+| Opacity slider | Opacity | Keep |
+| Color swatch | Color Gain (tint) | Rename |
+| Color intensity slider | Color Gain strength | Merge |
+| Ghost Count (cinematic) | Ghost Scale | Rename |
+| Streak Length (anamorphic) | Anamorphic (checkbox) | Expand |
+| Brightness (natural) | Opacity | Merge |
+| Ring thickness/fill/size/opacity | Halo Scale | Merge |
+| missing | Glare Size | Add |
+| missing | Star Points | Add |
+| missing | Flare Speed | Add |
+| missing | Flare Shape | Add |
+| missing | Secondary Ghosts | Add |
+| missing | Additional Streaks | Add |
+| missing | Star Burst | Add |
+
+## P0.4 - Post Processing Audit
+
+PostProcessingPipeline.js already implements Bloom, AO, Outline, SMAA, FXAA, OutputPass, and LUT. However there is NO UI in EnvironmentProperties.js that exposes Bloom parameters or adds new effects. The "Post Processing" section in the target UI needs to be added entirely from scratch.
+
+| Effect | `PostProcessingPipeline.js` | `EnvironmentProperties.js` UI | Delta |
+|---|---|---|---|
+| Bloom | `UnrealBloomPass` — strength/radius/threshold | None | Add UI |
+| God Rays | None (Phase 1) | None (Phase 1) | Both |
+| Chromatic Aberration | None | None | Add shader + UI |
+| Vignette | None | None | Add shader + UI |
+| Film Grain | None | None | Add shader + UI |
+| Tone Mapping | `renderer.toneMapping` set at init | None | Add UI |
+| LUT | `LUTPass` — enabled/intensity/texture | None | Add UI |
+
+---
+
 # PHASE 1 - GOD RAYS
 
 **Priority: HIGHEST. Implement first.**
@@ -1119,6 +1289,634 @@ UI additions for HDRI mode in `EnvironmentProperties.js`:
 
 ---
 
+# PHASE 5 - LENS FLARE REVAMP
+
+---
+
+## P5 Overview
+
+Replace the current 5-preset-style system in `GradientSky.js` with a fully granular set of controls that match the Ultimate Lens Flare API. The new system gives the user direct control over every parameter rather than choosing from presets.
+
+Reference: [R3F Ultimate Lens Flare](https://ultimate-lens-flare.vercel.app/) — all the parameters in the target UI layout are taken directly from this reference implementation.
+
+**Applies to:** Both `GradientSky.js` (WebGL) and `PhysicalSky.js` (WebGL). The WebGPU Sprite-based fallback continues to use a simplified version.
+
+---
+
+## P5.1 - New Lens Flare Parameters
+
+Add to `GradientSky._p` (replacing the old style-based params):
+
+```js
+// Old style-based params (remove these):
+//   lensflareStyle, lensflareIntensity, lensflareGhostCount,
+//   lensflareStreakLength, lensflareBrightness,
+//   lensflareRingThickness, lensflareRingFill, lensflareRingSize, lensflareRingOpacity
+
+// New granular params:
+lensflareEnabled:       true,
+lensflareOpacity:       0.7,
+lensflareGlareSize:     0.4,   // radius of the base lens glare disk
+lensflareStarPoints:    6,     // number of diffraction spikes (0 = none)
+lensflareFlareSize:     0.25,  // overall size of the flare train
+lensflareFlareSpeed:    0.0,   // animation speed (0 = static)
+lensflareFlareShape:    0,     // 0=circular, 1=oval, 2=streak
+lensflareHaloScale:     0.5,   // size of the halo ring
+lensflareColorGain:     new THREE.Color(1, 0.97, 0.88),  // flare color tint
+lensflareGhostScale:    0.3,   // size of secondary ghost elements
+lensflareSecondaryGhosts: true,
+lensflareAdditionalStreaks: false,
+lensflareStarBurst:     false,
+lensflareAnamorphic:    false, // horizontal streak mode
+```
+
+---
+
+## P5.2 - Update `GradientSky.js` Lens Flare System
+
+The lens flare generation in `_createWebGLFlares()` / `_createWebGPUFlares()` needs to read from the new params. Remove the switch-case on style and replace with direct param reads:
+
+```js
+// In _createWebGLFlares():
+const p = this._p;
+
+// Base glare disc
+const glareTex = this._makeGlareTex(128, p.lensflareStarPoints);
+this._flare.addElement(new LensflareElement(
+  glareTex,
+  p.lensflareGlareSize * 200,
+  0,
+  p.lensflareColorGain
+));
+
+// Halo ring
+if (p.lensflareHaloScale > 0) {
+  const haloTex = this._makeHaloTex(128);
+  this._flare.addElement(new LensflareElement(
+    haloTex,
+    p.lensflareHaloScale * 300,
+    0.6,     // offset along axis
+    p.lensflareColorGain
+  ));
+}
+
+// Flare train (ghost chain)
+if (p.lensflareGhostScale > 0) {
+  const ghostTex = this._makeGhostTex(64);
+  const offsets = [0.3, -0.2, 0.7, -0.5, 1.1];
+  const sizes   = [1.0,  0.7, 0.5,  0.3, 0.2];
+  offsets.forEach((off, i) => {
+    this._flare.addElement(new LensflareElement(
+      ghostTex,
+      p.lensflareGhostScale * 200 * sizes[i],
+      off * p.lensflareFlareSize,
+      p.lensflareColorGain
+    ));
+  });
+  // Secondary ghosts
+  if (p.lensflareSecondaryGhosts) {
+    const secOffsets = [0.15, -0.35, 0.55, -0.75];
+    secOffsets.forEach((off, i) => {
+      this._flare.addElement(new LensflareElement(
+        ghostTex,
+        p.lensflareGhostScale * 100 * (0.5 + i * 0.1),
+        off,
+        p.lensflareColorGain
+      ));
+    });
+  }
+}
+
+// Anamorphic horizontal streak
+if (p.lensflareAnamorphic) {
+  const streakTex = this._makeStreakTex(256, 32);
+  this._flare.addElement(new LensflareElement(
+    streakTex,
+    p.lensflareFlareSize * 600,
+    0,
+    p.lensflareColorGain
+  ));
+}
+
+// Star burst diffraction (overlaid on flare)
+if (p.lensflareStarBurst) {
+  const starTex = this._makeStarBurstTex(128, p.lensflareStarPoints);
+  this._flare.addElement(new LensflareElement(
+    starTex,
+    p.lensflareGlareSize * 400,
+    0,
+    p.lensflareColorGain
+  ));
+}
+```
+
+Texture generator helpers to add to `GradientSky.js`:
+
+```js
+// Glare disc with star diffraction spikes
+_makeGlareTex(size, starPoints = 6) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size / 2, cy = size / 2, r = size / 2;
+  // Base glow
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  g.addColorStop(0,   'rgba(255,255,255,1)');
+  g.addColorStop(0.1, 'rgba(255,240,200,0.8)');
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  // Diffraction spikes
+  if (starPoints > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.strokeStyle = 'rgba(255,255,200,0.3)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < starPoints; i++) {
+      const angle = (i / starPoints) * Math.PI;
+      ctx.beginPath();
+      ctx.moveTo(cx - Math.cos(angle) * r, cy - Math.sin(angle) * r);
+      ctx.lineTo(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+  return new THREE.CanvasTexture(c);
+}
+
+_makeHaloTex(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size/2, cy = size/2, r = size * 0.4;
+  const g = ctx.createRadialGradient(cx, cy, r * 0.8, cx, cy, r);
+  g.addColorStop(0,   'rgba(0,0,0,0)');
+  g.addColorStop(0.5, 'rgba(200,200,255,0.4)');
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+
+_makeGhostTex(size) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size/2, cy = size/2, r = size/2;
+  const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  g.addColorStop(0,   'rgba(255,220,180,0.8)');
+  g.addColorStop(0.5, 'rgba(200,180,255,0.3)');
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(c);
+}
+
+_makeStreakTex(w, h) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const ctx = c.getContext('2d');
+  const g = ctx.createLinearGradient(0, 0, w, 0);
+  g.addColorStop(0,   'rgba(0,0,0,0)');
+  g.addColorStop(0.5, 'rgba(220,200,255,0.9)');
+  g.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  return new THREE.CanvasTexture(c);
+}
+
+_makeStarBurstTex(size, points = 6) {
+  const c = document.createElement('canvas');
+  c.width = c.height = size;
+  const ctx = c.getContext('2d');
+  const cx = size/2, cy = size/2, r = size/2;
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  gradient.addColorStop(0,   'rgba(255,255,255,0.9)');
+  gradient.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = gradient;
+  for (let i = 0; i < points; i++) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((i / points) * Math.PI);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, r, r * 0.02, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+  ctx.restore();
+  return new THREE.CanvasTexture(c);
+}
+```
+
+---
+
+## P5.3 - Update Lens Flare Section in `EnvironmentProperties.js`
+
+Replace the style-dropdown-based Lens Flare sub-section inside `_buildSkySection()` with fully granular controls:
+
+```js
+// Remove: lensflareStyleSelect, lensflareIntensitySlider, lensflareGhostCountSlider,
+//         lensflareStreakLengthSlider, lensflareBrightnessSlider,
+//         lensflareRingThickness/Fill/Size/Opacity sliders
+
+// Add:
+const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: _fire });
+const opacitySlider      = slider({ value: _skyP?.lensflareOpacity ?? 0.7, min: 0, max: 1, step: 0.01, onChange: _fire });
+const glareSizeSlider    = slider({ value: _skyP?.lensflareGlareSize ?? 0.4, min: 0, max: 2, step: 0.01, onChange: _fire });
+const starPointsSlider   = slider({ value: _skyP?.lensflareStarPoints ?? 6, min: 0, max: 12, step: 1, onChange: _fire });
+const flareSizeSlider    = slider({ value: _skyP?.lensflareFlareSize ?? 0.25, min: 0, max: 2, step: 0.01, onChange: _fire });
+const flareSpeedSlider   = slider({ value: _skyP?.lensflareFlareSpeed ?? 0.0, min: 0, max: 2, step: 0.01, onChange: _fire });
+const haloScaleSlider    = slider({ value: _skyP?.lensflareHaloScale ?? 0.5, min: 0, max: 2, step: 0.01, onChange: _fire });
+const ghostScaleSlider   = slider({ value: _skyP?.lensflareGhostScale ?? 0.3, min: 0, max: 2, step: 0.01, onChange: _fire });
+const colorGainSw        = colorSwatch({ color: '#fff8e7', onChange: _fire });
+const flareShapeSelect   = select({
+  options: [['0','Circular'],['1','Oval'],['2','Streak']],
+  value: String(_skyP?.lensflareFlareShape ?? 0),
+  onChange: _fire,
+});
+const secondaryGhostsCb = checkbox({ checked: _skyP?.lensflareSecondaryGhosts ?? true, onChange: _fire });
+const addStreaksCb       = checkbox({ checked: _skyP?.lensflareAdditionalStreaks ?? false, onChange: _fire });
+const starBurstCb        = checkbox({ checked: _skyP?.lensflareStarBurst ?? false, onChange: _fire });
+const anamorphicCb       = checkbox({ checked: _skyP?.lensflareAnamorphic ?? false, onChange: _fire });
+
+flareSec.addRow(row('Enable',            lensflareEnabledCb));
+flareSec.addRow(row('Opacity',           opacitySlider.el));
+flareSec.addRow(row('Glare Size',        glareSizeSlider.el));
+flareSec.addRow(row('Star Points',       starPointsSlider.el));
+flareSec.addRow(row('Flare Size',        flareSizeSlider.el));
+flareSec.addRow(row('Flare Speed',       flareSpeedSlider.el));
+flareSec.addRow(row('Flare Shape',       flareShapeSelect));
+flareSec.addRow(row('Halo Scale',        haloScaleSlider.el));
+flareSec.addRow(row('Color Gain',        colorGainSw.el));
+flareSec.addRow(row('Ghost Scale',       ghostScaleSlider.el));
+flareSec.addRow(row('Secondary Ghosts',  secondaryGhostsCb));
+flareSec.addRow(row('Extra Streaks',     addStreaksCb));
+flareSec.addRow(row('Star Burst',        starBurstCb));
+flareSec.addRow(row('Anamorphic',        anamorphicCb));
+```
+
+Update `_fireSkyChange()` to emit the new params:
+```js
+lensflareOpacity:           parseFloat(opacitySlider.input.value),
+lensflareGlareSize:         parseFloat(glareSizeSlider.input.value),
+lensflareStarPoints:        parseInt(starPointsSlider.input.value, 10),
+lensflareFlareSize:         parseFloat(flareSizeSlider.input.value),
+lensflareFlareSpeed:        parseFloat(flareSpeedSlider.input.value),
+lensflareFlareShape:        parseInt(flareShapeSelect.value, 10),
+lensflareHaloScale:         parseFloat(haloScaleSlider.input.value),
+lensflareColorGain:         colorGainSw.el.style.getPropertyValue('--sw-color') || '#fff8e7',
+lensflareGhostScale:        parseFloat(ghostScaleSlider.input.value),
+lensflareSecondaryGhosts:   secondaryGhostsCb.checked,
+lensflareAdditionalStreaks: addStreaksCb.checked,
+lensflareStarBurst:         starBurstCb.checked,
+lensflareAnamorphic:        anamorphicCb.checked,
+```
+
+---
+
+---
+
+# PHASE 6 - POST PROCESSING CONTROLS PANEL
+
+---
+
+## P6 Overview
+
+Add a dedicated **Post Processing** section to `EnvironmentProperties.js` that surfaces controls for all post-processing effects. Currently `PostProcessingPipeline.js` has Bloom, AO, LUT, etc. but there is no UI to control them from the Environment panel.
+
+Also add three new effects: **Chromatic Aberration**, **Vignette**, and **Film Grain** as `ShaderPass` instances in `PostProcessingPipeline.js`.
+
+**Pipeline order after Phase 6:**
+```
+RenderPass → [AO] → BloomPass → OutlinePass → SMAA → OutputPass → [GodRays] → [ChromaticAberration] → [Vignette] → [FilmGrain] → FXAA → LUT
+```
+
+---
+
+## P6.1 - Chromatic Aberration ShaderPass
+
+Add to `PostProcessingPipeline.js`:
+
+```js
+// Chromatic Aberration — splits RGB channels slightly apart
+const ChromaticAberrationShader = {
+  uniforms: {
+    tDiffuse:  { value: null },
+    strength:  { value: 0.002 },
+    enabled:   { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float strength;
+    uniform float enabled;
+    varying vec2 vUv;
+    void main() {
+      if (enabled < 0.5) { gl_FragColor = texture2D(tDiffuse, vUv); return; }
+      vec2 offset = (vUv - 0.5) * strength;
+      float r = texture2D(tDiffuse, vUv + offset).r;
+      float g = texture2D(tDiffuse, vUv        ).g;
+      float b = texture2D(tDiffuse, vUv - offset).b;
+      gl_FragColor = vec4(r, g, b, 1.0);
+    }
+  `,
+};
+
+// In _buildWebGLPipeline(), insert after GodRays pass:
+this.chromaPass = new ShaderPass(ChromaticAberrationShader);
+this.chromaPass.uniforms['enabled'].value  = this._chromaEnabled ? 1.0 : 0.0;
+this.chromaPass.uniforms['strength'].value = this._chromaStrength ?? 0.002;
+this._composer.addPass(this.chromaPass);
+```
+
+---
+
+## P6.2 - Vignette ShaderPass
+
+```js
+const VignetteShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    offset:   { value: 1.0 },
+    darkness: { value: 1.0 },
+    enabled:  { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float offset;
+    uniform float darkness;
+    uniform float enabled;
+    varying vec2 vUv;
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      if (enabled > 0.5) {
+        float dist = distance(vUv, vec2(0.5));
+        color.rgb *= smoothstep(0.8, offset * 0.799, dist * (darkness + offset));
+      }
+      gl_FragColor = color;
+    }
+  `,
+};
+
+// In _buildWebGLPipeline(), after chromaPass:
+this.vignettePass = new ShaderPass(VignetteShader);
+this.vignettePass.uniforms['enabled'].value  = this._vignetteEnabled ? 1.0 : 0.0;
+this.vignettePass.uniforms['offset'].value   = this._vignetteOffset   ?? 1.0;
+this.vignettePass.uniforms['darkness'].value = this._vignetteDarkness ?? 1.0;
+this._composer.addPass(this.vignettePass);
+```
+
+---
+
+## P6.3 - Film Grain ShaderPass
+
+```js
+const FilmGrainShader = {
+  uniforms: {
+    tDiffuse:  { value: null },
+    time:      { value: 0.0 },
+    intensity: { value: 0.1 },
+    enabled:   { value: 0.0 },
+  },
+  vertexShader: `
+    varying vec2 vUv;
+    void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }
+  `,
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    uniform float time;
+    uniform float intensity;
+    uniform float enabled;
+    varying vec2 vUv;
+    float rand(vec2 co) {
+      return fract(sin(dot(co.xy ,vec2(12.9898,78.233))) * 43758.5453);
+    }
+    void main() {
+      vec4 color = texture2D(tDiffuse, vUv);
+      if (enabled > 0.5) {
+        float grain = rand(vUv + vec2(time * 0.001)) * 2.0 - 1.0;
+        color.rgb += grain * intensity;
+      }
+      gl_FragColor = color;
+    }
+  `,
+};
+
+// In _buildWebGLPipeline(), after vignettePass:
+this.filmGrainPass = new ShaderPass(FilmGrainShader);
+this.filmGrainPass.uniforms['enabled'].value   = this._filmGrainEnabled ? 1.0 : 0.0;
+this.filmGrainPass.uniforms['intensity'].value = this._filmGrainIntensity ?? 0.1;
+this._composer.addPass(this.filmGrainPass);
+
+// In the per-frame render loop, update time uniform:
+if (this.filmGrainPass) {
+  this.filmGrainPass.uniforms['time'].value = performance.now();
+}
+```
+
+---
+
+## P6.4 - Tone Mapping Selector
+
+Add `setToneMapping(mode)` to `PostProcessingPipeline.js` or directly to `ViewportEngine.js`:
+
+```js
+// Tone mapping constants in Three.js:
+// THREE.NoToneMapping        = 0
+// THREE.LinearToneMapping    = 1
+// THREE.ReinhardToneMapping  = 2
+// THREE.CineonToneMapping    = 3
+// THREE.ACESFilmicToneMapping = 4
+// THREE.AgXToneMapping       = 6  (r152+)
+// THREE.NeutralToneMapping   = 7  (r163+)
+
+setToneMapping(mode) {
+  const renderer = this.engine?.rendererManager?.renderer;
+  if (!renderer) return;
+  const map = {
+    aces:     THREE.ACESFilmicToneMapping,
+    linear:   THREE.LinearToneMapping,
+    reinhard: THREE.ReinhardToneMapping,
+    agx:      THREE.AgXToneMapping,
+    cineon:   THREE.CineonToneMapping,
+    none:     THREE.NoToneMapping,
+  };
+  renderer.toneMapping = map[mode] ?? THREE.ACESFilmicToneMapping;
+}
+```
+
+---
+
+## P6.5 - Add Post Processing Section to `EnvironmentProperties.js`
+
+Add `_buildPostProcessingSection(root)` and call it from `_build()` after `_buildEnvMapSection`:
+
+```js
+_buildPostProcessingSection(root) {
+  const { el, body } = section('Post Processing');
+  root.appendChild(el);
+
+  const _firePP = (opts) => {
+    window.dispatchEvent(new CustomEvent('cyco-postfx-change', { detail: opts }));
+  };
+
+  // ── Bloom ──────────────────────────────────────────────────────────────────
+  const bloomHeader = _subSectionHeader('Bloom');
+  body.appendChild(bloomHeader);
+  const bloomEnabledCb = checkbox({ checked: true, onChange: (v) => _firePP({ bloom: { enabled: v } }) });
+  const bloomThreshSlider = slider({ value: 0.85, min: 0, max: 2, step: 0.01,
+    onChange: (v) => _firePP({ bloom: { threshold: v } }) });
+  const bloomStrengthSlider = slider({ value: 0.8, min: 0, max: 3, step: 0.05,
+    onChange: (v) => _firePP({ bloom: { strength: v } }) });
+  const bloomRadiusSlider = slider({ value: 0.4, min: 0, max: 1, step: 0.01,
+    onChange: (v) => _firePP({ bloom: { radius: v } }) });
+  body.appendChild(row('Bloom Enable',    bloomEnabledCb));
+  body.appendChild(row('Threshold',       bloomThreshSlider.el));
+  body.appendChild(row('Intensity',       bloomStrengthSlider.el));
+  body.appendChild(row('Radius',          bloomRadiusSlider.el));
+
+  // ── God Rays (mirrored from God Rays section for convenience) ───────────────
+  // (Keep the dedicated God Rays section under Sky; this is just Intensity+Samples)
+
+  // ── Chromatic Aberration ────────────────────────────────────────────────────
+  const chromaHeader = _subSectionHeader('Chromatic Aberration');
+  body.appendChild(chromaHeader);
+  const chromaEnabledCb = checkbox({ checked: false, onChange: (v) => _firePP({ chroma: { enabled: v } }) });
+  const chromaStrengthSlider = slider({ value: 0.002, min: 0, max: 0.02, step: 0.0005,
+    onChange: (v) => _firePP({ chroma: { strength: v } }) });
+  body.appendChild(row('Chroma Enable',   chromaEnabledCb));
+  body.appendChild(row('Strength',        chromaStrengthSlider.el));
+
+  // ── Vignette ──────────────────────────────────────────────────────────────
+  const vigHeader = _subSectionHeader('Vignette');
+  body.appendChild(vigHeader);
+  const vigEnabledCb = checkbox({ checked: false, onChange: (v) => _firePP({ vignette: { enabled: v } }) });
+  const vigOffsetSlider  = slider({ value: 1.0, min: 0, max: 2, step: 0.05,
+    onChange: (v) => _firePP({ vignette: { offset: v } }) });
+  const vigDarkSlider = slider({ value: 1.0, min: 0, max: 3, step: 0.05,
+    onChange: (v) => _firePP({ vignette: { darkness: v } }) });
+  body.appendChild(row('Vignette Enable', vigEnabledCb));
+  body.appendChild(row('Offset',          vigOffsetSlider.el));
+  body.appendChild(row('Darkness',        vigDarkSlider.el));
+
+  // ── Film Grain ─────────────────────────────────────────────────────────────
+  const grainHeader = _subSectionHeader('Film Grain');
+  body.appendChild(grainHeader);
+  const grainEnabledCb = checkbox({ checked: false, onChange: (v) => _firePP({ grain: { enabled: v } }) });
+  const grainIntensitySlider = slider({ value: 0.08, min: 0, max: 0.5, step: 0.005,
+    onChange: (v) => _firePP({ grain: { intensity: v } }) });
+  body.appendChild(row('Grain Enable',    grainEnabledCb));
+  body.appendChild(row('Intensity',       grainIntensitySlider.el));
+
+  // ── Tone Mapping ───────────────────────────────────────────────────────────
+  const tmHeader = _subSectionHeader('Tone Mapping');
+  body.appendChild(tmHeader);
+  const tmSelect = select({
+    options: [
+      ['aces',     'ACES Filmic (default)'],
+      ['agx',      'AgX (r152+)'],
+      ['reinhard', 'Reinhard'],
+      ['cineon',   'Cineon'],
+      ['linear',   'Linear'],
+      ['none',     'None (raw)'],
+    ],
+    value: 'aces',
+    onChange: (v) => _firePP({ toneMapping: v }),
+  });
+  body.appendChild(row('Tone Mapping', tmSelect));
+
+  // ── LUT ─────────────────────────────────────────────────────────────────────
+  const lutHeader = _subSectionHeader('LUT Color Grading');
+  body.appendChild(lutHeader);
+  const lutEnabledCb = checkbox({ checked: false, onChange: (v) => _firePP({ lut: { enabled: v } }) });
+  const lutIntensitySlider = slider({ value: 1.0, min: 0, max: 1, step: 0.01,
+    onChange: (v) => _firePP({ lut: { intensity: v } }) });
+  const lutLoadBtn = document.createElement('button');
+  lutLoadBtn.textContent = 'Load LUT file...';
+  lutLoadBtn.className   = 'cyco-btn cyco-btn--sm';
+  lutLoadBtn.onclick     = () => {
+    const inp = document.createElement('input');
+    inp.type   = 'file';
+    inp.accept = '.cube,.png,.jpg';
+    inp.onchange = (e) => {
+      const file = e.target.files[0];
+      if (file) _firePP({ lut: { file } });
+    };
+    inp.click();
+  };
+  body.appendChild(row('LUT Enable',   lutEnabledCb));
+  body.appendChild(row('LUT Intensity', lutIntensitySlider.el));
+  body.appendChild(row('LUT File',      lutLoadBtn));
+}
+```
+
+---
+
+## P6.6 - Wire `cyco-postfx-change` in `ViewportEngine.js`
+
+```js
+// Constructor:
+this._onPostFxChange = this._onPostFxChange.bind(this);
+window.addEventListener('cyco-postfx-change', this._onPostFxChange);
+
+// Handler:
+_onPostFxChange({ detail } = {}) {
+  const pp = window.__cyco?.postPipeline;
+  if (!pp || !detail) return;
+
+  if (detail.bloom) {
+    if (detail.bloom.enabled  !== undefined) pp.bloomPass.enabled       = detail.bloom.enabled;
+    if (detail.bloom.strength !== undefined) pp.bloomPass.strength      = detail.bloom.strength;
+    if (detail.bloom.radius   !== undefined) pp.bloomPass.radius        = detail.bloom.radius;
+    if (detail.bloom.threshold !== undefined) pp.bloomPass.threshold   = detail.bloom.threshold;
+  }
+  if (detail.chroma) {
+    if (detail.chroma.enabled  !== undefined) pp.chromaPass.uniforms['enabled'].value  = detail.chroma.enabled  ? 1.0 : 0.0;
+    if (detail.chroma.strength !== undefined) pp.chromaPass.uniforms['strength'].value = detail.chroma.strength;
+  }
+  if (detail.vignette) {
+    if (detail.vignette.enabled  !== undefined) pp.vignettePass.uniforms['enabled'].value  = detail.vignette.enabled ? 1.0 : 0.0;
+    if (detail.vignette.offset   !== undefined) pp.vignettePass.uniforms['offset'].value   = detail.vignette.offset;
+    if (detail.vignette.darkness !== undefined) pp.vignettePass.uniforms['darkness'].value = detail.vignette.darkness;
+  }
+  if (detail.grain) {
+    if (detail.grain.enabled   !== undefined) pp.filmGrainPass.uniforms['enabled'].value   = detail.grain.enabled ? 1.0 : 0.0;
+    if (detail.grain.intensity !== undefined) pp.filmGrainPass.uniforms['intensity'].value = detail.grain.intensity;
+  }
+  if (detail.toneMapping) {
+    pp.setToneMapping(detail.toneMapping);
+  }
+  if (detail.lut) {
+    if (detail.lut.enabled   !== undefined) { pp.lutPass.enabled   = detail.lut.enabled; }
+    if (detail.lut.intensity !== undefined) { pp.lutPass.intensity = detail.lut.intensity; }
+    if (detail.lut.file) {
+      // Load .cube file using LUTCubeLoader or .png using LUTImageLoader
+      // See three/addons/loaders/LUTCubeLoader.js
+      import('three/addons/loaders/LUTCubeLoader.js').then(({ LUTCubeLoader }) => {
+        const url = URL.createObjectURL(detail.lut.file);
+        new LUTCubeLoader().load(url, (lut) => {
+          pp.lutPass.lut = lut.texture3D ?? lut.texture;
+          URL.revokeObjectURL(url);
+        });
+      }).catch(() => {
+        console.warn('[CycoEngine] LUT file loading failed — ensure .cube format');
+      });
+    }
+  }
+}
+```
+
+---
+
 # FILES CHANGED SUMMARY
 
 ## New Files
@@ -1133,9 +1931,9 @@ UI additions for HDRI mode in `EnvironmentProperties.js`:
 | File | What Changes | Phase |
 |---|---|---|
 | `editor/src/viewport/GradientSky.js` | Add `_createOccluderMaterial()`, `_occluderMat`, `onBeforeRender` swap logic | 1 |
-| `editor/src/viewport/PostProcessingPipeline.js` | Add `GodRays` field, build/update/resize/dispose calls, `setGodRaysEnabled()`, `updateGodRaysParams()`. WebGPU GodraysNode. | 1, 4 |
-| `editor/src/viewport/ViewportEngine.js` | Add `physicalSky`, `_activeSkyType`, route `skyType` in `_onSkyChange()`, add `_onGodRaysChange()`, improve fog handler, HDRI properties | 1, 2, 3, 4 |
-| `editor/src/properties/EnvironmentProperties.js` | Add `_buildGodRaysSection()`, Sky Type dropdown + Atmosphere sub-section, revamp fog section, HDRI controls | 1, 2, 3, 4 |
+| `editor/src/viewport/PostProcessingPipeline.js` | Add `GodRays` field, build/update/resize/dispose calls, `setGodRaysEnabled()`, `updateGodRaysParams()`. WebGPU GodraysNode. Add `ChromaticAberrationShader`, `VignetteShader`, `FilmGrainShader` passes, `setToneMapping()`. | 1, 4, 6 |
+| `editor/src/viewport/ViewportEngine.js` | Add `physicalSky`, `_activeSkyType`, route `skyType` in `_onSkyChange()`, add `_onGodRaysChange()`, `_onPostFxChange()`, improve fog handler, HDRI properties | 1, 2, 3, 4, 6 |
+| `editor/src/properties/EnvironmentProperties.js` | Add `_buildGodRaysSection()`, `_buildPostProcessingSection()`, Sky Type dropdown + Atmosphere sub-section, revamp Lens Flare sub-section (granular params), revamp fog section, HDRI controls | 1, 2, 3, 5, 6 |
 
 ---
 
@@ -1166,6 +1964,24 @@ Phase 4 (Polish):
   12. PostProcessingPipeline.js - WebGPU GodraysNode attempt
   13. HDRI mode cleanup (rotation, blur, intensity decoupling)
   14. (Stretch) TSL Hosek-Wilkie port for WebGPU physical sky
+  TEST Phase 4
+
+Phase 5 (Lens Flare Revamp):
+  15. GradientSky.js - add _makeGlareTex, _makeHaloTex, _makeGhostTex, _makeStreakTex, _makeStarBurstTex helpers
+  16. GradientSky.js - rewrite _createWebGLFlares() to use new granular _p params
+  17. GradientSky._p - replace style-based params with granular params
+  18. EnvironmentProperties.js - rewrite Lens Flare sub-section in _buildSkySection()
+  19. EnvironmentProperties.js - update _fireSkyChange() to emit new lens flare fields
+  TEST Phase 5
+
+Phase 6 (Post Processing Controls Panel):
+  20. PostProcessingPipeline.js - add ChromaticAberrationShader + chromaPass
+  21. PostProcessingPipeline.js - add VignetteShader + vignettePass
+  22. PostProcessingPipeline.js - add FilmGrainShader + filmGrainPass (animate time in render loop)
+  23. PostProcessingPipeline.js - add setToneMapping() method
+  24. ViewportEngine.js - add _onPostFxChange() handler
+  25. EnvironmentProperties.js - add _buildPostProcessingSection() and call from _build()
+  TEST Phase 6
 ```
 
 ---
