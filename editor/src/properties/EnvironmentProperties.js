@@ -205,7 +205,7 @@ export class EnvironmentProperties {
     const skyTypeSelect = select({
       options: [
         ['gradient', 'Gradient Sky'],
-        ['physical', 'Physical Sky (WebGL only)'],
+        ['physical', 'Physical Sky'],
       ],
       value: ve?._activeSkyType ?? 'gradient',
       onChange: () => {
@@ -264,6 +264,12 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Contrast', contrastSlider.el));
 
+    const hueSlider = slider({
+      value: 0.0, min: -180, max: 180, step: 1,
+      onChange: () => _fire(),
+    });
+    body.appendChild(row('Hue', hueSlider.el));
+
     // ── Atmosphere sub-section (Physical Sky only — Hosek-Wilkie params) ────
     const atmHdr = document.createElement('div');
     atmHdr.style.cssText =
@@ -280,14 +286,47 @@ export class EnvironmentProperties {
     const rayleighSlider  = slider({ value: ve?.physicalSky?._p?.rayleigh        ?? 1.0,  min: 0,   max: 4,    step: 0.05,  onChange: () => _fire() });
     const mieGSlider      = slider({ value: ve?.physicalSky?._p?.mieDirectionalG ?? 0.8,  min: 0,   max: 0.99, step: 0.01,  onChange: () => _fire() });
     const mieCSlider      = slider({ value: ve?.physicalSky?._p?.mieCoefficient  ?? 0.005,min: 0,   max: 0.1,  step: 0.001, onChange: () => _fire() });
+    const ozoneRSlider    = slider({ value: ve?.physicalSky?._p?.ozoneR ?? 3.426e-7, min: 0, max: 1e-6,  step: 1e-8, onChange: () => _fire() });
+    const ozoneGSlider    = slider({ value: ve?.physicalSky?._p?.ozoneG ?? 8.298e-7, min: 0, max: 1.5e-6,step: 1e-8, onChange: () => _fire() });
+    const ozoneBSlider    = slider({ value: ve?.physicalSky?._p?.ozoneB ?? 3.56e-8,  min: 0, max: 2e-7,  step: 1e-9, onChange: () => _fire() });
+    const skyBrightSlider = slider({ value: ve?.physicalSky?._p?.skyBrightness ?? 1.0, min: 0.1, max: 3.0, step: 0.05, onChange: () => _fire() });
+    const zenithTintR     = slider({ value: ve?.physicalSky?._p?.zenithTintR ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const zenithTintG     = slider({ value: ve?.physicalSky?._p?.zenithTintG ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const zenithTintB     = slider({ value: ve?.physicalSky?._p?.zenithTintB ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const hazeTintR       = slider({ value: ve?.physicalSky?._p?.hazeTintR ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const hazeTintG       = slider({ value: ve?.physicalSky?._p?.hazeTintG ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const hazeTintB       = slider({ value: ve?.physicalSky?._p?.hazeTintB ?? 1.0, min: 0, max: 2, step: 0.01, onChange: () => _fire() });
+    const nightColorR     = slider({ value: ve?.physicalSky?._p?.nightR ?? 0.02, min: 0, max: 0.5, step: 0.005, onChange: () => _fire() });
+    const nightColorG     = slider({ value: ve?.physicalSky?._p?.nightG ?? 0.05, min: 0, max: 0.5, step: 0.005, onChange: () => _fire() });
+    const nightColorB     = slider({ value: ve?.physicalSky?._p?.nightB ?? 0.18, min: 0, max: 0.5, step: 0.005, onChange: () => _fire() });
 
     atmBody.appendChild(row('Turbidity (Haze)',    turbiditySlider.el));
     atmBody.appendChild(row('Rayleigh (Blue Sky)', rayleighSlider.el));
     atmBody.appendChild(row('Mie Anisotropy',      mieGSlider.el));
     atmBody.appendChild(row('Mie Coefficient',     mieCSlider.el));
+    atmBody.appendChild(row('Ozone R (680nm)',      ozoneRSlider.el));
+    atmBody.appendChild(row('Ozone G (550nm)',      ozoneGSlider.el));
+    atmBody.appendChild(row('Ozone B (440nm)',      ozoneBSlider.el));
+    atmBody.appendChild(row('Sky Brightness',       skyBrightSlider.el));
+    atmBody.appendChild(row('Zenith Tint R',        zenithTintR.el));
+    atmBody.appendChild(row('Zenith Tint G',        zenithTintG.el));
+    atmBody.appendChild(row('Zenith Tint B',        zenithTintB.el));
+    atmBody.appendChild(row('Haze Tint R',          hazeTintR.el));
+    atmBody.appendChild(row('Haze Tint G',          hazeTintG.el));
+    atmBody.appendChild(row('Haze Tint B',          hazeTintB.el));
+    atmBody.appendChild(row('Night Color R',        nightColorR.el));
+    atmBody.appendChild(row('Night Color G',        nightColorG.el));
+    atmBody.appendChild(row('Night Color B',        nightColorB.el));
     body.appendChild(atmBody);
 
-    this._atmControls = { turbiditySlider, rayleighSlider, mieGSlider, mieCSlider };
+    this._atmControls = {
+      turbiditySlider, rayleighSlider, mieGSlider, mieCSlider,
+      ozoneRSlider, ozoneGSlider, ozoneBSlider,
+      skyBrightSlider,
+      zenithTintR, zenithTintG, zenithTintB,
+      hazeTintR, hazeTintG, hazeTintB,
+      nightColorR, nightColorG, nightColorB,
+    };
 
     // ── Sky gradient (collapsible) ────────────────────────────────────────
     const gradHdr = document.createElement('div');
@@ -306,6 +345,17 @@ export class EnvironmentProperties {
     // gradBody wraps gradient editor so skyTypeSelect can show/hide it
     const gradBody = document.createElement('div');
     body.appendChild(gradBody);
+
+    // ── Initial visibility sync ───────────────────────────────────────────────
+    // The atmHdr/atmBody start hidden; sync display state for whatever sky type
+    // is already active when the panel first opens (no onChange fires on init).
+    {
+      const t = skyTypeSelect.value;
+      atmHdr.style.display   = t === 'physical' ? '' : 'none';
+      atmBody.style.display  = t === 'physical' ? '' : 'none';
+      gradHdr.style.display  = t === 'gradient' ? '' : 'none';
+      gradBody.style.display = t === 'gradient' ? '' : 'none';
+    }
 
     // Read back current gradient if sky is already active
     const initGrad = ve?.gradientSky?.getGradient();
@@ -449,7 +499,7 @@ export class EnvironmentProperties {
     // Store all references
     this._skyControls = {
       enabledCb, elevationSlider, azimuthSlider,
-      exposureSlider, saturationSlider, contrastSlider,
+      exposureSlider, saturationSlider, contrastSlider, hueSlider,
       gradEditor,
       showSunCb, sunColorSw, sunGlowSlider,
       showMoonCb, moonColorSw, moonGlowSlider,
@@ -479,6 +529,7 @@ export class EnvironmentProperties {
         exposure:          parseFloat(s.exposureSlider.input.value),
         saturation:        parseFloat(s.saturationSlider.input.value),
         contrast:          parseFloat(s.contrastSlider.input.value),
+        hue:               parseFloat(s.hueSlider.input.value),
         colorStops,
         opacityStops,
         showSun:           s.showSunCb.checked,
@@ -492,6 +543,19 @@ export class EnvironmentProperties {
         rayleigh:          parseFloat(this._atmControls?.rayleighSlider.input.value  ?? 1),
         mieDirectionalG:   parseFloat(this._atmControls?.mieGSlider.input.value      ?? 0.8),
         mieCoefficient:    parseFloat(this._atmControls?.mieCSlider.input.value      ?? 0.005),
+        ozoneR:            parseFloat(this._atmControls?.ozoneRSlider.input.value    ?? 3.426e-7),
+        ozoneG:            parseFloat(this._atmControls?.ozoneGSlider.input.value    ?? 8.298e-7),
+        ozoneB:            parseFloat(this._atmControls?.ozoneBSlider.input.value    ?? 3.56e-8),
+        skyBrightness:     parseFloat(this._atmControls?.skyBrightSlider.input.value ?? 1.0),
+        zenithTintR:       parseFloat(this._atmControls?.zenithTintR.input.value     ?? 1.0),
+        zenithTintG:       parseFloat(this._atmControls?.zenithTintG.input.value     ?? 1.0),
+        zenithTintB:       parseFloat(this._atmControls?.zenithTintB.input.value     ?? 1.0),
+        hazeTintR:         parseFloat(this._atmControls?.hazeTintR.input.value       ?? 1.0),
+        hazeTintG:         parseFloat(this._atmControls?.hazeTintG.input.value       ?? 1.0),
+        hazeTintB:         parseFloat(this._atmControls?.hazeTintB.input.value       ?? 1.0),
+        nightR:            parseFloat(this._atmControls?.nightColorR.input.value     ?? 0.02),
+        nightG:            parseFloat(this._atmControls?.nightColorG.input.value     ?? 0.05),
+        nightB:            parseFloat(this._atmControls?.nightColorB.input.value     ?? 0.18),
         lensflareEnabled:      s.lensflareEnabledCb.checked,
         lensflareOpacity:      parseFloat(s.opacitySlider.input.value),
         lensflareGlareSize:    parseFloat(s.glareSizeSlider.input.value),
@@ -619,13 +683,13 @@ export class EnvironmentProperties {
     body.appendChild(row('Wind Direction', windDirSlider.el));
 
     const heightSlider = slider({
-      value: cs()?._p?.cloudBase ?? 300, min: 1, max: 5000, step: 1,
+      value: cs()?._p?.cloudBase ?? 1500, min: 0, max: 20000, step: 10,
       onChange: (v) => cs()?.setParam('cloudHeight', v),
     });
-    body.appendChild(row('Cloud Height', heightSlider.el));
+    body.appendChild(row('Cloud Altitude', heightSlider.el));
 
     const thicknessSlider = slider({
-      value: ((cs()?._p?.cloudTop ?? 600) - (cs()?._p?.cloudBase ?? 300)), min: 10, max: 2000, step: 1,
+      value: ((cs()?._p?.cloudTop ?? 2100) - (cs()?._p?.cloudBase ?? 1500)), min: 10, max: 2000, step: 1,
       onChange: (v) => cs()?.setParam('cloudThickness', v),
     });
     body.appendChild(row('Thickness', thicknessSlider.el));
@@ -958,55 +1022,47 @@ export class EnvironmentProperties {
       }
     });
 
-    // Presets button + dropdown
+    // HDRI Preset browser — thumbnail popup to the left of the panel
     const presetWrap = document.createElement('div');
-    presetWrap.style.cssText = 'position:relative;display:inline-block;';
+    presetWrap.style.cssText = 'display:inline-block;';
     const presetBtn = document.createElement('button');
-    presetBtn.textContent = 'Presets ▾';
+    presetBtn.textContent = 'HDRI Presets…';
     presetBtn.className = 'ce-btn ce-btn-sm';
     presetBtn.style.cssText = fileBtn.style.cssText;
 
-    const presetDd = document.createElement('div');
-    presetDd.style.cssText =
-      'display:none;position:absolute;left:0;top:calc(100% + 3px);z-index:9999;' +
-      'min-width:190px;background:var(--bg-secondary,#1e1e1e);' +
-      'border:1px solid var(--border-color,#3a3a3a);border-radius:5px;' +
-      'box-shadow:0 6px 20px rgba(0,0,0,.6);overflow:hidden;';
-
-    const PRESETS = [
-      { label: 'Room (Built-in)',   type: 'room'                                           },
-      { label: 'Overcast Sky',      type: 'sky', elevation: 5,  turbidity: 16, rayleigh: 4 },
-      { label: 'Sunny Midday',      type: 'sky', elevation: 60, turbidity: 8,  rayleigh: 2 },
-      { label: 'Golden Hour',       type: 'sky', elevation: 8,  turbidity: 12, rayleigh: 3.5 },
-      { label: 'Night Sky',         type: 'sky', elevation: -5, turbidity: 2,  rayleigh: 0.5 },
-      { label: 'Clear Blue Sky',    type: 'sky', elevation: 45, turbidity: 5,  rayleigh: 1.5 },
-    ];
-    PRESETS.forEach(p => {
-      const item = document.createElement('div');
-      item.style.cssText = 'padding:5px 10px;font-size:11px;color:var(--text-primary,#e0e0e0);cursor:pointer;';
-      item.textContent = p.label;
-      item.addEventListener('mouseenter', () => { item.style.background = 'rgba(224,114,40,.18)'; });
-      item.addEventListener('mouseleave', () => { item.style.background = ''; });
-      item.addEventListener('click', (e) => {
-        e.stopPropagation();
-        presetDd.style.display = 'none';
-        this._applyPreset(p, statusLabel);
-      });
-      presetDd.appendChild(item);
-    });
+    // Build popup once and attach to body (positioned via fixed layout)
+    const hdriPopup = this._createHdriPopup();
+    document.body.appendChild(hdriPopup);
 
     presetBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const isOpen = presetDd.style.display !== 'none';
-      presetDd.style.display = isOpen ? 'none' : 'block';
-      if (!isOpen) {
-        const close = () => { presetDd.style.display = 'none'; document.removeEventListener('click', close); };
-        setTimeout(() => document.addEventListener('click', close), 0);
+      if (hdriPopup.style.display !== 'none') {
+        hdriPopup.style.display = 'none';
+        return;
       }
+      // Auto-position only on first open; afterwards the user can drag it anywhere
+      if (!hdriPopup._positioned) {
+        hdriPopup._positioned = true;
+        const rect = presetBtn.getBoundingClientRect();
+        const pw = parseInt(hdriPopup.style.width)  || 284;
+        const ph = parseInt(hdriPopup.style.height) || 510;
+        // Walk up DOM to find the panel container's left edge
+        let panelLeft = rect.left;
+        let el = presetBtn.parentElement;
+        while (el && el !== document.body) {
+          const r = el.getBoundingClientRect();
+          if (r.left < panelLeft - 4) { panelLeft = r.left; break; }
+          el = el.parentElement;
+        }
+        const left = Math.max(4, panelLeft - pw - 4);
+        const top  = Math.max(40, Math.min(rect.top - Math.round(ph / 2), window.innerHeight - ph - 20));
+        hdriPopup.style.left = `${left}px`;
+        hdriPopup.style.top  = `${top}px`;
+      }
+      hdriPopup.style.display = 'flex';
     });
-    presetWrap.appendChild(presetBtn);
-    presetWrap.appendChild(presetDd);
 
+    presetWrap.appendChild(presetBtn);
     btnRow.appendChild(fileBtn);
     btnRow.appendChild(presetWrap);
     body.appendChild(btnRow);
@@ -1025,6 +1081,212 @@ export class EnvironmentProperties {
       },
     });
     body.appendChild(row('Show as Background', bgCb));
+  }
+
+  // ── HDRI Preset popup builder ──────────────────────────────────────────────
+
+  _createHdriPopup() {
+    const PRESETS = [
+      // Built-in
+      { category: 'Built-in', label: 'Room Environment', type: 'room',
+        thumbCss: 'radial-gradient(ellipse at 65% 35%, #d8d8d8 0%, #a0a0a0 55%, #606060 100%)' },
+      // Outdoor — Poly Haven CC0 HDRIs
+      { category: 'Outdoor', label: 'Autumn Field',       slug: 'autumn_field_puresky' },
+      { category: 'Outdoor', label: 'Golden Hour',        slug: 'kloppenheim_06_puresky' },
+      { category: 'Outdoor', label: 'Industrial Sunset',  slug: 'industrial_sunset_puresky' },
+      { category: 'Outdoor', label: 'Evening Road',       slug: 'evening_road_01_puresky' },
+      { category: 'Outdoor', label: 'Sky Is On Fire',     slug: 'the_sky_is_on_fire' },
+      { category: 'Outdoor', label: 'Overcast',           slug: 'kloofendal_overcast_puresky' },
+      { category: 'Outdoor', label: 'Moonlit Night',      slug: 'kloppenheim_02' },
+      { category: 'Outdoor', label: 'Milky Way',          slug: 'moonless_golf' },
+      // Studio — Poly Haven CC0 HDRIs
+      { category: 'Studio',  label: 'Brown Studio',       slug: 'brown_photostudio_02' },
+      { category: 'Studio',  label: 'Soft Octabox',       slug: 'studio_small_09' },
+      { category: 'Studio',  label: 'Large Softboxes',    slug: 'studio_small_08' },
+      { category: 'Studio',  label: 'Cool Fluorescent',   slug: 'photo_studio_01' },
+    ];
+
+    const popup = document.createElement('div');
+    popup.style.cssText =
+      'display:none;position:fixed;z-index:10000;width:284px;height:510px;' +
+      'min-width:220px;min-height:300px;flex-direction:column;overflow:hidden;' +
+      'background:var(--bg-secondary,#1e1e1e);' +
+      'border:1px solid var(--border-color,#3a3a3a);border-radius:8px;' +
+      'box-shadow:0 10px 40px rgba(0,0,0,.75);';
+
+    // ── Drag & resize state ──────────────────────────────────────────────────
+    let isDragging = false, dragOffX = 0, dragOffY = 0;
+    let isResizing = false, resStartX = 0, resStartY = 0, resStartW = 0, resStartH = 0;
+    const onDocMove = (e) => {
+      if (isDragging) {
+        let x = e.clientX - dragOffX;
+        let y = e.clientY - dragOffY;
+        x = Math.max(0, Math.min(window.innerWidth  - 60, x));
+        y = Math.max(0, Math.min(window.innerHeight - 40, y));
+        popup.style.left = `${x}px`;
+        popup.style.top  = `${y}px`;
+      } else if (isResizing) {
+        popup.style.width  = `${Math.max(220, resStartW + (e.clientX - resStartX))}px`;
+        popup.style.height = `${Math.max(300, resStartH + (e.clientY - resStartY))}px`;
+      }
+    };
+    const onDocUp = () => {
+      if (isDragging) hdr.style.cursor = 'grab';
+      isDragging = false;
+      isResizing = false;
+    };
+    document.addEventListener('mousemove', onDocMove);
+    document.addEventListener('mouseup',   onDocUp);
+
+    // ── Header (drag handle) ─────────────────────────────────────────────────
+    const xBtn = document.createElement('button');
+    xBtn.textContent = '×';
+    xBtn.style.cssText =
+      'background:none;border:none;color:var(--text-secondary,#888);' +
+      'font-size:18px;line-height:1;cursor:pointer;padding:0 3px;flex-shrink:0;';
+    xBtn.addEventListener('click', () => { popup.style.display = 'none'; });
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;' +
+      'padding:8px 10px 7px;border-bottom:1px solid var(--border-color,#2c2c2c);' +
+      'flex-shrink:0;user-select:none;cursor:grab;';
+    hdr.addEventListener('mousedown', (e) => {
+      if (e.button !== 0 || e.target === xBtn) return;
+      isDragging = true;
+      const r = popup.getBoundingClientRect();
+      dragOffX = e.clientX - r.left;
+      dragOffY = e.clientY - r.top;
+      hdr.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    const ttl = document.createElement('span');
+    ttl.textContent = 'HDRI Presets';
+    ttl.style.cssText = 'font-size:12px;font-weight:600;color:var(--text-primary,#e0e0e0);';
+    hdr.appendChild(ttl);
+    hdr.appendChild(xBtn);
+    popup.appendChild(hdr);
+
+    // ── Scrollable body ──────────────────────────────────────────────────────
+    const scrollBody = document.createElement('div');
+    scrollBody.style.cssText = 'flex:1;overflow-y:auto;padding:8px 8px 12px;min-height:0;';
+
+    let activeCard = null;
+    const categories = [...new Set(PRESETS.map(p => p.category))];
+
+    categories.forEach(cat => {
+      const catEl = document.createElement('div');
+      catEl.textContent = cat;
+      catEl.style.cssText =
+        'font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;' +
+        'color:var(--text-secondary,#666);padding:4px 2px 5px;';
+      scrollBody.appendChild(catEl);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:10px;';
+
+      PRESETS.filter(p => p.category === cat).forEach(preset => {
+        const card = document.createElement('div');
+        card.style.cssText =
+          'border:2px solid var(--border-color,#2a2a2a);border-radius:6px;' +
+          'overflow:hidden;cursor:pointer;transition:border-color 0.12s,opacity 0.12s;';
+
+        if (preset.thumbCss) {
+          const thumb = document.createElement('div');
+          thumb.style.cssText = `width:100%;aspect-ratio:1/1;background:${preset.thumbCss};`;
+          card.appendChild(thumb);
+        } else {
+          const img = document.createElement('img');
+          img.src = `https://cdn.polyhaven.com/asset_img/thumbs/${preset.slug}.png?width=256&height=256`;
+          img.alt = preset.label;
+          img.loading = 'lazy';
+          img.style.cssText = 'width:100%;aspect-ratio:1/1;object-fit:cover;display:block;background:var(--bg-primary,#141414);';
+          card.appendChild(img);
+        }
+
+        const lbl = document.createElement('div');
+        lbl.textContent = preset.label;
+        lbl.style.cssText =
+          'font-size:9px;text-align:center;padding:3px 4px 4px;' +
+          'color:var(--text-secondary,#aaa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;' +
+          'background:var(--bg-primary,#161616);';
+        card.appendChild(lbl);
+
+        card.addEventListener('mouseenter', () => {
+          if (card !== activeCard) card.style.borderColor = 'rgba(224,114,40,.55)';
+        });
+        card.addEventListener('mouseleave', () => {
+          if (card !== activeCard) card.style.borderColor = 'var(--border-color,#2a2a2a)';
+        });
+
+        card.addEventListener('click', () => {
+          if (activeCard) activeCard.style.borderColor = 'var(--border-color,#2a2a2a)';
+          activeCard = card;
+          card.style.borderColor = 'rgba(224,114,40,.95)';
+          popup.style.display = 'none';
+
+          if (preset.type === 'room') {
+            window.dispatchEvent(new CustomEvent('cyco-env-preset', { detail: { preset: 'room' } }));
+            if (this._statusLabel) this._statusLabel.textContent = 'Room Environment (built-in)';
+            return;
+          }
+
+          const url = `https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/2k/${preset.slug}_2k.hdr`;
+          if (this._statusLabel) this._statusLabel.textContent = `⏳ Loading: ${preset.label}…`;
+          window.dispatchEvent(new CustomEvent('cyco-env-map-change', { detail: { url, isHDR: true } }));
+          // Update label once loaded (listen for success) or after timeout
+          const onLoaded = () => {
+            if (this._statusLabel) this._statusLabel.textContent = `${preset.label} (Poly Haven CC0)`;
+            window.removeEventListener('cyco-env-map-loaded', onLoaded);
+          };
+          window.addEventListener('cyco-env-map-loaded', onLoaded);
+          setTimeout(() => {
+            window.removeEventListener('cyco-env-map-loaded', onLoaded);
+            if (this._statusLabel && this._statusLabel.textContent.startsWith('⏳')) {
+              this._statusLabel.textContent = `${preset.label} (Poly Haven CC0)`;
+            }
+          }, 15000);
+        });
+
+        grid.appendChild(card);
+      });
+
+      scrollBody.appendChild(grid);
+    });
+
+    // ── Footer ───────────────────────────────────────────────────────────────
+    const footer = document.createElement('div');
+    footer.style.cssText =
+      'font-size:9px;color:var(--text-secondary,#555);padding:6px 8px 4px;' +
+      'border-top:1px solid var(--border-color,#2a2a2a);flex-shrink:0;text-align:center;';
+    footer.textContent = 'Poly Haven CC0 · loaded from CDN on demand';
+
+    popup.appendChild(scrollBody);
+    popup.appendChild(footer);
+
+    // ── Resize grip (bottom-right corner) ────────────────────────────────────
+    const resizeGrip = document.createElement('div');
+    resizeGrip.style.cssText =
+      'position:absolute;bottom:4px;right:4px;width:14px;height:14px;cursor:se-resize;z-index:1;';
+    resizeGrip.innerHTML =
+      '<svg width="10" height="10" viewBox="0 0 10 10" style="opacity:.35;display:block;margin:2px;">' +
+      '<line x1="1" y1="9" x2="9" y2="1" stroke="#ccc" stroke-width="1.5" stroke-linecap="round"/>' +
+      '<line x1="5" y1="9" x2="9" y2="5" stroke="#ccc" stroke-width="1.5" stroke-linecap="round"/>' +
+      '</svg>';
+    resizeGrip.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      isResizing = true;
+      resStartX = e.clientX;
+      resStartY = e.clientY;
+      resStartW = popup.offsetWidth;
+      resStartH = popup.offsetHeight;
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    popup.appendChild(resizeGrip);
+
+    return popup;
   }
 
   _applyPreset(preset, statusLabel) {

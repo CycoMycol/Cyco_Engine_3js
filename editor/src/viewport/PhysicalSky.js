@@ -141,13 +141,35 @@ export class PhysicalSky {
     sky.raycast       = () => {};
     sky.userData._isHelper = true;
 
-    // Clamp HDR output to prevent bloom blow-out
-    sky.material.onBeforeCompile = (shader) => {
-      shader.fragmentShader = shader.fragmentShader.replace(
-        'gl_FragColor = vec4( texColor, 1.0 );',
-        'gl_FragColor = vec4( min( texColor, vec3( 4.5 ) ), 1.0 );'
-      );
-    };
+    // Disable built-in 2D sky clouds (we use the dedicated VolumetricClouds system)
+    sky.material.uniforms.cloudCoverage.value = 0.0;
+
+    // === Direct fragment shader patch (works for WebGL, WebGL2, and WebGPU) ===
+    // onBeforeCompile is a WebGL-only hook and may not fire in the TSL pipeline,
+    // so we patch the GLSL source string directly before any compilation occurs.
+    // Changes:
+    //   1. Clamp HDR sun disc (prevents bloom explosion — sun was ~1M luminance)
+    //   2. Fill lower hemisphere with a warm ground colour (prevents pitch-black nadir)
+    sky.material.fragmentShader = sky.material.fragmentShader.replace(
+      'gl_FragColor = vec4( texColor, 1.0 );',
+      /* glsl */`
+        // 1. Clamp HDR sun disc so bloom stays proportionate
+        vec3 finalColor = min(texColor, vec3(4.5));
+
+        // 2. Lower hemisphere fill — blend to warm ground colour below the horizon
+        float belowH = max(0.0, -direction.y);
+        if (belowH > 0.001) {
+          float t = smoothstep(0.0, 0.15, belowH);
+          float sunH = max(0.0, vSunDirection.y);
+          vec3 groundDay    = vec3(0.17, 0.14, 0.10);
+          vec3 groundSunset = vec3(0.22, 0.08, 0.02) * max(0.0, 1.0 - sunH * 4.0);
+          vec3 groundColor  = (groundDay + groundSunset) * (vSunE * 0.000005 + 0.04);
+          finalColor = mix(finalColor, groundColor, t);
+        }
+
+        gl_FragColor = vec4(finalColor, 1.0);`
+    );
+    sky.material.needsUpdate = true;
 
     this._sky     = sky;
     this._mesh    = sky;
@@ -300,6 +322,47 @@ export class PhysicalSky {
       this._lensflare.position.copy(this._p.sunDir).multiplyScalar(4e5);
       this._lensflare.visible = this._p.showSun && this._p.elevation > -6;
     }
+  }
+
+  /**
+   * Compute atmospheric sky colours for cloud ambient lighting.
+   * Returns colours tuned to match the Hosek-Wilkie sky at the current sun elevation.
+   * @returns {{ sunColor: THREE.Color, horizon: THREE.Color, zenith: THREE.Color }}
+   */
+  getSkyColors() {
+    const el  = this._p.elevation;          // degrees, roughly -90 to 90
+    const elN = Math.max(-1, Math.min(1, el / 90)); // normalised -1…+1
+
+    // Sunset/sunrise factor: peaks when sun is near the horizon (-5° … +15°)
+    const sunsetT = Math.max(0, 1.0 - Math.abs(elN) * 5.0);
+    // Daytime factor: ramps up from 0° to 20°
+    const dayT    = Math.min(1.0, Math.max(0, elN * 4.5));
+    // Night factor: below horizon
+    const nightT  = Math.max(0, -elN);
+
+    // ── Sun colour ───────────────────────────────────────────────────────────
+    // Day: warm white  |  Sunset: deep orange  |  Night: cold blue
+    const sunR = Math.min(1, 1.0 * dayT + 1.0  * sunsetT + 0.20 * nightT);
+    const sunG = Math.min(1, 0.97 * dayT + 0.45 * sunsetT + 0.20 * nightT);
+    const sunB = Math.min(1, 0.88 * dayT + 0.05 * sunsetT + 0.45 * nightT);
+
+    // ── Horizon colour ───────────────────────────────────────────────────────
+    // Day: pale sky blue  |  Sunset: orange-red  |  Night: dark navy
+    const hR = Math.min(1, 0.65 * dayT + 1.00 * sunsetT + 0.05 * nightT);
+    const hG = Math.min(1, 0.75 * dayT + 0.35 * sunsetT + 0.06 * nightT);
+    const hB = Math.min(1, 0.95 * dayT + 0.05 * sunsetT + 0.18 * nightT);
+
+    // ── Zenith colour ────────────────────────────────────────────────────────
+    // Day: deep blue  |  Sunset: violet/purple  |  Night: near-black
+    const zR = Math.min(1, 0.22 * dayT + 0.35 * sunsetT + 0.01 * nightT);
+    const zG = Math.min(1, 0.44 * dayT + 0.10 * sunsetT + 0.01 * nightT);
+    const zB = Math.min(1, 0.85 * dayT + 0.30 * sunsetT + 0.06 * nightT);
+
+    return {
+      sunColor: new THREE.Color(sunR, sunG, sunB),
+      horizon:  new THREE.Color(hR, hG, hB),
+      zenith:   new THREE.Color(zR, zG, zB),
+    };
   }
 
   /**

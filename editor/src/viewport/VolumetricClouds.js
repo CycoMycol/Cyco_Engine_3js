@@ -367,8 +367,8 @@ export class VolumetricClouds {
       scale:               55.0,
       windSpeed:           0.4,
       windAngle:           0.0,    // radians; 0=+X(east), PI/2=+Z(south)
-      cloudBase:           300.0,
-      cloudTop:            600.0,
+      cloudBase:           1500.0,
+      cloudTop:            2100.0,
       skyMode:             true,
       shadowEnabled:       false,
       shadowStrength:      0.5,
@@ -463,18 +463,34 @@ export class VolumetricClouds {
   }
 
   /**
-   * Sync sun direction from the sky system (degrees).
+   * Sync sun direction from the sky system (degrees) and optionally sky colours
+   * for atmospheric cloud ambient lighting.
    * @param {number} elevation  −10 … 90 degrees
    * @param {number} azimuth    0 … 360 degrees
+   * @param {{ sunColor?: THREE.Color, horizon?: THREE.Color, zenith?: THREE.Color }} [skyColors]
    */
-  updateSunFromSky(elevation, azimuth) {
+  updateSunFromSky(elevation, azimuth, skyColors) {
     const phi   = THREE.MathUtils.degToRad(90 - elevation);
     const theta = THREE.MathUtils.degToRad(azimuth);
     this._p.sunDir.setFromSphericalCoords(1, phi, theta);
-    // WebGPU: reference() auto-reads this._p.sunDir each frame — no push needed.
+
+    // Update sky ambient colours used by the cloud lighting model
+    if (skyColors) {
+      if (skyColors.sunColor) this._p.sunColor.copy(skyColors.sunColor);
+      if (skyColors.horizon)  this._p.skyHorizon.copy(skyColors.horizon);
+      if (skyColors.zenith)   this._p.skyZenith.copy(skyColors.zenith);
+    }
+
+    // WebGPU: reference() nodes auto-read this._p each frame — no push needed.
     if (!this._isWebGPU) {
-      if (this._mesh?.material?.uniforms)
+      if (this._mesh?.material?.uniforms) {
         this._mesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
+        if (skyColors) {
+          this._mesh.material.uniforms.uSunColor.value.copy(this._p.sunColor);
+          this._mesh.material.uniforms.uSkyHorizon.value.copy(this._p.skyHorizon);
+          this._mesh.material.uniforms.uSkyZenith.value.copy(this._p.skyZenith);
+        }
+      }
       if (this._shadowMesh?.material?.uniforms)
         this._shadowMesh.material.uniforms.uSunDir.value.copy(this._p.sunDir);
     }

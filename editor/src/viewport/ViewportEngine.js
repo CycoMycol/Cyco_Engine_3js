@@ -19,12 +19,15 @@
  */
 
 import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
+import { OrbitControls }   from 'three/addons/controls/OrbitControls.js';
+import { ViewHelper }      from 'three/addons/helpers/ViewHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { RGBELoader }      from 'three/addons/loaders/RGBELoader.js';
+import { HDRLoader }       from 'three/addons/loaders/HDRLoader.js';
+import { EXRLoader }       from 'three/addons/loaders/EXRLoader.js';
 import { VolumetricClouds } from './VolumetricClouds.js';
 import { GradientSky }     from './GradientSky.js';
-import { PhysicalSky }     from './PhysicalSky.js';
+import { PhysicalSkyTSL }  from './PhysicalSkyTSL.js';
 import { ContactShadows }  from './ContactShadows.js';
 
 /** Sentinel value: no active focus animation. */
@@ -173,8 +176,8 @@ export class ViewportEngine {
     // Gradient sky + sun/moon system
     this.gradientSky = new GradientSky(this);
 
-    // Physical sky (Hosek-Wilkie — WebGL only)
-    this.physicalSky    = new PhysicalSky(this);
+    // Physical sky (Preetham/Schinzel — TSL NodeMaterial, works with WebGPU + WebGL)
+    this.physicalSky    = new PhysicalSkyTSL(this);
     this._activeSkyType = 'gradient';
 
     // Contact shadow system (ground-plane fake shadows)
@@ -245,8 +248,13 @@ export class ViewportEngine {
       colorStops, opacityStops,
       showSun = true, sunColor, sunGlowStrength,
       showMoon = true, moonColor, moonGlowStrength,
-      exposure, saturation, contrast,
+      exposure, saturation, contrast, hue,
       turbidity, rayleigh, mieDirectionalG, mieCoefficient,
+      ozoneR, ozoneG, ozoneB,
+      skyBrightness,
+      zenithTintR, zenithTintG, zenithTintB,
+      hazeTintR, hazeTintG, hazeTintB,
+      nightR, nightG, nightB,
       // Granular lens flare params (Phase 5)
       lensflareEnabled, lensflareOpacity,
       lensflareGlareSize, lensflareStarPoints, lensflareFlareSize, lensflareFlareSpeed,
@@ -275,9 +283,9 @@ export class ViewportEngine {
       return;
     }
 
-    // Physical sky is WebGL-only — fall back to gradient when running WebGPU
-    const isWebGPU = this.rendererManager?.renderer?.isWebGPURenderer;
-    const resolvedType = (skyType === 'physical' && isWebGPU) ? 'gradient' : skyType;
+    // Physical sky uses TSL NodeMaterial (PhysicalSkyTSL) — natively compatible
+    // with both WebGPU and WebGL renderers. No fallback needed.
+    const resolvedType = skyType;
     this._activeSkyType = resolvedType;
 
     // Disable whichever sky is NOT active
@@ -286,11 +294,32 @@ export class ViewportEngine {
 
     if (resolvedType === 'physical') {
       // ── Physical (Hosek-Wilkie) sky ─────────────────────────────────────────
-      const physParams = { elevation, azimuth, showSun, exposure };
+      const physParams = { elevation, azimuth, showSun, showMoon, exposure };
       if (turbidity       !== undefined) physParams.turbidity       = turbidity;
       if (rayleigh        !== undefined) physParams.rayleigh        = rayleigh;
       if (mieDirectionalG !== undefined) physParams.mieDirectionalG = mieDirectionalG;
       if (mieCoefficient  !== undefined) physParams.mieCoefficient  = mieCoefficient;
+      // Colour grade
+      if (saturation      !== undefined) physParams.saturation      = saturation;
+      if (contrast        !== undefined) physParams.contrast        = contrast;
+      if (hue             !== undefined) physParams.hue             = hue;
+      // Ozone
+      if (ozoneR          !== undefined) physParams.ozoneR          = ozoneR;
+      if (ozoneG          !== undefined) physParams.ozoneG          = ozoneG;
+      if (ozoneB          !== undefined) physParams.ozoneB          = ozoneB;
+      // Sky brightness
+      if (skyBrightness   !== undefined) physParams.skyBrightness   = skyBrightness;
+      // Zenith / haze tints
+      if (zenithTintR     !== undefined) physParams.zenithTintR     = zenithTintR;
+      if (zenithTintG     !== undefined) physParams.zenithTintG     = zenithTintG;
+      if (zenithTintB     !== undefined) physParams.zenithTintB     = zenithTintB;
+      if (hazeTintR       !== undefined) physParams.hazeTintR       = hazeTintR;
+      if (hazeTintG       !== undefined) physParams.hazeTintG       = hazeTintG;
+      if (hazeTintB       !== undefined) physParams.hazeTintB       = hazeTintB;
+      // Night colour
+      if (nightR          !== undefined) physParams.nightR          = nightR;
+      if (nightG          !== undefined) physParams.nightG          = nightG;
+      if (nightB          !== undefined) physParams.nightB          = nightB;
       // Lens flare params apply to physical sky's sun flare too
       if (lensflareEnabled    !== undefined) physParams.lensflareEnabled    = lensflareEnabled;
       if (lensflareOpacity    !== undefined) physParams.lensflareOpacity    = lensflareOpacity;
@@ -347,15 +376,23 @@ export class ViewportEngine {
       renderer.toneMappingExposure = exposure;
     }
 
-    // Sky mesh handles the background — clear any solid/colour background
-    this.scene.background = null;
+    // Sky mesh handles the background — clear any solid/colour background.
+    // For physical sky, _createSky() sets background=null async after the mesh
+    // is added so there's no blank frame. Only clear immediately for gradient sky,
+    // or when physical sky is already loaded (mesh exists).
+    if (resolvedType !== 'physical' || this.physicalSky?._mesh) {
+      this.scene.background = null;
+    }
     this.skyEnabled   = true;
     this.skyElevation = elevation;
     this.skyAzimuth   = azimuth;
 
-    // Sync cloud sun direction
-    this.cloudSystem?.updateSunFromSky(elevation, azimuth);
-    this.cloudSystem2?.updateSunFromSky(elevation, azimuth);
+    // Sync cloud sun direction + sky colours for atmospheric cloud lighting
+    const skyColors = resolvedType === 'physical'
+      ? this.physicalSky?.getSkyColors()
+      : null;
+    this.cloudSystem?.updateSunFromSky(elevation, azimuth, skyColors);
+    this.cloudSystem2?.updateSunFromSky(elevation, azimuth, skyColors);
   }
 
   /** Apply fog to the active scene. */
@@ -408,37 +445,32 @@ export class ViewportEngine {
     if (!renderer) return;
     // PathTracingRenderer wraps an inner WebGLRenderer — use that
     renderer = renderer._webglRenderer ?? renderer;
-
-    let PMREMGen;
-    if (renderer.isWebGLRenderer) {
-      PMREMGen = THREE.PMREMGenerator;
-    } else if (renderer.isWebGPURenderer) {
-      try {
-        const mod = await import('three/webgpu');
-        PMREMGen = mod.PMREMGenerator;
-      } catch (e) {
-        console.warn('[ViewportEngine] HDRI env map not supported with current renderer:', e);
-        return;
-      }
-    } else {
+    if (!renderer.isWebGLRenderer && !renderer.isWebGPURenderer) {
       console.warn('[ViewportEngine] HDRI env map not supported with current renderer — switch to WebGL/WebGPU first.');
       return;
     }
-    const pmrem = new PMREMGen(renderer);
+    const pmrem = new THREE.PMREMGenerator(renderer);
     if (typeof pmrem.compileEquirectangularShader === 'function') {
       pmrem.compileEquirectangularShader();
     }
     try {
-      const { RGBELoader } = await import('three/addons/loaders/RGBELoader.js');
-      const { EXRLoader }  = await import('three/addons/loaders/EXRLoader.js');
-      const loader = isHDR ? new RGBELoader() : new EXRLoader();
+      const loader = isHDR ? new HDRLoader() : new EXRLoader();
       const texture = await new Promise((resolve, reject) => {
         loader.load(url, resolve, undefined, reject);
       });
       const envMap = pmrem.fromEquirectangular(texture).texture;
       this.scene.environment = envMap;
       this._lastEnvMap = envMap;
-      texture.dispose();
+      // Keep original equirectangular texture for "Show as Background" rendering.
+      // PMREM cube-UV maps don't render correctly as scene.background in WebGPU.
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      if (this._lastBgTexture) this._lastBgTexture.dispose();
+      this._lastBgTexture = texture;
+      // Re-apply background if it was previously enabled
+      if (this.scene.background && this.scene.background !== null && !this.scene.background.isColor) {
+        this.scene.background = this._lastBgTexture;
+      }
+      window.dispatchEvent(new CustomEvent('cyco-env-map-loaded'));
       console.log('[CYCO:ENV] env map loaded ✓  scene.environment set');
     } catch (e) {
       console.warn('[ViewportEngine] env map load failed:', e);
@@ -451,8 +483,9 @@ export class ViewportEngine {
   /** Toggle whether the env map is shown as scene background. */
   _onEnvBgToggle({ detail } = {}) {
     if (!this.scene) return;
-    console.log(`[CYCO:ENV] cyco-env-background-toggle  enabled=${detail?.enabled}  hasLastEnvMap=${!!this._lastEnvMap}`);
-    this.scene.background = detail?.enabled ? (this._lastEnvMap ?? null) : null;
+    const bgTex = this._lastBgTexture ?? this._lastEnvMap ?? null;
+    console.log(`[CYCO:ENV] cyco-env-background-toggle  enabled=${detail?.enabled}  hasBgTex=${!!bgTex}`);
+    this.scene.background = detail?.enabled ? bgTex : null;
   }
 
   /**
@@ -1795,7 +1828,7 @@ export class ViewportEngine {
     this._buildViewHelper();
 
     // Rebuild sky/flare with new renderer (TSL mesh vs ShaderMaterial)
-    // Physical sky uses THREE.Sky (ShaderMaterial) — WebGL only.
+    // Physical sky uses TSL NodeMaterial — compatible with WebGL and WebGPU.
     // If we just switched to WebGPU while physical is active, fall back to gradient.
     if (this.skyEnabled && this._activeSkyType === 'physical' && type === 'webgpu') {
       this.physicalSky?.setEnabled(false);

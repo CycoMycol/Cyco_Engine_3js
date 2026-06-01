@@ -241,7 +241,10 @@ export class PostProcessingPipeline {
     this._tslBloomNode = null;
 
     /** Bloom parameters persisted across pipeline rebuilds (shared by WebGL & TSL) */
-    this._bloomParams = { enabled: true, strength: 0.8, radius: 0.4, threshold: 0.85 };
+    // threshold: 1.5 — only emissives / very-bright HDR pixels bloom; the sky sun
+    //   (clamped to 4.5) and the gradient-sky disc (SDR ≤ 1.0) no longer cause a
+    //   giant white halo at default settings.  Users can dial it down if desired.
+    this._bloomParams = { enabled: true, strength: 0.6, radius: 0.3, threshold: 1.5 };
 
     // ── Chromatic Aberration ──────────────────────────────────────────────────
     /** @type {ShaderPass|null} */
@@ -334,9 +337,8 @@ export class PostProcessingPipeline {
     }
 
     // 2. Bloom — runs BEFORE outline passes so the selection outline never gets bloomed.
-    //    threshold=0.85 so emissive materials (emissiveIntensity>=1.0) produce glow.
-    //    Strength 0.8, radius 0.4. Sun disc is SDR + lens flare handles sun glow.
-    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.8, 0.4, 0.85);
+    //    threshold=1.5 — prevents the sky sun disc from creating an oversaturated halo.
+    this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.6, 0.3, 1.5);
     this._composer.addPass(this.bloomPass);
 
     // 3. Outline pass — added AFTER bloom so the orange outline (0xff6600) is never
@@ -600,14 +602,16 @@ export class PostProcessingPipeline {
         // calls convertToTexture(node) internally — we just do it explicitly.
         const godRaysTex = convertToTexture(outputNode);
 
-        // Radial blur god rays — 16 samples marching from pixel toward sun.
+        // Radial blur god rays — 24 samples marching from pixel toward sun.
+        // Only pixels brighter than 0.80 luminance contribute (sky background ≈ 0.5–0.7,
+        // sun disc ≈ 0.95+). This avoids the diffuse sky haze drowning out directional rays.
         // godRaysTex is a CLOSURE (not a Fn arg), exactly like ChromaticAberrationNode
         // uses textureNode as a closure — that's the only pattern where .sample(UV) works.
         const GodRaysFn = Fn(([sunX, sunY, density, weight, exposure]) => {
           const texUV = uv();
           const sunUV = vec2(sunX, sunY);
-          const N     = 16;
-          const DECAY = 0.90;
+          const N     = 24;
+          const DECAY = 0.92;
           let   grAccum = float(0.0);
 
           for (let i = 1; i <= N; i++) {
@@ -617,7 +621,8 @@ export class PostProcessingPipeline {
             const cUV = clamp(sUV, vec2(0.0, 0.0), vec2(1.0, 1.0));
             const col = godRaysTex.sample(cUV);   // closure w/ convertToTexture
             const lum = col.r.mul(0.2126).add(col.g.mul(0.7152)).add(col.b.mul(0.0722));
-            grAccum   = grAccum.add(max(float(0.0), lum.sub(float(0.5))).mul(float(Math.pow(DECAY, i))));
+            // Threshold: 0.80 — only the bright sun disc contributes, not the sky haze
+            grAccum   = grAccum.add(max(float(0.0), lum.sub(float(0.80))).mul(float(Math.pow(DECAY, i))));
           }
 
           return vec4(
