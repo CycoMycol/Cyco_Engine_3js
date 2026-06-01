@@ -407,25 +407,43 @@ export class EnvironmentProperties {
       value: String(_skyP?.lensflareFlareShape ?? 0),
       onChange: () => _fire(),
     });
-    const secondaryGhostsCb  = checkbox({ checked: _skyP?.lensflareSecondaryGhosts   ?? true,  onChange: () => _fire() });
-    const addStreaksCb        = checkbox({ checked: _skyP?.lensflareAdditionalStreaks ?? false, onChange: () => _fire() });
-    const starBurstCb         = checkbox({ checked: _skyP?.lensflareStarBurst        ?? false, onChange: () => _fire() });
-    const anamorphicCb        = checkbox({ checked: _skyP?.lensflareAnamorphic       ?? false, onChange: () => _fire() });
+
+    // Feature toggles with individual intensity sliders
+    const secondaryGhostsCb          = checkbox({ checked: _skyP?.lensflareSecondaryGhosts          ?? true,  onChange: () => _fire() });
+    const secondaryGhostsIntSlider    = slider({ value: _skyP?.lensflareSecondaryGhostsIntensity    ?? 0.5,   min: 0, max: 1, step: 0.01, onChange: () => _fire() });
+    const addStreaksCb                = checkbox({ checked: _skyP?.lensflareAdditionalStreaks        ?? false, onChange: () => _fire() });
+    const streaksIntSlider            = slider({ value: _skyP?.lensflareStreaksIntensity             ?? 0.5,   min: 0, max: 1, step: 0.01, onChange: () => _fire() });
+    const starBurstCb                 = checkbox({ checked: _skyP?.lensflareStarBurst               ?? false, onChange: () => _fire() });
+    const starBurstIntSlider          = slider({ value: _skyP?.lensflareStarBurstIntensity           ?? 0.5,   min: 0, max: 1, step: 0.01, onChange: () => _fire() });
+    const anamorphicCb                = checkbox({ checked: _skyP?.lensflareAnamorphic               ?? false, onChange: () => _fire() });
+    const anamorphicIntSlider         = slider({ value: _skyP?.lensflareAnamorphicIntensity          ?? 0.3,   min: 0, max: 1, step: 0.01, onChange: () => _fire() });
+
+    // Helper: build a row with a checkbox on the left and an intensity slider on the right
+    const _cbIntRow = (label, cb, intSlider) => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;';
+      wrap.appendChild(cb);
+      const intWrap = document.createElement('div');
+      intWrap.style.cssText = 'flex:1;min-width:0;';
+      intWrap.appendChild(intSlider.el);
+      wrap.appendChild(intWrap);
+      return row(label, wrap);
+    };
 
     flareSec.addRow(row('Enable',           lensflareEnabledCb));
     flareSec.addRow(row('Opacity',          opacitySlider.el));
     flareSec.addRow(row('Glare Size',       glareSizeSlider.el));
     flareSec.addRow(row('Star Points',      starPointsSlider.el));
     flareSec.addRow(row('Flare Size',       flareSizeSlider.el));
-    flareSec.addRow(row('Flare Speed',      flareSpeedSlider.el));
+    flareSec.addRow(row('Flare Spread',     flareSpeedSlider.el));
     flareSec.addRow(row('Flare Shape',      flareShapeSelect));
     flareSec.addRow(row('Halo Scale',       haloScaleSlider.el));
     flareSec.addRow(row('Color Gain',       colorGainSw.el));
     flareSec.addRow(row('Ghost Scale',      ghostScaleSlider.el));
-    flareSec.addRow(row('Secondary Ghosts', secondaryGhostsCb));
-    flareSec.addRow(row('Extra Streaks',    addStreaksCb));
-    flareSec.addRow(row('Star Burst',       starBurstCb));
-    flareSec.addRow(row('Anamorphic',       anamorphicCb));
+    flareSec.addRow(_cbIntRow('Sec. Ghosts',    secondaryGhostsCb,  secondaryGhostsIntSlider));
+    flareSec.addRow(_cbIntRow('Extra Streaks',  addStreaksCb,        streaksIntSlider));
+    flareSec.addRow(_cbIntRow('Star Burst',     starBurstCb,         starBurstIntSlider));
+    flareSec.addRow(_cbIntRow('Anamorphic',     anamorphicCb,        anamorphicIntSlider));
 
 
     // Store all references
@@ -437,8 +455,11 @@ export class EnvironmentProperties {
       showMoonCb, moonColorSw, moonGlowSlider,
       lensflareEnabledCb, opacitySlider, glareSizeSlider, starPointsSlider,
       flareSizeSlider, flareSpeedSlider, flareShapeSelect, haloScaleSlider,
-      colorGainSw, ghostScaleSlider, secondaryGhostsCb, addStreaksCb,
-      starBurstCb, anamorphicCb,
+      colorGainSw, ghostScaleSlider,
+      secondaryGhostsCb, secondaryGhostsIntSlider,
+      addStreaksCb, streaksIntSlider,
+      starBurstCb, starBurstIntSlider,
+      anamorphicCb, anamorphicIntSlider,
     };
   }
 
@@ -481,10 +502,14 @@ export class EnvironmentProperties {
         lensflareHaloScale:    parseFloat(s.haloScaleSlider.input.value),
         lensflareColorGain:    s.colorGainSw.el.style.getPropertyValue('--sw-color') || '#fff8e0',
         lensflareGhostScale:   parseFloat(s.ghostScaleSlider.input.value),
-        lensflareSecondaryGhosts:   s.secondaryGhostsCb.checked,
-        lensflareAdditionalStreaks: s.addStreaksCb.checked,
-        lensflareStarBurst:    s.starBurstCb.checked,
-        lensflareAnamorphic:   s.anamorphicCb.checked,
+        lensflareSecondaryGhosts:         s.secondaryGhostsCb.checked,
+        lensflareSecondaryGhostsIntensity: parseFloat(s.secondaryGhostsIntSlider.input.value),
+        lensflareAdditionalStreaks:        s.addStreaksCb.checked,
+        lensflareStreaksIntensity:         parseFloat(s.streaksIntSlider.input.value),
+        lensflareStarBurst:               s.starBurstCb.checked,
+        lensflareStarBurstIntensity:       parseFloat(s.starBurstIntSlider.input.value),
+        lensflareAnamorphic:              s.anamorphicCb.checked,
+        lensflareAnamorphicIntensity:      parseFloat(s.anamorphicIntSlider.input.value),
       }
     }));
   }

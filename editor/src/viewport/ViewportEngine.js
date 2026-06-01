@@ -251,7 +251,10 @@ export class ViewportEngine {
       lensflareEnabled, lensflareOpacity,
       lensflareGlareSize, lensflareStarPoints, lensflareFlareSize, lensflareFlareSpeed,
       lensflareFlareShape, lensflareHaloScale, lensflareColorGain, lensflareGhostScale,
-      lensflareSecondaryGhosts, lensflareAdditionalStreaks, lensflareStarBurst, lensflareAnamorphic,
+      lensflareSecondaryGhosts, lensflareSecondaryGhostsIntensity,
+      lensflareAdditionalStreaks, lensflareStreaksIntensity,
+      lensflareStarBurst, lensflareStarBurstIntensity,
+      lensflareAnamorphic, lensflareAnamorphicIntensity,
     } = detail ?? {};
     console.log(
       `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  skyType=${skyType}  elevation=${elevation}°  azimuth=${azimuth}°` +
@@ -318,10 +321,14 @@ export class ViewportEngine {
       if (lensflareHaloScale        !== undefined) params.lensflareHaloScale        = lensflareHaloScale;
       if (lensflareColorGain        !== undefined) params.lensflareColorGain        = lensflareColorGain;
       if (lensflareGhostScale       !== undefined) params.lensflareGhostScale       = lensflareGhostScale;
-      if (lensflareSecondaryGhosts  !== undefined) params.lensflareSecondaryGhosts  = lensflareSecondaryGhosts;
-      if (lensflareAdditionalStreaks !== undefined) params.lensflareAdditionalStreaks = lensflareAdditionalStreaks;
-      if (lensflareStarBurst        !== undefined) params.lensflareStarBurst        = lensflareStarBurst;
-      if (lensflareAnamorphic       !== undefined) params.lensflareAnamorphic       = lensflareAnamorphic;
+      if (lensflareSecondaryGhosts           !== undefined) params.lensflareSecondaryGhosts           = lensflareSecondaryGhosts;
+      if (lensflareSecondaryGhostsIntensity  !== undefined) params.lensflareSecondaryGhostsIntensity  = lensflareSecondaryGhostsIntensity;
+      if (lensflareAdditionalStreaks         !== undefined) params.lensflareAdditionalStreaks         = lensflareAdditionalStreaks;
+      if (lensflareStreaksIntensity          !== undefined) params.lensflareStreaksIntensity          = lensflareStreaksIntensity;
+      if (lensflareStarBurst                !== undefined) params.lensflareStarBurst                = lensflareStarBurst;
+      if (lensflareStarBurstIntensity       !== undefined) params.lensflareStarBurstIntensity       = lensflareStarBurstIntensity;
+      if (lensflareAnamorphic               !== undefined) params.lensflareAnamorphic               = lensflareAnamorphic;
+      if (lensflareAnamorphicIntensity      !== undefined) params.lensflareAnamorphicIntensity      = lensflareAnamorphicIntensity;
 
       this.gradientSky.setEnabled(true);
       this.gradientSky.setParams(params);

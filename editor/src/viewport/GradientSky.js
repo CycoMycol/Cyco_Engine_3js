@@ -286,9 +286,13 @@ export class GradientSky {
       lensflareColorGain:         new THREE.Color(1, 0.97, 0.88),
       lensflareGhostScale:        0.3,
       lensflareSecondaryGhosts:   true,
+      lensflareSecondaryGhostsIntensity: 0.5,
       lensflareAdditionalStreaks: false,
+      lensflareStreaksIntensity:  0.5,
       lensflareStarBurst:         false,
+      lensflareStarBurstIntensity: 0.5,
       lensflareAnamorphic:        false,
+      lensflareAnamorphicIntensity: 0.3,
       sunDir:             new THREE.Vector3(),
       moonDir:            new THREE.Vector3(),
     };
@@ -360,22 +364,27 @@ export class GradientSky {
     if (opts.lensflareEnabled   !== undefined) p.lensflareEnabled   = opts.lensflareEnabled;
     if (opts.lensflareOpacity   !== undefined) p.lensflareOpacity   = opts.lensflareOpacity;
     // Phase 5 granular params — detect structural changes before applying
-    const _starPointsChanged = opts.lensflareStarPoints      !== undefined && opts.lensflareStarPoints      !== p.lensflareStarPoints;
-    const _anamorphicChanged = opts.lensflareAnamorphic      !== undefined && opts.lensflareAnamorphic      !== p.lensflareAnamorphic;
-    const _secGhostsChanged  = opts.lensflareSecondaryGhosts !== undefined && opts.lensflareSecondaryGhosts !== p.lensflareSecondaryGhosts;
-    const _starBurstChanged  = opts.lensflareStarBurst       !== undefined && opts.lensflareStarBurst       !== p.lensflareStarBurst;
-    if (opts.lensflareGlareSize         !== undefined) p.lensflareGlareSize         = opts.lensflareGlareSize;
-    if (opts.lensflareStarPoints        !== undefined) p.lensflareStarPoints        = opts.lensflareStarPoints;
-    if (opts.lensflareFlareSize         !== undefined) p.lensflareFlareSize         = opts.lensflareFlareSize;
-    if (opts.lensflareFlareSpeed        !== undefined) p.lensflareFlareSpeed        = opts.lensflareFlareSpeed;
-    if (opts.lensflareFlareShape        !== undefined) p.lensflareFlareShape        = opts.lensflareFlareShape;
-    if (opts.lensflareHaloScale         !== undefined) p.lensflareHaloScale         = opts.lensflareHaloScale;
-    if (opts.lensflareColorGain)                       p.lensflareColorGain.set(opts.lensflareColorGain);
-    if (opts.lensflareGhostScale        !== undefined) p.lensflareGhostScale        = opts.lensflareGhostScale;
-    if (opts.lensflareSecondaryGhosts   !== undefined) p.lensflareSecondaryGhosts   = opts.lensflareSecondaryGhosts;
-    if (opts.lensflareAdditionalStreaks !== undefined) p.lensflareAdditionalStreaks = opts.lensflareAdditionalStreaks;
-    if (opts.lensflareStarBurst         !== undefined) p.lensflareStarBurst         = opts.lensflareStarBurst;
-    if (opts.lensflareAnamorphic        !== undefined) p.lensflareAnamorphic        = opts.lensflareAnamorphic;
+    const _starPointsChanged  = opts.lensflareStarPoints        !== undefined && opts.lensflareStarPoints        !== p.lensflareStarPoints;
+    const _anamorphicChanged  = opts.lensflareAnamorphic        !== undefined && opts.lensflareAnamorphic        !== p.lensflareAnamorphic;
+    const _secGhostsChanged   = opts.lensflareSecondaryGhosts   !== undefined && opts.lensflareSecondaryGhosts   !== p.lensflareSecondaryGhosts;
+    const _starBurstChanged   = opts.lensflareStarBurst         !== undefined && opts.lensflareStarBurst         !== p.lensflareStarBurst;
+    const _addStreaksChanged   = opts.lensflareAdditionalStreaks !== undefined && opts.lensflareAdditionalStreaks !== p.lensflareAdditionalStreaks;
+    if (opts.lensflareGlareSize                   !== undefined) p.lensflareGlareSize                   = opts.lensflareGlareSize;
+    if (opts.lensflareStarPoints                  !== undefined) p.lensflareStarPoints                  = opts.lensflareStarPoints;
+    if (opts.lensflareFlareSize                   !== undefined) p.lensflareFlareSize                   = opts.lensflareFlareSize;
+    if (opts.lensflareFlareSpeed                  !== undefined) p.lensflareFlareSpeed                  = opts.lensflareFlareSpeed;
+    if (opts.lensflareFlareShape                  !== undefined) p.lensflareFlareShape                  = opts.lensflareFlareShape;
+    if (opts.lensflareHaloScale                   !== undefined) p.lensflareHaloScale                   = opts.lensflareHaloScale;
+    if (opts.lensflareColorGain)                                  p.lensflareColorGain.set(opts.lensflareColorGain);
+    if (opts.lensflareGhostScale                  !== undefined) p.lensflareGhostScale                  = opts.lensflareGhostScale;
+    if (opts.lensflareSecondaryGhosts             !== undefined) p.lensflareSecondaryGhosts             = opts.lensflareSecondaryGhosts;
+    if (opts.lensflareSecondaryGhostsIntensity    !== undefined) p.lensflareSecondaryGhostsIntensity    = opts.lensflareSecondaryGhostsIntensity;
+    if (opts.lensflareAdditionalStreaks           !== undefined) p.lensflareAdditionalStreaks           = opts.lensflareAdditionalStreaks;
+    if (opts.lensflareStreaksIntensity            !== undefined) p.lensflareStreaksIntensity            = opts.lensflareStreaksIntensity;
+    if (opts.lensflareStarBurst                   !== undefined) p.lensflareStarBurst                   = opts.lensflareStarBurst;
+    if (opts.lensflareStarBurstIntensity          !== undefined) p.lensflareStarBurstIntensity          = opts.lensflareStarBurstIntensity;
+    if (opts.lensflareAnamorphic                  !== undefined) p.lensflareAnamorphic                  = opts.lensflareAnamorphic;
+    if (opts.lensflareAnamorphicIntensity         !== undefined) p.lensflareAnamorphicIntensity         = opts.lensflareAnamorphicIntensity;
     if (opts.sunColor)  p.sunColor.set(opts.sunColor);
     if (opts.moonColor) p.moonColor.set(opts.moonColor);
 
@@ -392,7 +401,7 @@ export class GradientSky {
     this._updateSunLight();
 
     // Recreate flare when structural params change; otherwise just update sizes/opacity/color
-    if (_starPointsChanged || _anamorphicChanged || _secGhostsChanged || _starBurstChanged) {
+    if (_starPointsChanged || _anamorphicChanged || _secGhostsChanged || _starBurstChanged || _addStreaksChanged) {
       this._destroyFlares();
       this._createFlares();
     } else {
@@ -894,6 +903,7 @@ export class GradientSky {
     ELEMS.push({
       texType:     'glare',
       dist:        0.0,
+      ghostOff:    null,
       sizeBase:    Math.max(0.05, p.lensflareGlareSize),
       baseOpacity: 1.0,
       isStreak:    false,
@@ -904,6 +914,7 @@ export class GradientSky {
       ELEMS.push({
         texType:     'halo',
         dist:        0.5,
+        ghostOff:    null,
         sizeBase:    p.lensflareHaloScale * 0.9,
         baseOpacity: 0.65,
         isStreak:    false,
@@ -919,19 +930,27 @@ export class GradientSky {
         ELEMS.push({
           texType:     'ghost',
           dist:        off * flareRange,
+          ghostOff:    off,
+          sizeMult:    sizeMults[i],
           sizeBase:    p.lensflareGhostScale * sizeMults[i],
           baseOpacity: 0.55,
           isStreak:    false,
+          isSecondary: false,
         });
       });
       if (p.lensflareSecondaryGhosts) {
-        [ 0.15, -0.35, 0.55, -0.75 ].forEach((off, i) => {
+        const secOffsets  = [ 0.15, -0.35, 0.55, -0.75 ];
+        const secSizeMult = [ 1.00,  0.92,  0.84,  0.76 ];
+        secOffsets.forEach((off, i) => {
           ELEMS.push({
             texType:     'ghost',
             dist:        off,
-            sizeBase:    p.lensflareGhostScale * 0.45 * (1.0 - i * 0.08),
-            baseOpacity: 0.35,
+            ghostOff:    off,
+            sizeMult:    secSizeMult[i],
+            sizeBase:    p.lensflareGhostScale * 0.45 * secSizeMult[i],
+            baseOpacity: p.lensflareSecondaryGhostsIntensity ?? 0.5,
             isStreak:    false,
+            isSecondary: true,
           });
         });
       }
@@ -940,11 +959,40 @@ export class GradientSky {
     // ── Anamorphic horizontal streak ────────────────────────────────────────
     if (p.lensflareAnamorphic) {
       ELEMS.push({
-        texType:     'streak',
-        dist:        0.0,
-        sizeBase:    Math.max(0.05, p.lensflareGlareSize) * 2.5,
-        baseOpacity: 0.75,
-        isStreak:    true,
+        texType:      'streak',
+        dist:         0.0,
+        ghostOff:     null,
+        sizeBase:     Math.max(0.05, p.lensflareGlareSize) * 2.5,
+        baseOpacity:  p.lensflareAnamorphicIntensity ?? 0.3,
+        isStreak:     true,
+        isAnamorphic: true,
+        streakAngle:  0,
+      });
+    }
+
+    // ── Additional diagonal streaks ──────────────────────────────────────────
+    if (p.lensflareAdditionalStreaks) {
+      const streakSize = Math.max(0.05, p.lensflareGlareSize) * 1.8;
+      const streakAmt  = p.lensflareStreaksIntensity ?? 0.5;
+      ELEMS.push({
+        texType:      'streak',
+        dist:         0.0,
+        ghostOff:     null,
+        sizeBase:     streakSize,
+        baseOpacity:  streakAmt,
+        isStreak:     true,
+        isAnamorphic: false,
+        streakAngle:  Math.PI / 4,
+      });
+      ELEMS.push({
+        texType:      'streak',
+        dist:         0.0,
+        ghostOff:     null,
+        sizeBase:     streakSize,
+        baseOpacity:  streakAmt,
+        isStreak:     true,
+        isAnamorphic: false,
+        streakAngle:  -Math.PI / 4,
       });
     }
 
@@ -953,8 +1001,9 @@ export class GradientSky {
       ELEMS.push({
         texType:     'starburst',
         dist:        0.0,
+        ghostOff:    null,
         sizeBase:    Math.max(0.05, p.lensflareGlareSize) * 1.8,
-        baseOpacity: 0.55,
+        baseOpacity: p.lensflareStarBurstIntensity ?? 0.5,
         isStreak:    false,
       });
     }
@@ -970,20 +1019,26 @@ export class GradientSky {
       else if (el.texType === 'starburst') tex = this._makeStarBurstTex(128, p.lensflareStarPoints);
 
       const mat = new THREE.SpriteMaterial({
-        map:        tex,
+        map:         tex,
         transparent: true,
-        depthTest:  false,
-        depthWrite: false,
-        blending:   THREE.AdditiveBlending,
+        depthTest:   false,
+        depthWrite:  false,
+        blending:    THREE.AdditiveBlending,
       });
-      const sprite            = new THREE.Sprite(mat);
-      sprite.renderOrder      = 999;
-      sprite.frustumCulled    = false;
-      sprite.userData._dist        = el.dist;
-      sprite.userData._sizeBase    = el.sizeBase;
-      sprite.userData._baseOpacity = el.baseOpacity;
-      sprite.userData._isStreak    = el.isStreak;
-      sprite.userData._isHelper    = true;
+      if (el.streakAngle) mat.rotation = el.streakAngle;
+      const sprite             = new THREE.Sprite(mat);
+      sprite.renderOrder       = 999;
+      sprite.frustumCulled     = false;
+      sprite.userData._dist         = el.dist;
+      sprite.userData._ghostOff     = el.ghostOff ?? null;
+      sprite.userData._sizeMult     = el.sizeMult  ?? 1.0;
+      sprite.userData._sizeBase     = el.sizeBase;
+      sprite.userData._baseOpacity  = el.baseOpacity;
+      sprite.userData._isStreak     = el.isStreak;
+      sprite.userData._texType      = el.texType;
+      sprite.userData._isAnamorphic = el.isAnamorphic ?? false;
+      sprite.userData._isSecondary  = el.isSecondary  ?? false;
+      sprite.userData._isHelper     = true;
       sprite.visible = false;
       this._lensflareSprites.push(sprite);
       scene.add(sprite);
@@ -1181,11 +1236,23 @@ export class GradientSky {
     const DIST = Math.max(camera.near * 80, 0.5);
     const worldPerPx = 2 * DIST / (pe[5] * vpH);
 
+    const spreadScale = Math.max(0.2, 1.0 + (p.lensflareFlareSpeed ?? 0.0));
+    const shape = p.lensflareFlareShape ?? 0;
+    const cg    = p.lensflareColorGain;
+
     this._lensflareSprites.forEach(sprite => {
-      const d          = sprite.userData._dist        ?? 0;
-      const sizeBase   = sprite.userData._sizeBase    ?? p.lensflareGlareSize ?? 0.4;
+      // Ghost elements: compute dist live from ghostOff * flareRange * spreadScale
+      let d;
+      const ghostOff = sprite.userData._ghostOff;
+      if (ghostOff !== null && ghostOff !== undefined) {
+        d = ghostOff * p.lensflareFlareSize * 2.0 * spreadScale;
+      } else {
+        d = sprite.userData._dist ?? 0;
+      }
+
+      const sizeBase    = sprite.userData._sizeBase    ?? p.lensflareGlareSize ?? 0.4;
       const baseOpacity = sprite.userData._baseOpacity ?? 1.0;
-      const isStreak   = sprite.userData._isStreak    ?? false;
+      const isStreak    = sprite.userData._isStreak    ?? false;
 
       const ndcX = sunNDC.x * (1 - d);
       const ndcY = sunNDC.y * (1 - d);
@@ -1202,11 +1269,15 @@ export class GradientSky {
       const worldSize = sizeBase * 200 * worldPerPx;
       if (isStreak) {
         sprite.scale.set(worldSize * 5.0, worldSize * 0.05, 1);
-      } else {
+      } else if (shape === 1) { // Oval
+        sprite.scale.set(worldSize, worldSize * 1.4, 1);
+      } else if (shape === 2) { // Streak
+        sprite.scale.set(worldSize * 2.0, worldSize * 0.4, 1);
+      } else { // Circular (default)
         sprite.scale.set(worldSize, worldSize, 1);
       }
 
-      sprite.material.color.setScalar(1);
+      sprite.material.color.copy(cg);
       sprite.material.opacity = (p.lensflareOpacity ?? 0.7) * vis * baseOpacity;
       sprite.visible = true;
     });
@@ -1320,22 +1391,16 @@ export class GradientSky {
 
     // Base glare disc (with optional diffraction spikes)
     const glareTex = this._makeGlareTex(128, p.lensflareStarPoints);
-    this._lensflare.addElement(new LensflareElement(
-      glareTex,
-      p.lensflareGlareSize * 200,
-      0,
-      c
-    ));
+    const glareEl = new LensflareElement(glareTex, p.lensflareGlareSize * 200, 0, c);
+    glareEl._texType = 'glare';
+    this._lensflare.addElement(glareEl);
 
     // Halo ring
     if (p.lensflareHaloScale > 0) {
       const haloTex = this._makeHaloTex(128);
-      this._lensflare.addElement(new LensflareElement(
-        haloTex,
-        p.lensflareHaloScale * 300,
-        0.6,
-        c
-      ));
+      const haloEl = new LensflareElement(haloTex, p.lensflareHaloScale * 300, 0.6, c);
+      haloEl._texType = 'halo';
+      this._lensflare.addElement(haloEl);
     }
 
     // Flare train (ghost chain)
@@ -1344,23 +1409,35 @@ export class GradientSky {
       const offsets   = [0.3, -0.2, 0.7, -0.5, 1.1];
       const sizeMults = [1.0,  0.7,  0.5,  0.3,  0.2];
       offsets.forEach((off, i) => {
-        this._lensflare.addElement(new LensflareElement(
+        const ghostEl = new LensflareElement(
           ghostTex,
           p.lensflareGhostScale * 200 * sizeMults[i],
           off * p.lensflareFlareSize,
           c
-        ));
+        );
+        ghostEl._texType     = 'ghost';
+        ghostEl._ghostOff    = off;
+        ghostEl._sizeMult    = sizeMults[i];
+        ghostEl._isSecondary = false;
+        this._lensflare.addElement(ghostEl);
       });
       // Secondary ghosts
       if (p.lensflareSecondaryGhosts) {
-        const secOffsets = [0.15, -0.35, 0.55, -0.75];
+        const secOffsets  = [0.15, -0.35, 0.55, -0.75];
+        const secSizeMult = [1.00,  0.92,  0.84,  0.76];
         secOffsets.forEach((off, i) => {
-          this._lensflare.addElement(new LensflareElement(
+          const secEl = new LensflareElement(
             ghostTex,
-            p.lensflareGhostScale * 100 * (0.5 + i * 0.1),
+            p.lensflareGhostScale * 100 * secSizeMult[i],
             off,
             c
-          ));
+          );
+          secEl._texType      = 'ghost';
+          secEl._ghostOff     = off;
+          secEl._sizeMult     = secSizeMult[i];
+          secEl._isSecondary  = true;
+          secEl._baseOpacity  = p.lensflareSecondaryGhostsIntensity ?? 0.5;
+          this._lensflare.addElement(secEl);
         });
       }
     }
@@ -1368,27 +1445,34 @@ export class GradientSky {
     // Anamorphic horizontal streak
     if (p.lensflareAnamorphic) {
       const streakTex = this._makeStreakTex(256, 32);
-      this._lensflare.addElement(new LensflareElement(
-        streakTex,
-        p.lensflareFlareSize * 600,
-        0,
-        c
-      ));
+      const anaEl = new LensflareElement(streakTex, p.lensflareFlareSize * 600, 0, c);
+      anaEl._texType      = 'streak';
+      anaEl._isAnamorphic = true;
+      anaEl._baseOpacity  = p.lensflareAnamorphicIntensity ?? 0.3;
+      this._lensflare.addElement(anaEl);
     }
 
     // Star burst diffraction overlay
     if (p.lensflareStarBurst) {
       const starTex = this._makeStarBurstTex(128, p.lensflareStarPoints);
-      this._lensflare.addElement(new LensflareElement(
-        starTex,
-        p.lensflareGlareSize * 400,
-        0,
-        c
-      ));
+      const starEl = new LensflareElement(starTex, p.lensflareGlareSize * 400, 0, c);
+      starEl._texType      = 'starburst';
+      starEl._baseOpacity  = p.lensflareStarBurstIntensity ?? 0.5;
+      this._lensflare.addElement(starEl);
+    }
+
+    // Additional diagonal streaks
+    if (p.lensflareAdditionalStreaks) {
+      const streakTex = this._makeStreakTex(256, 32);
+      const streakEl = new LensflareElement(streakTex, p.lensflareGlareSize * 250, 0, c);
+      streakEl._texType     = 'streak';
+      streakEl._isAnamorphic = false;
+      streakEl._baseOpacity = p.lensflareStreaksIntensity ?? 0.5;
+      this._lensflare.addElement(streakEl);
     }
   }
 
-  /** Update lensflare visibility, opacity and color (WebGL + LensflareMesh). */
+  /** Update lensflare visibility, opacity, color and sizes (WebGL + WebGPU sprites). */
   _updateLensflare() {
     const p    = this._p;
     const vis  = this._sunVisible();
@@ -1407,15 +1491,61 @@ export class GradientSky {
       const opacityScale = (p.lensflareOpacity ?? 0.7) * vis;
       const tint = p.lensflareColorGain;
       for (const el of this._lensflare.elements) {
-        el.color.copy(tint).multiplyScalar(opacityScale);
+        const elOpacity = el._baseOpacity ?? 1.0;
+        el.color.copy(tint).multiplyScalar(opacityScale * elOpacity);
       }
-      // Live-update glare size (element[0])
-      if (this._lensflare.elements[0]) {
-        this._lensflare.elements[0].size = p.lensflareGlareSize * 200;
+      // Live-update element sizes based on type
+      for (const el of this._lensflare.elements) {
+        if (el._texType === 'glare') {
+          el.size = p.lensflareGlareSize * 200;
+        } else if (el._texType === 'halo') {
+          el.size = p.lensflareHaloScale * 300;
+        } else if (el._texType === 'ghost') {
+          if (el._isSecondary) {
+            el.size = p.lensflareGhostScale * 100 * (el._sizeMult ?? 1.0);
+          } else {
+            el.size     = p.lensflareGhostScale * 200 * (el._sizeMult ?? 1.0);
+            el.distance = (el._ghostOff ?? 0) * p.lensflareFlareSize;
+          }
+        } else if (el._texType === 'streak' && el._isAnamorphic) {
+          el.size = p.lensflareFlareSize * 600;
+        } else if (el._texType === 'starburst') {
+          el.size = p.lensflareGlareSize * 400;
+        } else if (el._texType === 'streak' && !el._isAnamorphic) {
+          el.size = p.lensflareGlareSize * 250;
+        }
       }
-
     }
-    // Sprite array visibility/size is updated per-frame in _updateLensflareWebGPU
+
+    // Live-update WebGPU sprite sizeBase and baseOpacity from current params
+    if (this._lensflareSprites?.length) {
+      for (const sprite of this._lensflareSprites) {
+        const type = sprite.userData._texType;
+        if (type === 'glare') {
+          sprite.userData._sizeBase = Math.max(0.05, p.lensflareGlareSize);
+        } else if (type === 'halo') {
+          sprite.userData._sizeBase = p.lensflareHaloScale * 0.9;
+        } else if (type === 'ghost') {
+          if (sprite.userData._isSecondary) {
+            sprite.userData._sizeBase    = p.lensflareGhostScale * 0.45 * (sprite.userData._sizeMult ?? 1.0);
+            sprite.userData._baseOpacity = p.lensflareSecondaryGhostsIntensity ?? 0.5;
+          } else {
+            sprite.userData._sizeBase = p.lensflareGhostScale * (sprite.userData._sizeMult ?? 1.0);
+          }
+        } else if (type === 'streak') {
+          if (sprite.userData._isAnamorphic) {
+            sprite.userData._sizeBase    = Math.max(0.05, p.lensflareGlareSize) * 2.5;
+            sprite.userData._baseOpacity = p.lensflareAnamorphicIntensity ?? 0.3;
+          } else {
+            sprite.userData._sizeBase    = Math.max(0.05, p.lensflareGlareSize) * 1.8;
+            sprite.userData._baseOpacity = p.lensflareStreaksIntensity ?? 0.5;
+          }
+        } else if (type === 'starburst') {
+          sprite.userData._sizeBase    = Math.max(0.05, p.lensflareGlareSize) * 1.8;
+          sprite.userData._baseOpacity = p.lensflareStarBurstIntensity ?? 0.5;
+        }
+      }
+    }
   }
 
   /**
