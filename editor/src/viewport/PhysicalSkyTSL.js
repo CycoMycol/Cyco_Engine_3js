@@ -70,6 +70,9 @@ export class PhysicalSkyTSL {
       nightR: 0.02, nightG: 0.05, nightB: 0.18,
       skyBrightness: 1.0,
       exposure:      1.0,
+      lensflareEnabled: true,
+      lensflareOpacity: 0.7,
+      lensflareSize: 0.4,
       sunDir: new THREE.Vector3(),
     };
   }
@@ -119,6 +122,9 @@ export class PhysicalSkyTSL {
     if (opts.nightR           !== undefined)   p.nightR           = opts.nightR;
     if (opts.nightG           !== undefined)   p.nightG           = opts.nightG;
     if (opts.nightB           !== undefined)   p.nightB           = opts.nightB;
+    if (opts.lensflareEnabled !== undefined)   p.lensflareEnabled = opts.lensflareEnabled;
+    if (opts.lensflareOpacity !== undefined)   p.lensflareOpacity = opts.lensflareOpacity;
+    if (opts.lensflareSize    !== undefined)   p.lensflareSize    = opts.lensflareSize;
 
     if (dirtyDir) this._updateDirs();
     this._pushUniforms();
@@ -476,18 +482,31 @@ export class PhysicalSkyTSL {
     // Use LensflareMesh for WebGPU, Lensflare for WebGL.
     // isWebGPURenderer is unreliable in this build — check rendererManager instead.
     const isWebGPU = this._vpe?.rendererManager?.activeType === 'webgpu';
+    const sizeScale = Math.max(0.01, this._p.lensflareSize ?? 0.4);
     try {
       let flare;
       if (isWebGPU) {
         flare = new LensflareMesh();
-        flare.addElement(new LensflareElementMesh(this._makeFlareTex(256), 700, 0.0, new THREE.Color(1.0, 0.95, 0.85)));
-        flare.addElement(new LensflareElementMesh(this._makeFlareTex(64),  60,  0.6));
-        flare.addElement(new LensflareElementMesh(this._makeFlareTex(64),  40,  0.8));
+        const e1 = new LensflareElementMesh(this._makeFlareTex(256), 700 * sizeScale, 0.0, new THREE.Color(1.0, 0.95, 0.85));
+        const e2 = new LensflareElementMesh(this._makeFlareTex(64),  60 * sizeScale,  0.6);
+        const e3 = new LensflareElementMesh(this._makeFlareTex(64),  40 * sizeScale,  0.8);
+        e1.userData._baseSize = 700;
+        e2.userData._baseSize = 60;
+        e3.userData._baseSize = 40;
+        flare.addElement(e1);
+        flare.addElement(e2);
+        flare.addElement(e3);
       } else {
         flare = new Lensflare();
-        flare.addElement(new LensflareElement(this._makeFlareTex(256), 700, 0.0, new THREE.Color(1.0, 0.95, 0.85)));
-        flare.addElement(new LensflareElement(this._makeFlareTex(64),  60,  0.6));
-        flare.addElement(new LensflareElement(this._makeFlareTex(64),  40,  0.8));
+        const e1 = new LensflareElement(this._makeFlareTex(256), 700 * sizeScale, 0.0, new THREE.Color(1.0, 0.95, 0.85));
+        const e2 = new LensflareElement(this._makeFlareTex(64),  60 * sizeScale,  0.6);
+        const e3 = new LensflareElement(this._makeFlareTex(64),  40 * sizeScale,  0.8);
+        e1.userData._baseSize = 700;
+        e2.userData._baseSize = 60;
+        e3.userData._baseSize = 40;
+        flare.addElement(e1);
+        flare.addElement(e2);
+        flare.addElement(e3);
       }
       flare.position.copy(this._p.sunDir).multiplyScalar(4e5);
       flare.userData._isHelper = true;
@@ -497,10 +516,24 @@ export class PhysicalSkyTSL {
   }
 
   _updateLensflare() {
-    if (this._lensflare) {
-      this._lensflare.position.copy(this._p.sunDir).multiplyScalar(4e5);
-      this._lensflare.visible = this._p.showSun && this._p.elevation > -6;
-    }
+    if (!this._lensflare) return;
+    const p = this._p;
+    this._lensflare.position.copy(p.sunDir).multiplyScalar(4e5);
+    const visible = p.lensflareEnabled && p.showSun && p.elevation > -6;
+    this._lensflare.visible = visible;
+
+    const opacity = Math.max(0, Math.min(1, p.lensflareOpacity ?? 1.0));
+    const sizeScale = Math.max(0.01, p.lensflareSize ?? 0.4);
+    (this._lensflare.elements || []).forEach((el) => {
+      if (el.material) {
+        el.material.opacity = opacity;
+        el.material.transparent = opacity < 1.0;
+      }
+      if (typeof el.size === 'number') {
+        const base = el.userData?._baseSize ?? el.size;
+        el.size = base * sizeScale;
+      }
+    });
   }
 
   _makeFlareTex(size) {

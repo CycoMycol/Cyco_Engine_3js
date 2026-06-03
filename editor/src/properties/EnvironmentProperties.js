@@ -34,14 +34,18 @@ export class EnvironmentProperties {
     hdr.innerHTML = '<div class="ce-prop-name-title">Environment</div>';
     root.appendChild(hdr);
 
+    this._buildTabBar(root);
     this._buildBackgroundSection(root);
+    this._buildEnvMapSection(root);
     this._buildSkySection(root);
-    this._buildCloudSection(root);
     this._buildLowCloudsSection(root);
     this._buildFogSection(root);
     this._buildGodRaysSection(root);
-    this._buildEnvMapSection(root);
     this._buildPostProcessingSection(root);
+    if (this._showBackgroundTypeRows) {
+      this._showBackgroundTypeRows(this._typeSelect?.value ?? 'solid');
+    }
+    this._showTab(null);
 
     return root;
   }
@@ -49,7 +53,9 @@ export class EnvironmentProperties {
   // ── Background ────────────────────────────────────────────────────────────
 
   _buildBackgroundSection(root) {
-    const { el, body } = section('Background');
+    const { el, hdr, body } = section('Background');
+    this._backgroundSectionEl = el;
+    this._backgroundSectionBodyEl = body;
     root.appendChild(el);
 
     const ve = window.__cyco?.viewportEngine;
@@ -114,38 +120,19 @@ export class EnvironmentProperties {
     gradWrap.appendChild(this._bgGradEditor.element);
     body.appendChild(gradWrap);
 
-    // HDRI controls container
-    const hdriBody = document.createElement('div');
-
-    const hdriBgCb = checkbox({
-      checked: !!(ve?.scene?.background instanceof THREE.Texture),
-      onChange: (v) => {
-        window.dispatchEvent(new CustomEvent('cyco-env-background-toggle', { detail: { enabled: v } }));
-      },
-    });
-    hdriBody.appendChild(row('Show HDRI as BG', hdriBgCb));
-
-    const hdriRotSlider  = slider({ value: 0,   min: 0,   max: 360, step: 1,    onChange: () => this._dispatchBackground('hdri') });
-    const hdriBlurSlider = slider({ value: 0,   min: 0,   max: 1,   step: 0.01, onChange: () => this._dispatchBackground('hdri') });
-    const hdriBgIntSlider  = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
-    const hdriEnvIntSlider = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
-    hdriBody.appendChild(row('Rotation',     hdriRotSlider.el));
-    hdriBody.appendChild(row('BG Blur',      hdriBlurSlider.el));
-    hdriBody.appendChild(row('BG Intensity', hdriBgIntSlider.el));
-    hdriBody.appendChild(row('Env Intensity', hdriEnvIntSlider.el));
-    body.appendChild(hdriBody);
-
-    this._hdriRotSlider    = hdriRotSlider;
-    this._hdriBlurSlider   = hdriBlurSlider;
-    this._hdriBgIntSlider  = hdriBgIntSlider;
-    this._hdriEnvIntSlider = hdriEnvIntSlider;
-
     const _showRows = (type) => {
       solidRow.style.display = type === 'solid'    ? '' : 'none';
       gradWrap.style.display = type === 'gradient' ? '' : 'none';
-      hdriBody.style.display = type === 'hdri'     ? '' : 'none';
+      if (!this._activeTab) {
+        if (this._skySectionEl) this._skySectionEl.style.display = type === 'sky' ? '' : 'none';
+        if (this._envMapSectionEl) this._envMapSectionEl.style.display = type === 'hdri' ? '' : 'none';
+      }
+      if (this._skySectionBodyEl && type !== 'sky') this._skySectionBodyEl.style.display = 'none';
+      if (this._envMapSectionBodyEl && type !== 'hdri') this._envMapSectionBodyEl.style.display = 'none';
     };
+    this._showBackgroundTypeRows = _showRows;
     _showRows(initType);
+    this._backgroundSectionEl = el;
   }
 
   _dispatchBackground(type) {
@@ -167,7 +154,9 @@ export class EnvironmentProperties {
   // ── Sky ───────────────────────────────────────────────────────────────────
 
   _buildSkySection(root) {
-    const { el, body } = section('Sky');
+    const { el, hdr, body } = section('Sky');
+    this._skySectionEl = el;
+    this._skySectionBodyEl = body;
     root.appendChild(el);
 
     const ve = window.__cyco?.viewportEngine;
@@ -270,17 +259,59 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Hue', hueSlider.el));
 
+    const skyTabBar = document.createElement('div');
+    skyTabBar.className = 'ce-prop-sky-tab-bar';
+    const makeSkyTab = (label, tab) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.className = 'ce-btn ce-btn-sm ce-panel-tab-btn';
+      btn.addEventListener('click', () => _showSkyTab(tab));
+      return btn;
+    };
+    const sunTabBtn = makeSkyTab('Sun', 'sun');
+    const moonTabBtn = makeSkyTab('Moon', 'moon');
+    const flareTabBtn = makeSkyTab('Lens Flare', 'flare');
+    skyTabBar.appendChild(sunTabBtn);
+    skyTabBar.appendChild(moonTabBtn);
+    skyTabBar.appendChild(flareTabBtn);
+    body.appendChild(skyTabBar);
+
+    const sunSection = document.createElement('div');
+    const moonSection = document.createElement('div');
+    const flareSection = document.createElement('div');
+    body.appendChild(sunSection);
+    body.appendChild(moonSection);
+    body.appendChild(flareSection);
+
+    const _showSkyTab = (tab) => {
+      sunSection.style.display = tab === 'sun' ? '' : 'none';
+      moonSection.style.display = tab === 'moon' ? '' : 'none';
+      flareSection.style.display = tab === 'flare' ? '' : 'none';
+      sunTabBtn.classList.toggle('active', tab === 'sun');
+      moonTabBtn.classList.toggle('active', tab === 'moon');
+      flareTabBtn.classList.toggle('active', tab === 'flare');
+    };
+    _showSkyTab('sun');
+
     // ── Atmosphere sub-section (Physical Sky only — Hosek-Wilkie params) ────
     const atmHdr = document.createElement('div');
-    atmHdr.style.cssText =
-      'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
-      'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
-      'border-top:1px solid rgba(255,255,255,0.04);display:none;';
-    atmHdr.textContent = 'Atmosphere';
+    atmHdr.className = 'ce-prop-section-hdr';
+    const atmArrow = document.createElement('span');
+    atmArrow.className = 'ce-prop-arrow';
+    atmArrow.textContent = '▾';
+    atmHdr.appendChild(atmArrow);
+    atmHdr.appendChild(document.createTextNode('Atmosphere'));
+    atmHdr.style.display = 'none';
     body.appendChild(atmHdr);
 
     const atmBody = document.createElement('div');
     atmBody.style.display = 'none';
+    atmHdr.addEventListener('click', () => {
+      const open = atmBody.style.display !== 'none';
+      atmBody.style.display = open ? 'none' : '';
+      atmArrow.textContent = open ? '▸' : '▾';
+    });
 
     const turbiditySlider = slider({ value: ve?.physicalSky?._p?.turbidity       ?? 2.0,  min: 1,   max: 20,   step: 0.1,   onChange: () => _fire() });
     const rayleighSlider  = slider({ value: ve?.physicalSky?._p?.rayleigh        ?? 1.0,  min: 0,   max: 4,    step: 0.05,  onChange: () => _fire() });
@@ -330,13 +361,9 @@ export class EnvironmentProperties {
 
     // ── Sky gradient (collapsible) ────────────────────────────────────────
     const gradHdr = document.createElement('div');
-    gradHdr.style.cssText =
-      'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
-      'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
-      'cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;' +
-      'border-top:1px solid rgba(255,255,255,0.04);';
+    gradHdr.className = 'ce-prop-section-hdr';
     const gradArrow = document.createElement('span');
-    gradArrow.style.cssText = 'font-size:8px;width:10px;flex-shrink:0;';
+    gradArrow.className = 'ce-prop-arrow';
     gradArrow.textContent = '▾';
     gradHdr.appendChild(gradArrow);
     gradHdr.appendChild(document.createTextNode('Sky Colours'));
@@ -351,8 +378,10 @@ export class EnvironmentProperties {
     // is already active when the panel first opens (no onChange fires on init).
     {
       const t = skyTypeSelect.value;
-      atmHdr.style.display   = t === 'physical' ? '' : 'none';
-      atmBody.style.display  = t === 'physical' ? '' : 'none';
+      const visible = t === 'physical';
+      atmHdr.style.display   = visible ? '' : 'none';
+      atmBody.style.display  = visible ? '' : 'none';
+      atmArrow.textContent  = visible ? '▾' : '▸';
       gradHdr.style.display  = t === 'gradient' ? '' : 'none';
       gradBody.style.display = t === 'gradient' ? '' : 'none';
     }
@@ -372,74 +401,40 @@ export class EnvironmentProperties {
       gradArrow.textContent = open ? '▸' : '▾';
     });
 
-    // ── Helper: sub-section collapsible header ───────────────────────────────
-    // Sub-sections (Sun, Moon, Lens Flare) are gradient-sky-only, so they are
-    // appended inside gradBody so they hide when switching to Physical Sky.
-    const _subSection = (label) => {
-      const hdr = document.createElement('div');
-      hdr.style.cssText =
-        'background:var(--ce-bg-surface);padding:4px 8px;font-size:10px;font-weight:700;' +
-        'color:var(--ce-text-muted,#999);letter-spacing:0.05em;text-transform:uppercase;' +
-        'cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;' +
-        'border-top:1px solid rgba(255,255,255,0.04);';
-      const arrow = document.createElement('span');
-      arrow.style.cssText = 'font-size:8px;width:10px;flex-shrink:0;';
-      arrow.textContent = '▾';
-      hdr.appendChild(arrow);
-      hdr.appendChild(document.createTextNode(label));
-      const rows = [];
-      hdr.addEventListener('click', () => {
-        const open = arrow.textContent === '▾';
-        arrow.textContent = open ? '▸' : '▾';
-        rows.forEach(r => { r.style.display = open ? 'none' : ''; });
-      });
-      gradBody.appendChild(hdr);
-      return { addRow: (r) => { rows.push(r); gradBody.appendChild(r); } };
-    };
-
     // ── Sun controls ────────────────────────────────────────────────────────
-    const _skyP = ve?.gradientSky?._p;  // current GradientSky params (null if sky not yet enabled)
+    const _skyP = (ve?._activeSkyType === 'physical' ? ve?.physicalSky?._p : ve?.gradientSky?._p) || ve?.gradientSky?._p;  // current sky params for the selected sky type
     const showSunCb = checkbox({ checked: _skyP?.showSun ?? true, onChange: () => _fire() });
     const sunColorSw = colorSwatch({ color: '#fff8e7', onChange: () => _fire() });
 
-    const sunSec = _subSection('Sun');
-
-    // Combined "Show + Color" row
     const sunComboCtrl = document.createElement('div');
     sunComboCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
     sunComboCtrl.appendChild(showSunCb);
     sunComboCtrl.appendChild(sunColorSw.el);
-    const sunComboRow = row('Sun', sunComboCtrl);
-    sunSec.addRow(sunComboRow);
+    sunSection.appendChild(row('Sun', sunComboCtrl));
 
     const sunGlowSlider = slider({
       value: _skyP?.sunGlowStrength ?? 0.5, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
-    sunSec.addRow(row('Glow', sunGlowSlider.el));
+    sunSection.appendChild(row('Glow', sunGlowSlider.el));
 
     // ── Moon controls ───────────────────────────────────────────────────────
     const showMoonCb = checkbox({ checked: _skyP?.showMoon ?? true, onChange: () => _fire() });
     const moonColorSw = colorSwatch({ color: '#c0d4ff', onChange: () => _fire() });
 
-    const moonSec = _subSection('Moon');
-
     const moonComboCtrl = document.createElement('div');
     moonComboCtrl.style.cssText = 'display:flex;align-items:center;gap:6px;';
     moonComboCtrl.appendChild(showMoonCb);
     moonComboCtrl.appendChild(moonColorSw.el);
-    const moonComboRow = row('Moon', moonComboCtrl);
-    moonSec.addRow(moonComboRow);
+    moonSection.appendChild(row('Moon', moonComboCtrl));
 
     const moonGlowSlider = slider({
       value: _skyP?.moonGlowStrength ?? 0.3, min: 0, max: 10, step: 0.1,
       onChange: () => _fire(),
     });
-    moonSec.addRow(row('Glow', moonGlowSlider.el));
+    moonSection.appendChild(row('Glow', moonGlowSlider.el));
 
     // ── Lens Flare (Phase 5 granular controls) ───────────────────────────────
-    const flareSec = _subSection('Lens Flare');
-
     const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: () => _fire() });
     const opacitySlider      = slider({ value: _skyP?.lensflareOpacity      ?? 0.7,  min: 0,  max: 1,   step: 0.01, onChange: () => _fire() });
     const glareSizeSlider    = slider({ value: _skyP?.lensflareGlareSize    ?? 0.4,  min: 0,  max: 2,   step: 0.01, onChange: () => _fire() });
@@ -480,20 +475,20 @@ export class EnvironmentProperties {
       return row(label, wrap);
     };
 
-    flareSec.addRow(row('Enable',           lensflareEnabledCb));
-    flareSec.addRow(row('Opacity',          opacitySlider.el));
-    flareSec.addRow(row('Glare Size',       glareSizeSlider.el));
-    flareSec.addRow(row('Star Points',      starPointsSlider.el));
-    flareSec.addRow(row('Flare Size',       flareSizeSlider.el));
-    flareSec.addRow(row('Flare Spread',     flareSpeedSlider.el));
-    flareSec.addRow(row('Flare Shape',      flareShapeSelect));
-    flareSec.addRow(row('Halo Scale',       haloScaleSlider.el));
-    flareSec.addRow(row('Color Gain',       colorGainSw.el));
-    flareSec.addRow(row('Ghost Scale',      ghostScaleSlider.el));
-    flareSec.addRow(_cbIntRow('Sec. Ghosts',    secondaryGhostsCb,  secondaryGhostsIntSlider));
-    flareSec.addRow(_cbIntRow('Extra Streaks',  addStreaksCb,        streaksIntSlider));
-    flareSec.addRow(_cbIntRow('Star Burst',     starBurstCb,         starBurstIntSlider));
-    flareSec.addRow(_cbIntRow('Anamorphic',     anamorphicCb,        anamorphicIntSlider));
+    flareSection.appendChild(row('Enable',           lensflareEnabledCb));
+    flareSection.appendChild(row('Opacity',          opacitySlider.el));
+    flareSection.appendChild(row('Glare Size',       glareSizeSlider.el));
+    flareSection.appendChild(row('Star Points',      starPointsSlider.el));
+    flareSection.appendChild(row('Flare Size',       flareSizeSlider.el));
+    flareSection.appendChild(row('Flare Spread',     flareSpeedSlider.el));
+    flareSection.appendChild(row('Flare Shape',      flareShapeSelect));
+    flareSection.appendChild(row('Halo Scale',       haloScaleSlider.el));
+    flareSection.appendChild(row('Color Gain',       colorGainSw.el));
+    flareSection.appendChild(row('Ghost Scale',      ghostScaleSlider.el));
+    flareSection.appendChild(_cbIntRow('Sec. Ghosts',    secondaryGhostsCb,  secondaryGhostsIntSlider));
+    flareSection.appendChild(_cbIntRow('Extra Streaks',  addStreaksCb,        streaksIntSlider));
+    flareSection.appendChild(_cbIntRow('Star Burst',     starBurstCb,         starBurstIntSlider));
+    flareSection.appendChild(_cbIntRow('Anamorphic',     anamorphicCb,        anamorphicIntSlider));
 
 
     // Store all references
@@ -578,160 +573,16 @@ export class EnvironmentProperties {
     }));
   }
 
-  // ── Clouds (Volumetric — WebGL ray marching) ─────────────────────────────
 
-  _buildCloudSection(root) {
-    const { el, body } = section('Clouds (Volumetric)');
-    root.appendChild(el);
-
-    const cs = () => window.__cyco?.cloudSystem;
-
-    // Read current cloud enabled state so checkbox persists across panel rebuilds
-    const enableCb = checkbox({
-      checked: !!window.__cyco?.cloudSystem?.enabled,
-      onChange: (v) => cs()?.setEnabled(v),
-    });
-
-    // Sky Layer (ON): clouds sit at fixed high altitude, depth-tested so scene objects stay in front.
-    // Legacy Surround (OFF): clouds wrap around camera at low altitude, no depth test.
-    // Toggling also syncs the other sky-layer elements: sun disc, moon disc, and lens flare.
-    const skyModeCb = checkbox({
-      checked: cs()?._p?.skyMode ?? true,
-      onChange: (v) => {
-        cs()?.setSkyMode(v);
-        // Sync sky-layer siblings: sun, moon, lens flare are only meaningful in sky-layer mode
-        const sky = window.__cyco?.gradientSky;
-        if (sky) sky.setParams({ showSun: v, showMoon: v, lensflareEnabled: v });
-        const sc = this._skyControls;
-        if (sc) {
-          sc.showSunCb.checked         = v;
-          sc.showMoonCb.checked        = v;
-          sc.lensflareEnabledCb.checked = v;
-        }
-      },
-    });
-
-    // Animate checkbox — when unchecked, uTime freezes and clouds stay in place
-    const animateCb = checkbox({
-      checked: cs()?._p?.animated ?? true,
-      onChange: (v) => cs()?.setAnimated(v),
-    });
-
-    // Helper: wrap a checkbox with a text label in a flex container
-    const _mkCbLabel = (cb, text) => {
-      const w = document.createElement('label');
-      w.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;';
-      w.appendChild(cb);
-      w.appendChild(document.createTextNode(text));
-      return w;
-    };
-
-    // "Enable" + "Sky Layer" on the same row
-    const cloudsTopCtrl = document.createElement('div');
-    cloudsTopCtrl.style.cssText = 'display:flex;align-items:center;gap:10px;';
-    cloudsTopCtrl.appendChild(_mkCbLabel(enableCb, 'Enable'));
-    cloudsTopCtrl.appendChild(_mkCbLabel(skyModeCb, 'Sky Layer'));
-    body.appendChild(row('Clouds', cloudsTopCtrl));
-
-    body.appendChild(row('Animate', animateCb));
-
-    // ── Render Quality dropdown ──────────────────────────────────────────────
-    const CLOUD_RENDER_OPTS = [
-      ['ultra',    'Ultra — 48 steps (default)'],
-      ['high',     'High — 32 steps'],
-      ['medium',   'Medium — 24 steps'],
-      ['fast',     'Fast — 16 steps'],
-      ['halfres',  'Half Res (B) — medium @ ½ res'],
-      ['impostor', 'Impostor (C) — billboard planes'],
-      ['compute',  'Compute (D) — fast @ ¼ res'],
-    ];
-    const qualitySelect = select({
-      options:  CLOUD_RENDER_OPTS,
-      value:    cs()?._p?.renderMode ?? 'ultra',
-      onChange: (v) => cs()?.setRenderMode(v),
-    });
-    body.appendChild(row('Render Quality', qualitySelect));
-
-    const coverageSlider = slider({
-      value: cs()?._p?.coverage ?? 0.45, min: 0, max: 1, step: 0.01,
-      onChange: (v) => cs()?.setParam('coverage', v),
-    });
-    body.appendChild(row('Coverage', coverageSlider.el));
-
-    const densitySlider = slider({
-      value: cs()?._p?.density ?? 0.7, min: 0, max: 1, step: 0.01,
-      onChange: (v) => cs()?.setParam('density', v),
-    });
-    body.appendChild(row('Density', densitySlider.el));
-
-    const scaleSlider = slider({
-      value: cs()?._p?.scale ?? 55, min: 5, max: 250, step: 1,
-      onChange: (v) => cs()?.setParam('scale', v),
-    });
-    body.appendChild(row('Scale', scaleSlider.el));
-
-    const speedSlider = slider({
-      value: cs()?._p?.windSpeed ?? 0.4, min: 0, max: 3, step: 0.05,
-      onChange: (v) => cs()?.setParam('windSpeed', v),
-    });
-    body.appendChild(row('Wind Speed', speedSlider.el));
-
-    const windDirSlider = slider({
-      value: Math.round((cs()?._p?.windAngle ?? 0) * (180 / Math.PI)), min: 0, max: 360, step: 1,
-      onChange: (v) => cs()?.setParam('windAngleDeg', v),
-    });
-    body.appendChild(row('Wind Direction', windDirSlider.el));
-
-    const heightSlider = slider({
-      value: cs()?._p?.cloudBase ?? 1500, min: 0, max: 20000, step: 10,
-      onChange: (v) => cs()?.setParam('cloudHeight', v),
-    });
-    body.appendChild(row('Cloud Altitude', heightSlider.el));
-
-    const thicknessSlider = slider({
-      value: ((cs()?._p?.cloudTop ?? 2100) - (cs()?._p?.cloudBase ?? 1500)), min: 10, max: 2000, step: 1,
-      onChange: (v) => cs()?.setParam('cloudThickness', v),
-    });
-    body.appendChild(row('Thickness', thicknessSlider.el));
-
-    const shadowCb = checkbox({
-      checked: cs()?._p?.shadowEnabled ?? false,
-      onChange: (v) => cs()?.setShadows(v),
-    });
-    body.appendChild(row('Cast Shadows', shadowCb));
-
-    const shadowStrSlider = slider({
-      value: cs()?._p?.shadowStrength ?? 0.5, min: 0, max: 1, step: 0.01,
-      onChange: (v) => cs()?.setParam('shadowStrength', v),
-    });
-    body.appendChild(row('Shadow Strength', shadowStrSlider.el));
-
-    // ── Bloom filters ────────────────────────────────────────────────────────
-    // These sliders filter how much the cloud layer contributes to the global
-    // UnrealBloomPass without touching any other scene object.
-    //
-    //  Bloom Strength  — multiplies cloud output brightness (0 = no bloom, 2 = double)
-    //  Bloom Threshold — per-cloud luminance floor; cloud pixels below this value are
-    //                    zeroed before the bloom pass sees them (0 = off / all bloom)
-
-    const bloomStrengthSlider = slider({
-      value: cs()?._p?.bloomBrightness ?? 1.0, min: 0, max: 2, step: 0.01,
-      onChange: (v) => cs()?.setParam('bloomBrightness', v),
-    });
-    body.appendChild(row('Bloom Strength', bloomStrengthSlider.el));
-
-    const bloomThresholdSlider = slider({
-      value: cs()?._p?.cloudBloomThreshold ?? 0.0, min: 0, max: 1, step: 0.01,
-      onChange: (v) => cs()?.setParam('cloudBloomThreshold', v),
-    });
-    body.appendChild(row('Bloom Threshold', bloomThresholdSlider.el));
-  }
-
-  // ── Low Clouds (second cloud layer — ground-level, shadow casting) ────────
+  // ── Clouds (ground-level layer — shadow casting) ─────────────────────────
 
   _buildLowCloudsSection(root) {
-    const { el, body } = section('Low Clouds');
+    const { el, hdr, body } = section('Clouds');
+    this._cloudsSectionEl = el;
+    this._cloudsSectionBodyEl = body;
     root.appendChild(el);
+    el.style.display = 'none';
+    this._insertTabBackButton(hdr, 'clouds');
 
     const cs2 = () => window.__cyco?.cloudSystem2;
 
@@ -766,7 +617,7 @@ export class EnvironmentProperties {
     topCtrl2.style.cssText = 'display:flex;align-items:center;gap:10px;';
     topCtrl2.appendChild(_mkCbLabel2(enableCb2, 'Enable'));
     topCtrl2.appendChild(_mkCbLabel2(skyModeCb2, 'Sky Layer'));
-    body.appendChild(row('Low Clouds', topCtrl2));
+    body.appendChild(row('Clouds', topCtrl2));
 
     body.appendChild(row('Animate', animateCb2));
 
@@ -851,8 +702,12 @@ export class EnvironmentProperties {
   // ── Fog ───────────────────────────────────────────────────────────────────
 
   _buildFogSection(root) {
-    const { el, body } = section('Fog / Aerial Perspective');
+    const { el, hdr, body } = section('Fog');
+    this._fogSectionEl = el;
+    this._fogSectionBodyEl = body;
     root.appendChild(el);
+    el.style.display = 'none';
+    this._insertTabBackButton(hdr, 'fog');
 
     let _typeVal    = 'none';
     let _colorVal   = '#c0d0e0';
@@ -932,8 +787,12 @@ export class EnvironmentProperties {
   // ── God Rays ──────────────────────────────────────────────────────────────
 
   _buildGodRaysSection(root) {
-    const { el, body } = section('God Rays');
+    const { el, hdr, body } = section('God Rays');
+    this._godRaysSectionEl = el;
+    this._godRaysSectionBodyEl = body;
     root.appendChild(el);
+    el.style.display = 'none';
+    this._insertTabBackButton(hdr, 'godRays');
 
     const _fire = () => {
       window.dispatchEvent(new CustomEvent('cyco-godrays-change', {
@@ -989,6 +848,7 @@ export class EnvironmentProperties {
 
   _buildEnvMapSection(root) {
     const { el, body } = section('Environment Map');
+    this._envMapSectionEl = el;
     root.appendChild(el);
 
     const info = document.createElement('div');
@@ -1081,6 +941,92 @@ export class EnvironmentProperties {
       },
     });
     body.appendChild(row('Show as Background', bgCb));
+
+    const hdriRotSlider  = slider({ value: 0,   min: 0,   max: 360, step: 1,    onChange: () => this._dispatchBackground('hdri') });
+    const hdriBlurSlider = slider({ value: 0,   min: 0,   max: 1,   step: 0.01, onChange: () => this._dispatchBackground('hdri') });
+    const hdriBgIntSlider  = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
+    const hdriEnvIntSlider = slider({ value: 1, min: 0,   max: 4,   step: 0.05, onChange: () => this._dispatchBackground('hdri') });
+
+    body.appendChild(row('Rotation',     hdriRotSlider.el));
+    body.appendChild(row('BG Blur',      hdriBlurSlider.el));
+    body.appendChild(row('BG Intensity', hdriBgIntSlider.el));
+    body.appendChild(row('Env Intensity', hdriEnvIntSlider.el));
+
+    this._hdriRotSlider    = hdriRotSlider;
+    this._hdriBlurSlider   = hdriBlurSlider;
+    this._hdriBgIntSlider  = hdriBgIntSlider;
+    this._hdriEnvIntSlider = hdriEnvIntSlider;
+  }
+
+  _buildTabBar(root) {
+    const bar = document.createElement('div');
+    bar.style.cssText = 'display:flex;align-items:center;gap:6px;padding:6px 0;flex-wrap:wrap;';
+
+    const makeTab = (label, tab) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.className = 'ce-btn ce-btn-sm ce-panel-tab-btn';
+      btn.style.cssText = 'font-size:10px;padding:3px 8px;';
+      btn.addEventListener('click', () => {
+        if (this._activeTab === tab) {
+          this._showTab(null);
+        } else {
+          this._showTab(tab);
+        }
+      });
+      return btn;
+    };
+
+    this._cloudsTabBtn = makeTab('Clouds', 'clouds');
+    this._fogTabBtn = makeTab('Fog', 'fog');
+    this._godRaysTabBtn = makeTab('God Rays', 'godRays');
+    this._postTabBtn = makeTab('POST', 'post');
+
+    bar.appendChild(this._cloudsTabBtn);
+    bar.appendChild(this._fogTabBtn);
+    bar.appendChild(this._godRaysTabBtn);
+    bar.appendChild(this._postTabBtn);
+
+    root.appendChild(bar);
+    this._tabBarEl = bar;
+  }
+
+  _showTab(tabName) {
+    this._activeTab = tabName || null;
+    const tabs = ['clouds', 'fog', 'godRays', 'post'];
+
+    tabs.forEach((tab) => {
+      const btn = this[`_${tab}TabBtn`];
+      if (btn) btn.classList.toggle('active', tab === this._activeTab);
+      const sectionEl = this[`_${tab}SectionEl`];
+      const bodyEl = this[`_${tab}SectionBodyEl`];
+      if (sectionEl) sectionEl.style.display = tab === this._activeTab ? '' : 'none';
+      if (bodyEl) bodyEl.style.display = tab === this._activeTab ? '' : 'none';
+      const backBtn = this[`_${tab}BackBtn`];
+      if (backBtn) backBtn.style.display = tab === this._activeTab ? '' : 'none';
+    });
+
+    const isTabActive = !!this._activeTab;
+    if (this._backgroundSectionEl) this._backgroundSectionEl.style.display = '';
+    if (this._backgroundSectionBodyEl) this._backgroundSectionBodyEl.style.display = isTabActive ? 'none' : '';
+    if (this._skySectionEl) this._skySectionEl.style.display = isTabActive ? 'none' : (this._typeSelect?.value === 'sky' ? '' : 'none');
+    if (this._envMapSectionEl) this._envMapSectionEl.style.display = isTabActive ? 'none' : (this._typeSelect?.value === 'hdri' ? '' : 'none');
+  }
+
+  _insertTabBackButton(hdr, tabName) {
+    const backBtn = document.createElement('button');
+    backBtn.type = 'button';
+    backBtn.textContent = '← Back';
+    backBtn.className = 'ce-btn ce-btn-sm tab-back-btn';
+    backBtn.style.cssText = 'font-size:10px;padding:3px 8px;margin-left:auto;';
+    backBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this._showTab(null);
+    });
+    backBtn.style.display = 'none';
+    hdr.appendChild(backBtn);
+    this[`_${tabName}BackBtn`] = backBtn;
   }
 
   // ── HDRI Preset popup builder ──────────────────────────────────────────────
@@ -1315,8 +1261,12 @@ export class EnvironmentProperties {
   // ── Post Processing ───────────────────────────────────────────────────────
 
   _buildPostProcessingSection(root) {
-    const { el, body } = section('Post Processing');
+    const { el, hdr, body } = section('Post Processing');
+    this._postSectionEl = el;
+    this._postSectionBodyEl = body;
     root.appendChild(el);
+    el.style.display = 'none';
+    this._insertTabBackButton(hdr, 'post');
 
     const _firePP = (opts) => {
       window.dispatchEvent(new CustomEvent('cyco-postfx-change', { detail: opts }));

@@ -156,9 +156,6 @@ export class ViewportEngine {
     // IBL — must be called after renderer + scene exist
     this._setupIBL();
 
-    // Volumetric cloud system (WebGL ray marching) — sky-layer high clouds
-    this.cloudSystem = new VolumetricClouds(this);
-
     // Second cloud layer — low-altitude atmospheric clouds that cast shadows
     this.cloudSystem2 = new VolumetricClouds(this);
     this.cloudSystem2._p.skyMode              = false;

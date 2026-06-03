@@ -3088,6 +3088,31 @@ select.ce-gm-input {
   transition: background 80ms;
 }
 .ce-prop-section-hdr:hover { background: rgba(224, 114, 40, 0.18); }
+.ce-panel-tab-btn,
+.ce-prop-section-hdr .tab-back-btn {
+  background: var(--ce-bg-toolbar);
+  color: var(--ce-accent-orange);
+  border: 1px solid rgba(224, 114, 40, 0.16);
+  box-shadow: 0 0 10px rgba(224, 114, 40, 0.06);
+}
+.ce-panel-tab-btn {
+  font-size: 10px;
+  padding: 4px 8px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.ce-prop-sky-tab-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px 8px;
+}
+.ce-panel-tab-btn.active {
+  background: rgba(224, 114, 40, 0.14);
+}
+.ce-prop-section-hdr .tab-back-btn {
+  margin-left: auto;
+}
 .ce-prop-arrow {
   font-size: 9px;
   color: var(--ce-accent-orange);

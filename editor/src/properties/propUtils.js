@@ -112,7 +112,7 @@ export function section(title) {
 
   el.appendChild(hdr);
   el.appendChild(body);
-  return { el, body };
+  return { el, hdr, body, arrow };
 }
 
 // ── Row ───────────────────────────────────────────────────────────────────────
