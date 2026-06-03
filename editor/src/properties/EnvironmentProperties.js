@@ -61,9 +61,11 @@ export class EnvironmentProperties {
     const ve = window.__cyco?.viewportEngine;
 
     // Detect current bg type
-    let initType = 'solid';
-    if (ve?.skyEnabled) initType = 'sky';
-    else if (ve?.scene?.background instanceof THREE.Texture) initType = 'hdri';
+    let initType = ve?._bgType ?? 'solid';
+    if (!ve?._bgType) {
+      if (ve?.skyEnabled) initType = 'sky';
+      else if (ve?.scene?.background instanceof THREE.Texture) initType = 'hdri';
+    }
 
     const typeSelect = select({
       options: [
@@ -89,6 +91,18 @@ export class EnvironmentProperties {
     });
     this._typeSelect = typeSelect;
     body.appendChild(row('Type', typeSelect));
+
+    const initShape = ve?.physicalSky?._p?.shape ?? (ve?.rendererManager?.renderer?.isWebGPURenderer ? 'cube' : 'dome');
+    const shapeSelect = select({
+      options: [
+        ['cube', 'Cube'],
+        ['dome', 'Dome'],
+      ],
+      value: initShape,
+      onChange: () => this._fireSkyChange(),
+    });
+    this._skyShapeSelect = shapeSelect;
+    body.appendChild(row('Sky Shape', shapeSelect));
 
     // Solid color
     const curBgColor = ve?.scene?.background instanceof THREE.Color
@@ -583,6 +597,7 @@ export class EnvironmentProperties {
         lensflareStarBurstIntensity:       parseFloat(s.starBurstIntSlider.input.value),
         lensflareAnamorphic:              s.anamorphicCb.checked,
         lensflareAnamorphicIntensity:      parseFloat(s.anamorphicIntSlider.input.value),
+        skyShape:            this._skyShapeSelect?.value ?? 'cube',
       }
     }));
   }

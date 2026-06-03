@@ -81,6 +81,7 @@ export class PhysicalSkyTSL {
       lensflareEnabled: true,
       lensflareOpacity: 0.7,
       lensflareSize: 0.4,
+      shape:            'cube',
       sunDir: new THREE.Vector3(),
     };
   }
@@ -104,6 +105,15 @@ export class PhysicalSkyTSL {
   setParams(opts = {}) {
     const p = this._p;
     let dirtyDir = false;
+
+    const shapeChanged = opts.shape !== undefined && opts.shape !== p.shape;
+    if (shapeChanged) {
+      p.shape = opts.shape;
+      if (this._mesh) {
+        this._destroySky();
+        this._createSky();
+      }
+    }
 
     if (opts.elevation        !== undefined) { p.elevation        = opts.elevation;        dirtyDir = true; }
     if (opts.azimuth          !== undefined) { p.azimuth          = opts.azimuth;          dirtyDir = true; }
@@ -398,7 +408,9 @@ export class PhysicalSkyTSL {
     mat.depthWrite = false;
 
     // ── Mesh ─────────────────────────────────────────────────────────────
-    const geo  = new THREE.BoxGeometry(1, 1, 1);
+    const geo = p.shape === 'dome'
+      ? new THREE.SphereGeometry(1, 32, 16)
+      : new THREE.BoxGeometry(1, 1, 1);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.scale.setScalar(450000);
     mesh.renderOrder        = -1000;

@@ -79,6 +79,9 @@ export class ViewportEngine {
     /** ResizeObserver for container size changes */
     this._resizeObserver = null;
     this._container = null;
+    this._skyShape = 'dome';
+    this._skyWireframeVisible = false;
+    this._skyWireframeHelper = null;
 
     /** Secondary WebGLRenderer + canvas for the ViewHelper gizmo overlay (WebGPU mode) */
     this._helperOverlayRenderer = null;
@@ -110,6 +113,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-viewport-container-ready', this._onContainerReady);
     window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
     window.addEventListener('cyco-sky-change',              this._onSkyChange);
+    window.addEventListener('cyco-vp-skywireframe',         this._onSkyWireframeChange.bind(this));
     window.addEventListener('cyco-fog-change',              this._onFogChange);
     window.addEventListener('cyco-godrays-change',          this._onGodRaysChange);
     window.addEventListener('cyco-env-map-change',          this._onEnvMapChange);
@@ -252,6 +256,7 @@ export class ViewportEngine {
       zenithTintR, zenithTintG, zenithTintB,
       hazeTintR, hazeTintG, hazeTintB,
       nightR, nightG, nightB,
+      skyShape,
       // Granular lens flare params (Phase 5)
       lensflareEnabled, lensflareOpacity,
       lensflareGlareSize, lensflareStarPoints, lensflareFlareSize, lensflareFlareSpeed,
@@ -261,6 +266,9 @@ export class ViewportEngine {
       lensflareStarBurst, lensflareStarBurstIntensity,
       lensflareAnamorphic, lensflareAnamorphicIntensity,
     } = detail ?? {};
+    if (skyShape !== undefined) {
+      this._skyShape = skyShape;
+    }
     console.log(
       `[CYCO:ENV] cyco-sky-change  enabled=${enabled}  skyType=${skyType}  elevation=${elevation}°  azimuth=${azimuth}°` +
       `  exposure=${exposure ?? 'n/a'}  saturation=${saturation ?? 'n/a'}`
@@ -271,6 +279,7 @@ export class ViewportEngine {
       this.gradientSky?.setEnabled(false);
       this.physicalSky?.setEnabled(false);
       this.skyEnabled = false;
+      this._destroySkyWireframeHelper();
       // Only fall back to solid colour when the current bg type isn't gradient/hdri
       if (this._bgType !== 'gradient' && this._bgType !== 'hdri') {
         if (!(this.scene.background instanceof THREE.Color)) {
@@ -327,6 +336,7 @@ export class ViewportEngine {
       if (lensflareEnabled    !== undefined) physParams.lensflareEnabled    = lensflareEnabled;
       if (lensflareOpacity    !== undefined) physParams.lensflareOpacity    = lensflareOpacity;
       if (lensflareGlareSize  !== undefined) physParams.lensflareSize       = lensflareGlareSize;
+      if (skyShape            !== undefined) physParams.shape              = skyShape;
 
       this.physicalSky.setEnabled(true);
       this.physicalSky.setParams(physParams);
@@ -361,6 +371,7 @@ export class ViewportEngine {
       if (lensflareStarBurstIntensity       !== undefined) params.lensflareStarBurstIntensity       = lensflareStarBurstIntensity;
       if (lensflareAnamorphic               !== undefined) params.lensflareAnamorphic               = lensflareAnamorphic;
       if (lensflareAnamorphicIntensity      !== undefined) params.lensflareAnamorphicIntensity      = lensflareAnamorphicIntensity;
+      if (skyShape                     !== undefined) params.shape                     = skyShape;
 
       this.gradientSky.setEnabled(true);
       this.gradientSky.setParams(params);
@@ -396,6 +407,75 @@ export class ViewportEngine {
       : null;
     this.cloudSystem?.updateSunFromSky(elevation, azimuth, skyColors);
     this.cloudSystem2?.updateSunFromSky(elevation, azimuth, skyColors);
+    this._rebuildSkyWireframeHelper();
+  }
+
+  _onSkyWireframeChange({ detail } = {}) {
+    const enabled = !!detail?.enabled;
+    if (enabled === this._skyWireframeVisible) return;
+    this._skyWireframeVisible = enabled;
+    if (enabled) {
+      this._createSkyWireframeHelper();
+    } else {
+      this._destroySkyWireframeHelper();
+    }
+  }
+
+  _rebuildSkyWireframeHelper() {
+    if (!this._skyWireframeVisible) return;
+    this._destroySkyWireframeHelper();
+    this._createSkyWireframeHelper();
+  }
+
+  _createSkyWireframeHelper() {
+    const scene = this.scene;
+    if (!scene) return;
+    this._destroySkyWireframeHelper();
+    const activeSky = this._activeSkyType === 'physical' ? this.physicalSky : this.gradientSky;
+    const source = activeSky?._mesh;
+    let geometry = source?.geometry;
+    if (!geometry) {
+      geometry = (this._skyShape === 'cube')
+        ? new THREE.BoxGeometry(1, 1, 1)
+        : new THREE.SphereGeometry(450000, 32, 16);
+    }
+
+    const wireGeom = new THREE.WireframeGeometry(geometry);
+    const wireMat = new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.45,
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    const wire = new THREE.LineSegments(wireGeom, wireMat);
+    wire.name = '__cyco_sky_wireframe';
+    wire.renderOrder = source?.renderOrder ?? 9999;
+    wire.frustumCulled = false;
+    wire.userData._isHelper = true;
+    if (source) {
+      wire.position.copy(source.position);
+      wire.rotation.copy(source.rotation);
+      wire.scale.copy(source.scale);
+    } else {
+      if (this.camera) wire.position.copy(this.camera.position);
+      if (this._skyShape === 'cube') wire.scale.setScalar(450000);
+    }
+
+    this._skyWireframeHelper = wire;
+    scene.add(wire);
+  }
+
+  _destroySkyWireframeHelper() {
+    if (!this._skyWireframeHelper) return;
+    const scene = this.scene;
+    if (scene && this._skyWireframeHelper.parent === scene) {
+      scene.remove(this._skyWireframeHelper);
+    }
+    this._skyWireframeHelper.geometry.dispose();
+    this._skyWireframeHelper.material.dispose();
+    this._skyWireframeHelper = null;
   }
 
   /** Apply fog to the active scene. */
@@ -1511,6 +1591,9 @@ export class ViewportEngine {
     this.gradientSky?.update();
     // Physical sky follows camera
     this.physicalSky?.update();
+    if (this._skyWireframeHelper && this.camera) {
+      this._skyWireframeHelper.position.copy(this.camera.position);
+    }
 
     // Update god rays sun screen UV for WebGPU TSL pipeline (runs every frame)
     {

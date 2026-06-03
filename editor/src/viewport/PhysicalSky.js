@@ -80,6 +80,7 @@ export class PhysicalSky {
       moonGlowStrength: 0.3,
       moonGlowSize:     0.3,
       moonScale:        1.0,
+      shape:            'dome',
       sunDir:          new THREE.Vector3(),
     };
 
@@ -104,6 +105,13 @@ export class PhysicalSky {
   }
 
   setParams(opts = {}) {
+    if (opts.shape !== undefined && opts.shape !== this._p.shape) {
+      this._p.shape = opts.shape;
+      if (this._sky) {
+        this._destroySky();
+        this._createSky();
+      }
+    }
     if (opts.elevation        !== undefined) this._p.elevation        = opts.elevation;
     if (opts.azimuth          !== undefined) this._p.azimuth          = opts.azimuth;
     if (opts.turbidity        !== undefined) this._p.turbidity        = opts.turbidity;
@@ -151,6 +159,10 @@ export class PhysicalSky {
     this._destroySky();
 
     const sky = new Sky();
+    if (this._p.shape === 'cube') {
+      sky.geometry.dispose();
+      sky.geometry = new THREE.BoxGeometry(1, 1, 1);
+    }
     sky.scale.setScalar(450000);
     sky.name          = '__cyco_physical_sky';
     sky.renderOrder   = -1;

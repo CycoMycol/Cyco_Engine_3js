@@ -293,6 +293,7 @@ export class GradientSky {
       lensflareStarBurstIntensity: 0.5,
       lensflareAnamorphic:        false,
       lensflareAnamorphicIntensity: 0.3,
+      shape:                    'dome',
       sunDir:             new THREE.Vector3(),
       moonDir:            new THREE.Vector3(),
     };
@@ -352,6 +353,14 @@ export class GradientSky {
    */
   setParams(opts = {}) {
     const p = this._p;
+    const shapeChanged = opts.shape !== undefined && opts.shape !== p.shape;
+    if (shapeChanged) {
+      p.shape = opts.shape;
+      if (this._mesh) {
+        this._destroyMesh();
+        this._createMesh();
+      }
+    }
     if (opts.elevation          !== undefined) p.elevation          = opts.elevation;
     if (opts.azimuth            !== undefined) p.azimuth            = opts.azimuth;
     if (opts.showSun            !== undefined) p.showSun            = opts.showSun;
@@ -590,7 +599,11 @@ export class GradientSky {
       mat.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
       mat.colorNode = colorNode;
 
-      this._mesh = new THREE.Mesh(new THREE.SphereGeometry(450000, 32, 16), mat);
+      const geo = this._p.shape === 'dome'
+        ? new THREE.SphereGeometry(450000, 32, 16)
+        : new THREE.BoxGeometry(1, 1, 1);
+      this._mesh = new THREE.Mesh(geo, mat);
+      if (this._p.shape === 'cube') this._mesh.scale.setScalar(450000);
       this._mesh.name = '__cyco_gradient_sky';
       this._mesh.renderOrder = -1;
       this._mesh.raycast = () => {};
@@ -784,10 +797,11 @@ export class GradientSky {
     material.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
     material.colorNode = skyColorNode;
 
-    this._mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(450000, 32, 16),
-      material
-    );
+    const geo = this._p.shape === 'dome'
+      ? new THREE.SphereGeometry(450000, 32, 16)
+      : new THREE.BoxGeometry(1, 1, 1);
+    this._mesh = new THREE.Mesh(geo, material);
+    if (this._p.shape === 'cube') this._mesh.scale.setScalar(450000);
     this._mesh.name = '__cyco_gradient_sky';
     this._mesh.renderOrder = -1;
     this._mesh.raycast = () => {};

@@ -37,6 +37,8 @@ export class CenterPanel extends BasePanel {
   constructor() {
     super();
     this._renderMode  = 'standard';
+    this._previousRenderMode = 'standard';
+    this._skyWireframeVisible = false;
     this._cameraView  = 'perspective';
     this._physicsEdit = false;
     this._renderHandle = null;
@@ -346,14 +348,61 @@ export class CenterPanel extends BasePanel {
   _buildRenderDropdown() {
     const items = [];
     RENDER_MODES.forEach((m, i) => {
-      items.push(_ddRadioRow(m.label, m.value === this._renderMode, () => {
-        this._renderMode = m.value;
-        this._renderHandle.refresh();
-        window.dispatchEvent(new CustomEvent('cyco-vp-rendermode', { detail: { mode: m.value } }));
-      }));
-      if (i === 0) items.push(_ddSep()); // separator after Wireframe
+      if (m.value === 'wireframe') {
+        items.push(this._buildWireframeDropdownItem(m));
+        items.push(_ddSep());
+      } else {
+        items.push(_ddRadioRow(m.label, m.value === this._renderMode, () => {
+          this._setRenderMode(m.value);
+        }));
+      }
     });
     return items;
+  }
+
+  _buildWireframeDropdownItem(mode) {
+    const checked = this._renderMode === 'wireframe';
+    const row = document.createElement('div');
+    row.className = 'ce-vp-dd-row' + (checked ? ' selected' : '');
+    const radio = document.createElement('span');
+    radio.className = 'ce-vp-dd-radio' + (checked ? ' checked' : '');
+    const label = document.createElement('span');
+    label.textContent = mode.label;
+
+    const toggle = document.createElement('button');
+    toggle.className = 'ce-vp-dd-toggle-btn' + (this._skyWireframeVisible ? ' active' : '');
+    toggle.title = 'Toggle sky dome/cube wireframe';
+    toggle.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3h18v18H3V3z"/><path d="M3 9h18"/><path d="M9 3v18"/><path d="M3 15h18"/><path d="M15 3v18"/></svg>';
+    toggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      this._toggleSkyWireframe(!this._skyWireframeVisible);
+      toggle.classList.toggle('active', this._skyWireframeVisible);
+    });
+
+    row.appendChild(radio);
+    row.appendChild(label);
+    row.appendChild(toggle);
+    row.addEventListener('click', () => {
+      this._setRenderMode(mode.value);
+      row.closest('.ce-vp-dd-wrap')?.classList.remove('open');
+    });
+    return row;
+  }
+
+  _setRenderMode(mode) {
+    if (this._renderMode === mode) return;
+    if (this._renderMode !== 'wireframe') {
+      this._previousRenderMode = this._renderMode;
+    }
+    this._renderMode = mode;
+    this._renderHandle.refresh();
+    window.dispatchEvent(new CustomEvent('cyco-vp-rendermode', { detail: { mode } }));
+  }
+
+  _toggleSkyWireframe(enabled) {
+    if (this._skyWireframeVisible === enabled) return;
+    this._skyWireframeVisible = enabled;
+    window.dispatchEvent(new CustomEvent('cyco-vp-skywireframe', { detail: { enabled } }));
   }
 
   _buildCameraDropdown() {

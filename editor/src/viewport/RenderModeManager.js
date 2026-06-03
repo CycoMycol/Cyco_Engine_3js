@@ -48,9 +48,14 @@ export class RenderModeManager {
     switch (this._mode) {
       case 'wireframe':
         this._overrideAll(mesh => {
-          const mat = mesh.material.clone();
-          mat.wireframe = true;
-          return mat;
+          const orig = [mesh.material].flat()[0];
+          return new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            wireframe: true,
+            side: orig?.side ?? THREE.FrontSide,
+            depthTest: orig?.depthTest ?? true,
+            depthWrite: orig?.depthWrite ?? false,
+          });
         });
         break;
 
