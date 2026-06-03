@@ -313,9 +313,9 @@ export class EnvironmentProperties {
       atmArrow.textContent = open ? '▸' : '▾';
     });
 
-    const turbiditySlider = slider({ value: ve?.physicalSky?._p?.turbidity       ?? 2.0,  min: 1,   max: 20,   step: 0.1,   onChange: () => _fire() });
+    const turbiditySlider = slider({ value: ve?.physicalSky?._p?.turbidity       ?? 2.0,  min: 0,   max: 20,   step: 0.1,   onChange: () => _fire() });
     const rayleighSlider  = slider({ value: ve?.physicalSky?._p?.rayleigh        ?? 1.0,  min: 0,   max: 4,    step: 0.05,  onChange: () => _fire() });
-    const mieGSlider      = slider({ value: ve?.physicalSky?._p?.mieDirectionalG ?? 0.8,  min: 0,   max: 0.99, step: 0.01,  onChange: () => _fire() });
+    const mieGSlider      = slider({ value: ve?.physicalSky?._p?.mieDirectionalG ?? 0.8,  min: 0,   max: 0.85, step: 0.01,  onChange: () => _fire() });
     const mieCSlider      = slider({ value: ve?.physicalSky?._p?.mieCoefficient  ?? 0.005,min: 0,   max: 0.1,  step: 0.001, onChange: () => _fire() });
     const ozoneRSlider    = slider({ value: ve?.physicalSky?._p?.ozoneR ?? 3.426e-7, min: 0, max: 1e-6,  step: 1e-8, onChange: () => _fire() });
     const ozoneGSlider    = slider({ value: ve?.physicalSky?._p?.ozoneG ?? 8.298e-7, min: 0, max: 1.5e-6,step: 1e-8, onChange: () => _fire() });
@@ -418,6 +418,12 @@ export class EnvironmentProperties {
     });
     sunSection.appendChild(row('Glow', sunGlowSlider.el));
 
+    const sunScaleSlider = slider({
+      value: _skyP?.sunScale ?? 1.0, min: 0.1, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    sunSection.appendChild(row('Size', sunScaleSlider.el));
+
     // ── Moon controls ───────────────────────────────────────────────────────
     const showMoonCb = checkbox({ checked: _skyP?.showMoon ?? true, onChange: () => _fire() });
     const moonColorSw = colorSwatch({ color: '#c0d4ff', onChange: () => _fire() });
@@ -433,6 +439,12 @@ export class EnvironmentProperties {
       onChange: () => _fire(),
     });
     moonSection.appendChild(row('Glow', moonGlowSlider.el));
+
+    const moonScaleSlider = slider({
+      value: _skyP?.moonScale ?? 1.0, min: 0.1, max: 3.0, step: 0.05,
+      onChange: () => _fire(),
+    });
+    moonSection.appendChild(row('Size', moonScaleSlider.el));
 
     // ── Lens Flare (Phase 5 granular controls) ───────────────────────────────
     const lensflareEnabledCb = checkbox({ checked: _skyP?.lensflareEnabled ?? true, onChange: () => _fire() });
@@ -496,8 +508,8 @@ export class EnvironmentProperties {
       enabledCb, elevationSlider, azimuthSlider,
       exposureSlider, saturationSlider, contrastSlider, hueSlider,
       gradEditor,
-      showSunCb, sunColorSw, sunGlowSlider,
-      showMoonCb, moonColorSw, moonGlowSlider,
+      showSunCb, sunColorSw, sunGlowSlider, sunScaleSlider,
+      showMoonCb, moonColorSw, moonGlowSlider, moonScaleSlider,
       lensflareEnabledCb, opacitySlider, glareSizeSlider, starPointsSlider,
       flareSizeSlider, flareSpeedSlider, flareShapeSelect, haloScaleSlider,
       colorGainSw, ghostScaleSlider,
@@ -563,6 +575,8 @@ export class EnvironmentProperties {
         lensflareGhostScale:   parseFloat(s.ghostScaleSlider.input.value),
         lensflareSecondaryGhosts:         s.secondaryGhostsCb.checked,
         lensflareSecondaryGhostsIntensity: parseFloat(s.secondaryGhostsIntSlider.input.value),
+        sunScale:              parseFloat(s.sunScaleSlider.input.value),
+        moonScale:             parseFloat(s.moonScaleSlider.input.value),
         lensflareAdditionalStreaks:        s.addStreaksCb.checked,
         lensflareStreaksIntensity:         parseFloat(s.streaksIntSlider.input.value),
         lensflareStarBurst:               s.starBurstCb.checked,

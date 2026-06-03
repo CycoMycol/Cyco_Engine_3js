@@ -243,8 +243,8 @@ export class ViewportEngine {
       skyType = 'gradient',
       elevation = 30, azimuth = 180,
       colorStops, opacityStops,
-      showSun = true, sunColor, sunGlowStrength,
-      showMoon = true, moonColor, moonGlowStrength,
+      showSun = true, sunColor, sunGlowStrength, sunScale,
+      showMoon = true, moonColor, moonGlowStrength, moonScale,
       exposure, saturation, contrast, hue,
       turbidity, rayleigh, mieDirectionalG, mieCoefficient,
       ozoneR, ozoneG, ozoneB,
@@ -300,6 +300,12 @@ export class ViewportEngine {
       if (saturation      !== undefined) physParams.saturation      = saturation;
       if (contrast        !== undefined) physParams.contrast        = contrast;
       if (hue             !== undefined) physParams.hue             = hue;
+      if (sunColor        !== undefined) physParams.sunColor        = sunColor;
+      if (moonColor       !== undefined) physParams.moonColor       = moonColor;
+      if (sunGlowStrength !== undefined) physParams.sunGlowStrength = sunGlowStrength;
+      if (moonGlowStrength!== undefined) physParams.moonGlowStrength= moonGlowStrength;
+      if (sunScale        !== undefined) physParams.sunScale        = sunScale;
+      if (moonScale       !== undefined) physParams.moonScale       = moonScale;
       // Ozone
       if (ozoneR          !== undefined) physParams.ozoneR          = ozoneR;
       if (ozoneG          !== undefined) physParams.ozoneG          = ozoneG;

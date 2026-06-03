@@ -70,6 +70,14 @@ export class PhysicalSkyTSL {
       nightR: 0.02, nightG: 0.05, nightB: 0.18,
       skyBrightness: 1.0,
       exposure:      1.0,
+      sunColor:      new THREE.Color('#fff8e7'),
+      moonColor:     new THREE.Color('#c0d4ff'),
+      sunGlowStrength: 0.5,
+      sunGlowSize:     0.5,
+      sunScale:        1.0,
+      moonGlowStrength: 0.3,
+      moonGlowSize:     0.3,
+      moonScale:        1.0,
       lensflareEnabled: true,
       lensflareOpacity: 0.7,
       lensflareSize: 0.4,
@@ -122,6 +130,14 @@ export class PhysicalSkyTSL {
     if (opts.nightR           !== undefined)   p.nightR           = opts.nightR;
     if (opts.nightG           !== undefined)   p.nightG           = opts.nightG;
     if (opts.nightB           !== undefined)   p.nightB           = opts.nightB;
+    if (opts.sunColor         !== undefined)   p.sunColor.set(opts.sunColor);
+    if (opts.moonColor        !== undefined)   p.moonColor.set(opts.moonColor);
+    if (opts.sunGlowStrength  !== undefined)   p.sunGlowStrength  = opts.sunGlowStrength;
+    if (opts.sunGlowSize      !== undefined)   p.sunGlowSize      = opts.sunGlowSize;
+    if (opts.sunScale         !== undefined)   p.sunScale         = opts.sunScale;
+    if (opts.moonGlowStrength !== undefined)   p.moonGlowStrength = opts.moonGlowStrength;
+    if (opts.moonGlowSize     !== undefined)   p.moonGlowSize     = opts.moonGlowSize;
+    if (opts.moonScale        !== undefined)   p.moonScale        = opts.moonScale;
     if (opts.lensflareEnabled !== undefined)   p.lensflareEnabled = opts.lensflareEnabled;
     if (opts.lensflareOpacity !== undefined)   p.lensflareOpacity = opts.lensflareOpacity;
     if (opts.lensflareSize    !== undefined)   p.lensflareSize    = opts.lensflareSize;
@@ -180,7 +196,7 @@ export class PhysicalSkyTSL {
     this._uTurbidity  = uniform(p.turbidity,      'float');
     this._uRayleigh   = uniform(p.rayleigh,       'float');
     this._uMieCoeff   = uniform(p.mieCoefficient, 'float');
-    this._uMieG       = uniform(p.mieDirectionalG,'float');
+    this._uMieG       = uniform(Math.min(p.mieDirectionalG, 0.85), 'float');
     this._uShowSun    = uniform(p.showSun  ? 1.0 : 0.0, 'float');
     this._uShowMoon   = uniform(p.showMoon ? 1.0 : 0.0, 'float');
     this._uOzone      = uniform(new THREE.Vector3(p.ozoneR, p.ozoneG, p.ozoneB), 'vec3');
@@ -190,6 +206,14 @@ export class PhysicalSkyTSL {
     this._uZenithTint = uniform(new THREE.Vector3(p.zenithTintR, p.zenithTintG, p.zenithTintB), 'vec3');
     this._uHazeTint   = uniform(new THREE.Vector3(p.hazeTintR,   p.hazeTintG,   p.hazeTintB),   'vec3');
     this._uNightColor = uniform(new THREE.Vector3(p.nightR, p.nightG, p.nightB), 'vec3');
+    this._uSunColor   = uniform(new THREE.Vector3(p.sunColor.r, p.sunColor.g, p.sunColor.b), 'vec3');
+    this._uMoonColor  = uniform(new THREE.Vector3(p.moonColor.r, p.moonColor.g, p.moonColor.b), 'vec3');
+    this._uSunGlowStrength  = uniform(p.sunGlowStrength, 'float');
+    this._uSunGlowSize      = uniform(p.sunGlowSize,     'float');
+    this._uSunScale         = uniform(p.sunScale,        'float');
+    this._uMoonGlowStrength = uniform(p.moonGlowStrength,'float');
+    this._uMoonGlowSize     = uniform(p.moonGlowSize,    'float');
+    this._uMoonScale        = uniform(p.moonScale,       'float');
     this._uBrightness = uniform(p.skyBrightness,  'float');
 
     // Capture refs so Fn() closure doesn't reference `this`
@@ -207,6 +231,14 @@ export class PhysicalSkyTSL {
     const uZenithTint = this._uZenithTint;
     const uHazeTint   = this._uHazeTint;
     const uNightColor = this._uNightColor;
+    const uSunColor   = this._uSunColor;
+    const uMoonColor  = this._uMoonColor;
+    const uSunGlowStrength  = this._uSunGlowStrength;
+    const uSunGlowSize      = this._uSunGlowSize;
+    const uSunScale         = this._uSunScale;
+    const uMoonGlowStrength = this._uMoonGlowStrength;
+    const uMoonGlowSize     = this._uMoonGlowSize;
+    const uMoonScale        = this._uMoonScale;
     const uBrightness = this._uBrightness;
 
     // ── Sky colour graph ─────────────────────────────────────────────────
@@ -269,8 +301,8 @@ export class PhysicalSkyTSL {
       const scatter = betaRTheta.add(betaMTheta).div(betaSum);
       const Lin = pow(sunE.mul(scatter).mul(vec3(1,1,1).sub(Fex)), vec3(1.5, 1.5, 1.5));
 
-      // Horizon blend
-      const horizonBlend = clamp(pow(float(1).sub(dot(upVec, sunDir)), float(5)), float(0), float(1));
+      // Horizon blend based on view angle, not sun angle, so the sky dome fades vertically
+      const horizonBlend = clamp(pow(float(1).sub(dot(upVec, direction)), float(5)), float(0), float(1));
       const LinHorizon   = pow(sunE.mul(scatter).mul(Fex), vec3(0.5, 0.5, 0.5));
 
       // Multiple scattering +15%
@@ -283,32 +315,41 @@ export class PhysicalSkyTSL {
       // Ambient + sun disc
       const L0 = vec3(0.05, 0.05, 0.05).mul(Fex);
       const sunAngDiamCos = float(0.999956676946448);
-      const sunDisc = smoothstep(sunAngDiamCos, sunAngDiamCos.add(float(0.00002)), cosTheta).mul(uShowSun);
-      const L0Final = L0.add(sunE.mul(float(14000)).mul(Fex).mul(sunDisc));
+      const sunDisc = smoothstep(sunAngDiamCos, sunAngDiamCos.add(float(0.00004).mul(uSunScale)), cosTheta).mul(uShowSun);
+      const sunGlow = smoothstep(sunAngDiamCos.sub(float(0.0003).mul(uSunGlowSize)), sunAngDiamCos, cosTheta)
+                        .mul(uShowSun).mul(uSunGlowStrength);
+      const sunCore = sunDisc.mul(clamp(uSunGlowStrength.mul(float(0.6)).add(float(0.1)), float(0.0), float(1.0)));
+      const sunL0     = uSunColor.mul(sunCore).mul(sunE.mul(float(4000)).mul(Fex));
+      const sunGlowL0 = uSunColor.mul(sunGlow).mul(float(2200)).mul(Fex);
+      const L0Final = L0.add(sunL0).add(sunGlowL0);
 
       // Moon disc (opposite sun, visible when sun is below horizon)
       const moonDir    = normalize(uSunPos.negate());
       const moonCosT   = dot(direction, moonDir);
       const moonVis    = clamp(uSunPos.y.negate().mul(float(6)), float(0), float(1));
       const moonAngCos = float(0.9996);  // ~1.6° half-angle for visible disc
-      const moonDisc   = smoothstep(moonAngCos, moonAngCos.add(float(0.0003)), moonCosT)
+      const moonDisc   = smoothstep(moonAngCos, moonAngCos.add(float(0.0004).mul(uMoonScale)), moonCosT)
                            .mul(uShowMoon).mul(moonVis);
-      // Moon added AFTER global 0.022 scale so it isn't invisible on night sky
-      const moonL0     = vec3(0.85, 0.90, 1.0).mul(moonDisc).mul(float(0.55));
+      const moonGlow = smoothstep(moonAngCos.sub(float(0.00045).mul(uMoonGlowSize)), moonAngCos, moonCosT)
+                         .mul(uShowMoon).mul(moonVis).mul(uMoonGlowStrength);
+      const moonCore = moonDisc.mul(clamp(uMoonGlowStrength.mul(float(0.6)).add(float(0.1)), float(0.0), float(1.0)));
+      const moonL0     = uMoonColor.mul(moonCore).mul(float(0.32));
+      const moonGlowL0 = uMoonColor.mul(moonGlow).mul(float(0.18));
 
       // Scale 0.022 keeps sky body below bloom threshold 1.5
       const texColor = tintedFinal.add(L0Final)
                          .mul(float(0.022))
                          .add(vec3(0.0, 0.0001, 0.0003))
                          .mul(uBrightness)
-                         .add(moonL0);
+                         .add(moonL0)
+                         .add(moonGlowL0);
 
-      // Clamp bright sun disc
-      const clamped = min(texColor, vec3(3.5, 3.5, 3.5));
+      // Smooth HDR compression instead of hard clamp.
+      const toneMapped = texColor.div(float(1).add(texColor));
 
       // Night sky ambient
       const nightFactor = clamp(uSunPos.y.negate().mul(float(8)), float(0), float(1));
-      const withNight   = mix(clamped, clamped.add(uNightColor.mul(nightFactor)), nightFactor);
+      const withNight   = mix(toneMapped, toneMapped.add(uNightColor.mul(nightFactor)), nightFactor);
 
       // Saturation
       const lumCoeff   = vec3(0.2126, 0.7152, 0.0722);
@@ -400,7 +441,9 @@ export class PhysicalSkyTSL {
     this._uSunPos = this._uTurbidity = this._uRayleigh = this._uMieCoeff = null;
     this._uMieG   = this._uShowSun   = this._uShowMoon  = this._uOzone   = null;
     this._uSat    = this._uContrast  = this._uHue        = null;
-    this._uZenithTint = this._uHazeTint = this._uNightColor = this._uBrightness = null;
+    this._uZenithTint = this._uHazeTint = this._uNightColor = this._uSunColor = null;
+    this._uMoonColor = this._uSunGlowStrength = this._uSunGlowSize = null;
+    this._uSunScale = this._uMoonGlowStrength = this._uMoonGlowSize = this._uMoonScale = this._uBrightness = null;
   }
 
   _initSunLight() {
@@ -430,7 +473,7 @@ export class PhysicalSkyTSL {
     if (this._uTurbidity)  this._uTurbidity.value  = p.turbidity;
     if (this._uRayleigh)   this._uRayleigh.value   = p.rayleigh;
     if (this._uMieCoeff)   this._uMieCoeff.value   = p.mieCoefficient;
-    if (this._uMieG)       this._uMieG.value        = p.mieDirectionalG;
+    if (this._uMieG)       this._uMieG.value        = Math.min(p.mieDirectionalG, 0.85);
     if (this._uShowSun)    this._uShowSun.value     = p.showSun  ? 1.0 : 0.0;
     if (this._uShowMoon)   this._uShowMoon.value    = p.showMoon ? 1.0 : 0.0;
     if (this._uOzone)      this._uOzone.value.set(p.ozoneR, p.ozoneG, p.ozoneB);
@@ -440,6 +483,14 @@ export class PhysicalSkyTSL {
     if (this._uZenithTint) this._uZenithTint.value.set(p.zenithTintR, p.zenithTintG, p.zenithTintB);
     if (this._uHazeTint)   this._uHazeTint.value.set(p.hazeTintR,   p.hazeTintG,   p.hazeTintB);
     if (this._uNightColor) this._uNightColor.value.set(p.nightR,    p.nightG,      p.nightB);
+    if (this._uSunColor)   this._uSunColor.value.set(p.sunColor.r, p.sunColor.g, p.sunColor.b);
+    if (this._uMoonColor)  this._uMoonColor.value.set(p.moonColor.r, p.moonColor.g, p.moonColor.b);
+    if (this._uSunGlowStrength)  this._uSunGlowStrength.value  = p.sunGlowStrength;
+    if (this._uSunGlowSize)      this._uSunGlowSize.value      = p.sunGlowSize;
+    if (this._uSunScale)         this._uSunScale.value         = p.sunScale;
+    if (this._uMoonGlowStrength) this._uMoonGlowStrength.value = p.moonGlowStrength;
+    if (this._uMoonGlowSize)     this._uMoonGlowSize.value     = p.moonGlowSize;
+    if (this._uMoonScale)        this._uMoonScale.value        = p.moonScale;
     if (this._uBrightness) this._uBrightness.value  = p.skyBrightness;
   }
 

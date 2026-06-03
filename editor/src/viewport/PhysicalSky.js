@@ -72,6 +72,14 @@ export class PhysicalSky {
       mieDirectionalG: 0.8,
       exposure:        1.0,
       showSun:         true,
+      sunColor:        new THREE.Color('#fff8e7'),
+      moonColor:       new THREE.Color('#c0d4ff'),
+      sunGlowStrength: 0.5,
+      sunGlowSize:     0.5,
+      sunScale:        1.0,
+      moonGlowStrength: 0.3,
+      moonGlowSize:     0.3,
+      moonScale:        1.0,
       sunDir:          new THREE.Vector3(),
     };
 
@@ -104,6 +112,14 @@ export class PhysicalSky {
     if (opts.mieDirectionalG  !== undefined) this._p.mieDirectionalG  = opts.mieDirectionalG;
     if (opts.exposure         !== undefined) this._p.exposure         = opts.exposure;
     if (opts.showSun          !== undefined) this._p.showSun          = opts.showSun;
+    if (opts.sunColor         !== undefined) this._p.sunColor.set(opts.sunColor);
+    if (opts.moonColor        !== undefined) this._p.moonColor.set(opts.moonColor);
+    if (opts.sunGlowStrength  !== undefined) this._p.sunGlowStrength  = opts.sunGlowStrength;
+    if (opts.sunGlowSize      !== undefined) this._p.sunGlowSize      = opts.sunGlowSize;
+    if (opts.sunScale         !== undefined) this._p.sunScale         = opts.sunScale;
+    if (opts.moonGlowStrength !== undefined) this._p.moonGlowStrength = opts.moonGlowStrength;
+    if (opts.moonGlowSize     !== undefined) this._p.moonGlowSize     = opts.moonGlowSize;
+    if (opts.moonScale        !== undefined) this._p.moonScale        = opts.moonScale;
 
     this._updateDirs();
     this._pushUniforms();
@@ -143,18 +159,45 @@ export class PhysicalSky {
 
     // Disable built-in 2D sky clouds (we use the dedicated VolumetricClouds system)
     sky.material.uniforms.cloudCoverage.value = 0.0;
+    sky.material.uniforms.showSunDisc.value = 0.0; // use our custom flare disc instead of the built-in sky disc
 
     // === Direct fragment shader patch (works for WebGL, WebGL2, and WebGPU) ===
     // onBeforeCompile is a WebGL-only hook and may not fire in the TSL pipeline,
     // so we patch the GLSL source string directly before any compilation occurs.
     // Changes:
-    //   1. Clamp HDR sun disc (prevents bloom explosion — sun was ~1M luminance)
+    //   1. Smooth HDR sun disc + glow overlay for a softer physical sun
     //   2. Fill lower hemisphere with a warm ground colour (prevents pitch-black nadir)
+    sky.material.uniforms.uSunColor = { value: new THREE.Vector3(this._p.sunColor.r, this._p.sunColor.g, this._p.sunColor.b) };
+    sky.material.uniforms.uMoonColor = { value: new THREE.Vector3(this._p.moonColor.r, this._p.moonColor.g, this._p.moonColor.b) };
+    sky.material.uniforms.uSunGlowStrength = { value: this._p.sunGlowStrength };
+    sky.material.uniforms.uSunGlowSize = { value: this._p.sunGlowSize };
+    sky.material.uniforms.uSunScale = { value: this._p.sunScale };
+    sky.material.uniforms.uMoonGlowStrength = { value: this._p.moonGlowStrength };
+    sky.material.uniforms.uMoonGlowSize = { value: this._p.moonGlowSize };
+    sky.material.uniforms.uMoonScale = { value: this._p.moonScale };
+
     sky.material.fragmentShader = sky.material.fragmentShader.replace(
       'gl_FragColor = vec4( texColor, 1.0 );',
       /* glsl */`
-        // 1. Clamp HDR sun disc so bloom stays proportionate
-        vec3 finalColor = min(texColor, vec3(4.5));
+        // 1. Smooth HDR compression instead of hard clamp so sky blending stays natural
+        vec3 finalColor = texColor / (1.0 + texColor);
+
+        // 1b. Sun disc + glow overlay
+        float sunCos = dot(direction, normalize(vSunDirection));
+        float sunDisc = smoothstep(0.999956676946448, 0.999956676946448 + 0.00004 * uSunScale, sunCos);
+        float sunGlow = smoothstep(0.999956676946448 - 0.0003 * uSunGlowSize, 0.999956676946448, sunCos) * uSunGlowStrength;
+        float sunCore = sunDisc * clamp(uSunGlowStrength * 0.6 + 0.1, 0.0, 1.0);
+        finalColor += uSunColor * sunCore * vSunE * 400.0;
+        finalColor += uSunColor * sunGlow * 1200.0;
+
+        // 1c. Moon disc + glow overlay
+        float moonCos = dot(direction, normalize(-vSunDirection));
+        float moonVisible = clamp(-vSunDirection.y * 6.0, 0.0, 1.0);
+        float moonDisc = smoothstep(0.9996, 0.9996 + 0.0004 * uMoonScale, moonCos) * moonVisible;
+        float moonGlow = smoothstep(0.9996 - 0.00045 * uMoonGlowSize, 0.9996, moonCos) * moonVisible * uMoonGlowStrength;
+        float moonCore = moonDisc * clamp(uMoonGlowStrength * 0.6 + 0.1, 0.0, 1.0);
+        finalColor += uMoonColor * moonCore * 0.32;
+        finalColor += uMoonColor * moonGlow * 0.18;
 
         // 2. Lower hemisphere fill — blend to warm ground colour below the horizon
         float belowH = max(0.0, -direction.y);
@@ -238,11 +281,10 @@ export class PhysicalSky {
     u['turbidity'].value        = this._p.turbidity;
     u['rayleigh'].value         = this._p.rayleigh;
     u['mieCoefficient'].value   = this._p.mieCoefficient;
-    u['mieDirectionalG'].value  = this._p.mieDirectionalG;
+    u['mieDirectionalG'].value  = Math.min(this._p.mieDirectionalG, 0.85);
     u['sunPosition'].value.copy(this._p.sunDir);
     u['up'].value.set(0, 1, 0);
-    u['showSunDisc'].value = this._p.showSun ? 1 : 0;
-
+    u['showSunDisc'].value = 0.0; // disable built-in physical sky disc, use custom disc/glow instead
     // Sync occluder material sun direction
     if (this._occluderMat) {
       this._occluderMat.uniforms.uSunDir.value.copy(this._p.sunDir);
