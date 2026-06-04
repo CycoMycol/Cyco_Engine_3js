@@ -60,11 +60,15 @@ export class EnvironmentProperties {
 
     const ve = window.__cyco?.viewportEngine;
 
-    // Detect current bg type
-    let initType = ve?._bgType ?? 'solid';
-    if (!ve?._bgType) {
-      if (ve?.skyEnabled) initType = 'sky';
-      else if (ve?.scene?.background instanceof THREE.Texture) initType = 'hdri';
+    // Detect current bg type. If the sky is currently enabled, preserve the
+    // sky mode even if _bgType is not explicitly set to 'sky'.
+    let initType = 'solid';
+    if (ve?.skyEnabled) {
+      initType = 'sky';
+    } else if (ve?._bgType) {
+      initType = ve._bgType;
+    } else if (ve?.scene?.background instanceof THREE.Texture) {
+      initType = 'hdri';
     }
 
     const typeSelect = select({
@@ -531,7 +535,9 @@ export class EnvironmentProperties {
 
     // Sync the initial sky shape selection into the engine state so the
     // sky wireframe helper uses the correct geometry even before sky is enabled.
-    this._fireSkyChange(false);
+    // Preserve the current sky enabled/disabled state instead of always
+    // dispatching enabled=false, which would otherwise disable an active sky.
+    this._fireSkyChange(!!ve?.skyEnabled);
   }
 
   /** Fire cyco-sky-change using current control state. */
