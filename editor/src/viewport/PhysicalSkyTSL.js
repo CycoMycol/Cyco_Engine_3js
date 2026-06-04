@@ -444,7 +444,7 @@ export class PhysicalSkyTSL {
       this._mesh    = null;
       this._mainMat = null;
       if (scene && scene.background === null) {
-        scene.background = new THREE.Color(0x1a1a1a);
+        scene.background = new THREE.Color(0x5d564e);
       }
     }
     if (this._lensflare) {

@@ -289,7 +289,7 @@ export class ViewportEngine {
       // Only fall back to solid colour when the current bg type isn't gradient/hdri
       if (this._bgType !== 'gradient' && this._bgType !== 'hdri') {
         if (!(this.scene.background instanceof THREE.Color)) {
-          this.scene.background = new THREE.Color(0x1a1a1a);
+          this.scene.background = new THREE.Color(0x5d564e);
         }
       }
       return;
@@ -966,7 +966,7 @@ export class ViewportEngine {
 
   _buildScene(w, h) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = new THREE.Color(0x5d564e);
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
 
     // Default camera — Unreal Engine conventions: 1 unit = 1 cm

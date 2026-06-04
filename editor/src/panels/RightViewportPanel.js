@@ -86,7 +86,9 @@ export class RightViewportPanel extends BasePanel {
       this._worldBtn.title     = this._worldSpace ? 'World Space' : 'Local Space';
       this._worldBtn.innerHTML = _toolIcon(this._worldSpace ? 'world' : 'local');
       this._worldBtn.classList.toggle('active', !this._worldSpace);
-      document.dispatchEvent(new CustomEvent('cyco-rvp-world', { detail: this._worldSpace }));
+      const detail = { isWorld: this._worldSpace };
+      document.dispatchEvent(new CustomEvent('cyco-rvp-world', { detail }));
+      document.dispatchEvent(new CustomEvent('cyco-vp-world', { detail }));
     });
     bar.appendChild(this._worldBtn);
 

@@ -85,7 +85,7 @@ export class SceneManager {
   addScene(name = 'New Scene') {
     const id    = `scene_${Date.now()}`;
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x1a1a1a);
+    scene.background = new THREE.Color(0x5d564e);
     this.registerScene(id, scene, { name });
     // Caller (ViewportEngine) must set up IBL for new scene
     window.dispatchEvent(new CustomEvent('cyco-scene-added', { detail: { sceneId: id, name } }));

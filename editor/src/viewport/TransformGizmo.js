@@ -32,10 +32,13 @@ export class TransformGizmo {
 
     /** @type {TransformControls|null} */
     this.controls = null;
+    /** Separate camera copy used for TransformControls raycasting/rendering. */
+    this._controlsCamera = null;
 
     this._snapEnabled = false;
     this._snapValue   = 0.25;
     this._mode        = 'select'; // default: pointer/select, no gizmo shown
+    this._space       = 'world';
 
     /** State snapshot before a drag begins (for TransformCommand undo). */
     this._matrixBefore = null;
@@ -50,10 +53,12 @@ export class TransformGizmo {
     this._onSnap             = this._onSnap.bind(this);
     this._onWorld            = this._onWorld.bind(this);
     this._onGizmoSize        = this._onGizmoSize.bind(this);
+    this._onVpTick           = this._onVpTick.bind(this);
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+    window.addEventListener('cyco-vp-tick',               this._onVpTick);
     window.addEventListener('cyco-select-node',           this._onSelectNode);
     window.addEventListener('cyco-deselect-all',          this._onDeselectAll);
     window.addEventListener('cyco-hierarchy-remove',  (e) => {
@@ -63,10 +68,40 @@ export class TransformGizmo {
     window.addEventListener('cyco-vp-tool',           this._onTool);
     window.addEventListener('cyco-rvp-snap',          this._onSnap);
     window.addEventListener('cyco-rvp-world',         this._onWorld);
+    window.addEventListener('cyco-vp-world',          this._onWorld);
     window.addEventListener('cyco-gizmo-size',        this._onGizmoSize);
   }
 
   // ─── Build ────────────────────────────────────────────────────────────────
+
+  _getControlsCamera(camera) {
+    if (!camera) return null;
+
+    if (!this._controlsCamera || this._controlsCamera.type !== camera.type) {
+      this._controlsCamera = camera.clone();
+    }
+
+    const proxy = this._controlsCamera;
+    proxy.position.copy(camera.position);
+    proxy.quaternion.copy(camera.quaternion);
+    proxy.rotation.copy(camera.rotation);
+    proxy.near = camera.near;
+    proxy.far = camera.far;
+    if (camera.isPerspectiveCamera) {
+      proxy.aspect = camera.aspect;
+    } else if (camera.isOrthographicCamera) {
+      proxy.left   = camera.left;
+      proxy.right  = camera.right;
+      proxy.top    = camera.top;
+      proxy.bottom = camera.bottom;
+    }
+    proxy.zoom = camera.zoom;
+    proxy.projectionMatrix.copy(camera.projectionMatrix);
+    proxy.matrixWorld.copy(camera.matrixWorld);
+    proxy.matrixWorldInverse.copy(camera.matrixWorldInverse);
+    proxy.updateMatrixWorld();
+    return proxy;
+  }
 
   _build(renderer) {
     const camera = this.engine.camera;
@@ -78,11 +113,14 @@ export class TransformGizmo {
       this.controls.dispose();
     }
 
-    this.controls = new TransformControls(camera, renderer.domElement);
+    const controlCamera = this._getControlsCamera(camera);
+    if (!controlCamera) return;
+
+    this.controls = new TransformControls(controlCamera, renderer.domElement);
     // TransformControls only accepts translate/rotate/scale; use translate as the
     // internal default when in select mode (gizmo won't be shown anyway).
     this.controls.setMode(this._mode !== 'select' ? this._mode : 'translate');
-    this.controls.setSpace('world');
+    this.controls.setSpace(this._space);
     this._applySnap();
 
     // CRITICAL — prevents camera orbiting while dragging the gizmo.
@@ -181,11 +219,18 @@ export class TransformGizmo {
   }
 
   _onWorld(event) {
-    this.controls?.setSpace(event.detail.isWorld ? 'world' : 'local');
+    const isWorld = event.detail?.isWorld ?? event.detail ?? false;
+    this._space = isWorld ? 'world' : 'local';
+    this.controls?.setSpace(this._space);
   }
 
   _onGizmoSize(event) {
     if (this.controls) this.controls.size = event.detail.size ?? 1;
+  }
+
+  _onVpTick(event) {
+    if (!this.controls || !this.engine.camera) return;
+    this._getControlsCamera(this.engine.camera);
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
@@ -213,12 +258,14 @@ export class TransformGizmo {
     window.removeEventListener('cyco-vp-ready',              this._onVpReady);
     window.removeEventListener('cyco-renderer-changed',      this._onRendererChanged);
     window.removeEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+    window.removeEventListener('cyco-vp-tick',               this._onVpTick);
     window.removeEventListener('cyco-select-node',           this._onSelectNode);
     window.removeEventListener('cyco-deselect-all',          this._onDeselectAll);
-    window.removeEventListener('cyco-vp-tool',           this._onTool);
-    window.removeEventListener('cyco-rvp-snap',          this._onSnap);
-    window.removeEventListener('cyco-rvp-world',         this._onWorld);
-    window.removeEventListener('cyco-gizmo-size',        this._onGizmoSize);
+    window.removeEventListener('cyco-vp-tool',               this._onTool);
+    window.removeEventListener('cyco-rvp-snap',              this._onSnap);
+    window.removeEventListener('cyco-rvp-world',             this._onWorld);
+    window.removeEventListener('cyco-vp-world',              this._onWorld);
+    window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
 
     if (this.controls) {
       this.engine.scene?.remove(this.controls);
