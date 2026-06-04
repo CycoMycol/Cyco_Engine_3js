@@ -167,6 +167,7 @@ export class PhysicalSky {
     sky.name          = '__cyco_physical_sky';
     sky.renderOrder   = -1;
     sky.raycast       = () => {};
+    sky.frustumCulled = false;
     sky.userData._isHelper = true;
 
     // Disable built-in 2D sky clouds (we use the dedicated VolumetricClouds system)

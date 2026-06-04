@@ -416,6 +416,7 @@ export class PhysicalSkyTSL {
     mesh.renderOrder        = -1000;
     mesh.name               = '__cyco_physical_sky_tsl';
     mesh.raycast            = () => {};
+    mesh.frustumCulled      = false;
     mesh.userData._isHelper = true;
 
     const cam = this._vpe?.camera;

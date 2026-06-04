@@ -595,8 +595,11 @@ export class GradientSky {
         return vec4(col.mul(uExposure), 1.0);
       })();
 
-      const mat = new MeshBasicNodeMaterial({ side: THREE.BackSide, depthTest: false, depthWrite: false });
-      mat.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
+      const mat = new MeshBasicNodeMaterial({
+        side: THREE.BackSide,
+        depthTest: false,
+        depthWrite: false,
+      });
       mat.colorNode = colorNode;
 
       const geo = this._p.shape === 'dome'
@@ -607,6 +610,7 @@ export class GradientSky {
       this._mesh.name = '__cyco_gradient_sky';
       this._mesh.renderOrder = -1;
       this._mesh.raycast = () => {};
+      this._mesh.frustumCulled = false;
       this._mesh.userData._isHelper = true;
       const cam = this._vpe?.camera;
       if (cam) this._mesh.position.copy(cam.position);
@@ -651,13 +655,16 @@ export class GradientSky {
       depthWrite: false,
     });
 
-    this._mesh = new THREE.Mesh(
-      new THREE.SphereGeometry(450000, 32, 16),
-      mat
-    );
+    const skyGeo = this._p.shape === 'cube'
+      ? new THREE.BoxGeometry(1, 1, 1)
+      : new THREE.SphereGeometry(450000, 32, 16);
+
+    this._mesh = new THREE.Mesh(skyGeo, mat);
+    if (this._p.shape === 'cube') this._mesh.scale.setScalar(450000);
     this._mesh.name = '__cyco_gradient_sky';
     this._mesh.renderOrder = -1; // must render before grid/scene objects
     this._mesh.raycast = () => {};
+    this._mesh.frustumCulled = false;
     this._mesh.userData._isHelper = true;
 
     // Store main material reference and create occluder material for god rays
@@ -788,13 +795,10 @@ export class GradientSky {
     })();
 
     const material = new MeshBasicNodeMaterial({
-      side:       THREE.BackSide,
-      depthTest:  false,
-      depthWrite: false,
-    });
-    // Scale vertices to 99% of camera far plane so the huge sphere isn't
-    // frustum-clipped (WebGL did this via gl_Position.z = gl_Position.w).
-    material.positionNode = positionLocal.normalize().mul(cameraFar.mul(0.99));
+        side: THREE.BackSide,
+        depthTest:  false,
+        depthWrite: false,
+      });
     material.colorNode = skyColorNode;
 
     const geo = this._p.shape === 'dome'
@@ -805,6 +809,7 @@ export class GradientSky {
     this._mesh.name = '__cyco_gradient_sky';
     this._mesh.renderOrder = -1;
     this._mesh.raycast = () => {};
+    this._mesh.frustumCulled = false;
     this._mesh.userData._isHelper = true;
 
     const cam = this._vpe?.camera;

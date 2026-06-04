@@ -82,6 +82,7 @@ export class ViewportEngine {
     this._skyShape = 'dome';
     this._skyWireframeVisible = false;
     this._skyWireframeHelper = null;
+    this._envBackgroundEnabled = false;
 
     /** Secondary WebGLRenderer + canvas for the ViewHelper gizmo overlay (WebGPU mode) */
     this._helperOverlayRenderer = null;
@@ -229,6 +230,7 @@ export class ViewportEngine {
    */
   replaceScene(newScene) {
     this.scene = newScene;
+    this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
     this._setupIBL();
   }
 
@@ -279,7 +281,11 @@ export class ViewportEngine {
       this.gradientSky?.setEnabled(false);
       this.physicalSky?.setEnabled(false);
       this.skyEnabled = false;
-      this._destroySkyWireframeHelper();
+      if (this._skyWireframeVisible) {
+        this._rebuildSkyWireframeHelper();
+      } else {
+        this._destroySkyWireframeHelper();
+      }
       // Only fall back to solid colour when the current bg type isn't gradient/hdri
       if (this._bgType !== 'gradient' && this._bgType !== 'hdri') {
         if (!(this.scene.background instanceof THREE.Color)) {
@@ -451,7 +457,7 @@ export class ViewportEngine {
 
     const wire = new THREE.LineSegments(wireGeom, wireMat);
     wire.name = '__cyco_sky_wireframe';
-    wire.renderOrder = source?.renderOrder ?? 9999;
+    wire.renderOrder = (source?.renderOrder ?? 9999) + 1;
     wire.frustumCulled = false;
     wire.userData._isHelper = true;
     if (source) {
@@ -549,8 +555,8 @@ export class ViewportEngine {
       texture.mapping = THREE.EquirectangularReflectionMapping;
       if (this._lastBgTexture) this._lastBgTexture.dispose();
       this._lastBgTexture = texture;
-      // Re-apply background if it was previously enabled
-      if (this.scene.background && this.scene.background !== null && !this.scene.background.isColor) {
+      // Re-apply background if HDRI background is enabled and the user is in HDRI mode.
+      if (this._envBackgroundEnabled && this._bgType === 'hdri') {
         this.scene.background = this._lastBgTexture;
       }
       window.dispatchEvent(new CustomEvent('cyco-env-map-loaded'));
@@ -566,6 +572,7 @@ export class ViewportEngine {
   /** Toggle whether the env map is shown as scene background. */
   _onEnvBgToggle({ detail } = {}) {
     if (!this.scene) return;
+    this._envBackgroundEnabled = !!detail?.enabled;
     const bgTex = this._lastBgTexture ?? this._lastEnvMap ?? null;
     console.log(`[CYCO:ENV] cyco-env-background-toggle  enabled=${detail?.enabled}  hasBgTex=${!!bgTex}`);
     this.scene.background = detail?.enabled ? bgTex : null;
@@ -602,7 +609,11 @@ export class ViewportEngine {
       this._bgGradTex = this._makeGradientTexture(colorStops);
       this.scene.background = this._bgGradTex;
     } else if (type === 'hdri') {
-      this.scene.background = this._lastEnvMap ?? new THREE.Color(0x1a1a1a);
+      if (this._envBackgroundEnabled) {
+        this.scene.background = this._lastBgTexture ?? this._lastEnvMap ?? new THREE.Color(0x1a1a1a);
+      } else {
+        this.scene.background = null;
+      }
       if (detail.hdriRotation !== undefined) {
         const rad = THREE.MathUtils.degToRad(detail.hdriRotation);
         this.scene.backgroundRotation.y = rad;
@@ -706,11 +717,31 @@ export class ViewportEngine {
   }
 
   /** Restore or switch the env map preset. */
-  _onEnvPreset({ detail } = {}) {
+  async _onEnvPreset({ detail } = {}) {
     const preset = detail?.preset;
     console.log(`[CYCO:ENV] cyco-env-preset  preset=${preset}`);
     if (preset === 'room') {
-      this._setupIBL();
+      const renderer = this.rendererManager.renderer;
+      if (!renderer) return;
+      let pmrem = null;
+      try {
+        const PMREMGen = renderer._webglRenderer ? THREE.PMREMGenerator : (await import('three/webgpu')).PMREMGenerator;
+        pmrem = new PMREMGen(renderer._webglRenderer ?? renderer);
+        if (typeof pmrem.compileEquirectangularShader === 'function') {
+          pmrem.compileEquirectangularShader();
+        }
+        const envTexture = pmrem.fromScene(new RoomEnvironment()).texture;
+        this.scene.environment = envTexture;
+        this._lastEnvMap = envTexture;
+        this._lastBgTexture = envTexture;
+        if (this._envBackgroundEnabled && this._bgType === 'hdri') {
+          this.scene.background = envTexture;
+        }
+      } catch (e) {
+        console.warn('[ViewportEngine] Room environment preset failed:', e);
+      } finally {
+        if (pmrem) pmrem.dispose();
+      }
       return;
     }
     // Sky presets — build gradient env map directly without touching the sky render mesh
@@ -936,6 +967,7 @@ export class ViewportEngine {
   _buildScene(w, h) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1a1a);
+    this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
 
     // Default camera — Unreal Engine conventions: 1 unit = 1 cm
     // FOV 90°, near 10 cm, far 1 000 000 cm (10 km) for editor visibility

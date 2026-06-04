@@ -83,8 +83,7 @@ export class EnvironmentProperties {
           if (this._skyEnabledCb) this._skyEnabledCb.checked = true;
           this._fireSkyChange(true);
         } else {
-          // Switching away from sky — disable it
-          if (this._skyEnabledCb) this._skyEnabledCb.checked = false;
+          // Switching away from sky — keep the checkbox state so the user can return
           window.dispatchEvent(new CustomEvent('cyco-sky-change', { detail: { enabled: false } }));
         }
       },
@@ -92,7 +91,10 @@ export class EnvironmentProperties {
     this._typeSelect = typeSelect;
     body.appendChild(row('Type', typeSelect));
 
-    const initShape = ve?.physicalSky?._p?.shape ?? (ve?.rendererManager?.renderer?.isWebGPURenderer ? 'cube' : 'dome');
+    const initShape = (ve?._activeSkyType === 'physical'
+      ? ve?.physicalSky?._p?.shape
+      : ve?.gradientSky?._p?.shape)
+      ?? (ve?.rendererManager?.renderer?.isWebGPURenderer ? 'cube' : 'dome');
     const shapeSelect = select({
       options: [
         ['cube', 'Cube'],
@@ -186,15 +188,9 @@ export class EnvironmentProperties {
       checked: !!ve?.skyEnabled,
       onChange: () => {
         if (enabledCb.checked) {
-          // Switch background type to Sky
+          // Switch background type to Sky when the user explicitly enables the sky.
           if (this._typeSelect) {
             this._typeSelect.value = 'sky';
-            this._typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-          }
-        } else {
-          // Uncheck — if currently on sky, revert to solid
-          if (this._typeSelect?.value === 'sky') {
-            this._typeSelect.value = 'solid';
             this._typeSelect.dispatchEvent(new Event('change', { bubbles: true }));
           }
         }
@@ -532,13 +528,20 @@ export class EnvironmentProperties {
       starBurstCb, starBurstIntSlider,
       anamorphicCb, anamorphicIntSlider,
     };
+
+    // Sync the initial sky shape selection into the engine state so the
+    // sky wireframe helper uses the correct geometry even before sky is enabled.
+    this._fireSkyChange(false);
   }
 
   /** Fire cyco-sky-change using current control state. */
   _fireSkyChange(enabledOverride) {
     const s = this._skyControls;
     if (!s) return;
-    const enabled = (enabledOverride !== undefined) ? !!enabledOverride : s.enabledCb.checked;
+    const isSkyMode = this._typeSelect?.value === 'sky';
+    const enabled = (enabledOverride !== undefined)
+      ? !!enabledOverride
+      : (isSkyMode ? s.enabledCb.checked : false);
     const { colorStops, opacityStops } = s.gradEditor.data;
     const sunColor  = s.sunColorSw.el.style.getPropertyValue('--sw-color')  || '#fff8e7';
     const moonColor = s.moonColorSw.el.style.getPropertyValue('--sw-color') || '#c0d4ff';
@@ -964,7 +967,7 @@ export class EnvironmentProperties {
 
     // Background toggle
     const bgCb = checkbox({
-      checked: !!(window.__cyco?.viewportEngine?.scene?.background instanceof THREE.Texture),
+      checked: !!window.__cyco?.viewportEngine?._envBackgroundEnabled,
       onChange: (v) => {
         window.dispatchEvent(new CustomEvent('cyco-env-background-toggle', { detail: { enabled: v } }));
       },
