@@ -708,10 +708,17 @@ export class EnvironmentProperties {
     body.appendChild(row('Density', densitySlider2.el));
 
     const scaleSlider2 = slider({
-      value: cs2()?._p?.scale ?? 30, min: 5, max: 3000, step: 1,
+      value: cs2()?._p?.scale ?? 30, min: 5, max: 60000, step: 1,
       onChange: (v) => cs2()?.setParam('scale', v),
     });
     body.appendChild(row('Scale', scaleSlider2.el));
+
+    const heightSlider2 = slider({
+      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 60000, step: 1,
+      onChange: (v) => cs2()?.setParam('cloudHeight', v),
+    });
+    const heightRow2 = row('Cloud Height', heightSlider2.el);
+    body.appendChild(heightRow2);
 
     const speedSlider2 = slider({
       value: cs2()?._p?.windSpeed ?? 0.8, min: 0, max: 3, step: 0.05,
@@ -726,14 +733,14 @@ export class EnvironmentProperties {
     body.appendChild(row('Wind Direction', windDirSlider2.el));
 
     const baseSlider2 = slider({
-      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 5000, step: 1,
+      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 60000, step: 1,
       onChange: (v) => cs2()?.setParam('cloudBase', v),
     });
     const baseRow2 = row('Cloud Base', baseSlider2.el);
     body.appendChild(baseRow2);
 
     const topSlider2 = slider({
-      value: cs2()?._p?.cloudTop ?? 350, min: 0, max: 5000, step: 1,
+      value: cs2()?._p?.cloudTop ?? 350, min: 0, max: 60000, step: 1,
       onChange: (v) => cs2()?.setParam('cloudTop', v),
     });
     const topRow2 = row('Cloud Top', topSlider2.el);
@@ -761,6 +768,7 @@ export class EnvironmentProperties {
       const cameraRelative = heightModeSelect2.value === 'camera-relative';
       const baseLabel = baseRow2.querySelector('.ce-prop-row-label');
       const topLabel = topRow2.querySelector('.ce-prop-row-label');
+      const heightLabel = heightRow2.querySelector('.ce-prop-row-label');
       if (baseLabel) {
         baseLabel.textContent = cameraRelative
           ? 'Cloud Base (camera offset)'
@@ -770,6 +778,11 @@ export class EnvironmentProperties {
         topLabel.textContent = cameraRelative
           ? 'Cloud Top (camera offset)'
           : 'Cloud Top (world Y)';
+      }
+      if (heightLabel) {
+        heightLabel.textContent = cameraRelative
+          ? 'Cloud Height (camera offset)'
+          : 'Cloud Height (world Y)';
       }
     };
     _updateCloudHeightLabels();
