@@ -644,6 +644,21 @@ export class EnvironmentProperties {
       onChange: (v) => cs2()?.setAnimated(v),
     });
 
+    const heightModeSelect2 = select({
+      options: [
+        ['camera-relative', 'Camera Relative'],
+        ['world-relative', 'World Relative'],
+      ],
+      value: cs2()?._p?.cameraRelativeHeight ? 'camera-relative' : 'world-relative',
+      onChange: (v) => {
+        const cameraRelative = v === 'camera-relative';
+        cs2()?.setParam('cameraRelativeHeight', cameraRelative);
+        _updateCloudHeightLabels();
+      },
+      title: 'Choose whether cloud height is relative to the camera or fixed in world space.',
+    });
+    this._cloudHeightModeSelect = heightModeSelect2;
+
     const _mkCbLabel2 = (cb, text) => {
       const w = document.createElement('label');
       w.style.cssText = 'display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;white-space:nowrap;';
@@ -659,6 +674,9 @@ export class EnvironmentProperties {
     body.appendChild(row('Clouds', topCtrl2));
 
     body.appendChild(row('Animate', animateCb2));
+
+    const heightModeRow = row('Height Mode', heightModeSelect2);
+    body.appendChild(heightModeRow);
 
     // ── Render Quality dropdown ──────────────────────────────────────────────
     const CLOUD_RENDER_OPTS2 = [
@@ -690,7 +708,7 @@ export class EnvironmentProperties {
     body.appendChild(row('Density', densitySlider2.el));
 
     const scaleSlider2 = slider({
-      value: cs2()?._p?.scale ?? 30, min: 5, max: 150, step: 1,
+      value: cs2()?._p?.scale ?? 30, min: 5, max: 3000, step: 1,
       onChange: (v) => cs2()?.setParam('scale', v),
     });
     body.appendChild(row('Scale', scaleSlider2.el));
@@ -707,17 +725,54 @@ export class EnvironmentProperties {
     });
     body.appendChild(row('Wind Direction', windDirSlider2.el));
 
-    const heightSlider2 = slider({
-      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 1000, step: 1,
-      onChange: (v) => cs2()?.setParam('cloudHeight', v),
+    const baseSlider2 = slider({
+      value: cs2()?._p?.cloudBase ?? 80, min: 0, max: 5000, step: 1,
+      onChange: (v) => cs2()?.setParam('cloudBase', v),
     });
-    body.appendChild(row('Cloud Height', heightSlider2.el));
+    const baseRow2 = row('Cloud Base', baseSlider2.el);
+    body.appendChild(baseRow2);
 
-    const thicknessSlider2 = slider({
-      value: ((cs2()?._p?.cloudTop ?? 350) - (cs2()?._p?.cloudBase ?? 80)), min: 10, max: 500, step: 1,
-      onChange: (v) => cs2()?.setParam('cloudThickness', v),
+    const topSlider2 = slider({
+      value: cs2()?._p?.cloudTop ?? 350, min: 0, max: 5000, step: 1,
+      onChange: (v) => cs2()?.setParam('cloudTop', v),
     });
-    body.appendChild(row('Thickness', thicknessSlider2.el));
+    const topRow2 = row('Cloud Top', topSlider2.el);
+    body.appendChild(topRow2);
+
+    const cloudShapeSelect2 = select({
+      options: [
+        ['cube',  'Cube'],
+        ['dome',  'Dome'],
+        ['plane', 'Plane'],
+      ],
+      value: cs2()?._p?.cloudShape ?? 'cube',
+      onChange: (v) => cs2()?.setParam('cloudShape', v),
+      title: 'Choose between cube, dome, or plane cloud volume shapes.',
+    });
+    body.appendChild(row('Cloud Shape', cloudShapeSelect2));
+
+    const cloudSizeSlider2 = slider({
+      value: cs2()?._p?.cloudVolumeSize ?? 120000, min: 1000, max: 900000, step: 1000,
+      onChange: (v) => cs2()?.setParam('cloudVolumeSize', v),
+    });
+    body.appendChild(row('Cloud Volume Size', cloudSizeSlider2.el));
+
+    const _updateCloudHeightLabels = () => {
+      const cameraRelative = heightModeSelect2.value === 'camera-relative';
+      const baseLabel = baseRow2.querySelector('.ce-prop-row-label');
+      const topLabel = topRow2.querySelector('.ce-prop-row-label');
+      if (baseLabel) {
+        baseLabel.textContent = cameraRelative
+          ? 'Cloud Base (camera offset)'
+          : 'Cloud Base (world Y)';
+      }
+      if (topLabel) {
+        topLabel.textContent = cameraRelative
+          ? 'Cloud Top (camera offset)'
+          : 'Cloud Top (world Y)';
+      }
+    };
+    _updateCloudHeightLabels();
 
     const shadowCb2 = checkbox({
       checked: cs2()?._p?.shadowEnabled ?? true,

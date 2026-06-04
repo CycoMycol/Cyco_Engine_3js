@@ -69,6 +69,9 @@ uniform vec3  uSkyHorizon;
 uniform vec3  uSkyZenith;
 uniform float uCloudBase;
 uniform float uCloudTop;
+uniform float uCloudShape;
+uniform float uCloudVolumeSize;
+uniform vec3  uCloudCenter;
 uniform float uBloomBrightness;
 uniform float uCloudBloomThreshold;
 uniform float uWindAngle;  // radians; 0 = +X, PI/2 = +Z
@@ -111,6 +114,26 @@ float fbm(vec3 p) {
   return val;
 }
 
+float cloudShapeMask(vec3 pos) {
+  float halfSize = max(0.001, uCloudVolumeSize * 0.5);
+  vec3  local    = pos - uCloudCenter;
+
+  if (uCloudShape < 0.5) {
+    return step(max(max(abs(local.x), abs(local.y)), abs(local.z)), halfSize);
+  }
+
+  if (uCloudShape < 1.5) {
+    float centerY = uCloudTop - halfSize;
+    vec3  offset  = vec3(local.x, pos.y - centerY, local.z);
+    return step(length(offset), halfSize) * step(pos.y, uCloudTop);
+  }
+
+  float planeBand = 15.0;
+  return step(abs(local.x), halfSize)
+       * step(abs(local.z), halfSize)
+       * step(abs(pos.y - uCloudTop), planeBand);
+}
+
 // ── Cloud density at world position ──────────────────────────────────────────
 
 float cloudDensity(vec3 p) {
@@ -134,7 +157,7 @@ float cloudDensity(vec3 p) {
   // Fine-scale wisps and eroded edges — evolve at a different rate than base to create visible shape morphing
   float detail = fbm(sp * 2.4 + vec3(4.7 + uTime * uMorphSpeed * 1.5, 9.1, 2.3 - uTime * uMorphSpeed * 1.1)) * 0.28;
   float d = (base + detail) - (1.0 - uCoverage * 0.95);
-  return max(0.0, d) * profile * uDensity * 2.5;
+  return max(0.0, d) * profile * uDensity * 2.5 * cloudShapeMask(p);
 }
 
 // ── Light march (soft sun shadowing) ─────────────────────────────────────────
@@ -369,6 +392,9 @@ export class VolumetricClouds {
       windAngle:           0.0,    // radians; 0=+X(east), PI/2=+Z(south)
       cloudBase:           1500.0,
       cloudTop:            2100.0,
+      cloudShape:          'cube', // 'cube' | 'dome' | 'plane'
+      cloudShapeIndex:     0,
+      cloudVolumeSize:     120000.0,
       skyMode:             true,
       shadowEnabled:       false,
       shadowStrength:      0.5,
@@ -389,6 +415,7 @@ export class VolumetricClouds {
     this._halfResScene      = null;
     this._compositeQuadMesh = null;
     this._impostorPlanes    = null;
+    this._cloudCenter       = new THREE.Vector3();
 
     // Absolute cloud slab Y values used by shaders each frame.
     // For skyMode=true these equal _p.cloudBase/cloudTop (absolute world Y).
@@ -433,6 +460,9 @@ export class VolumetricClouds {
    *   windAngleDeg   — sets windAngle in degrees (0=east, 90=south)
    */
   setParam(key, value) {
+    const prevShape = this._p.cloudShape;
+    const prevVolume = this._p.cloudVolumeSize;
+
     if (key === 'cloudHeight') {
       const thickness = this._p.cloudTop - this._p.cloudBase;
       this._p.cloudBase = value;
@@ -443,9 +473,22 @@ export class VolumetricClouds {
       this._p.windAngle = value * (Math.PI / 180);
     } else if (key === 'morphSpeed') {
       this._p.morphSpeed = Math.max(0, value);
+    } else if (key === 'cloudShape') {
+      this._p.cloudShape = value;
+      this._p.cloudShapeIndex = value === 'dome' ? 1 : value === 'plane' ? 2 : 0;
+    } else if (key === 'cloudVolumeSize') {
+      this._p.cloudVolumeSize = Math.max(100, value);
     } else {
       this._p[key] = value;
     }
+
+    const shapeChanged = this._p.cloudShape !== prevShape;
+    const volumeChanged = this._p.cloudVolumeSize !== prevVolume;
+    if ((shapeChanged || volumeChanged) && this._p.enabled) {
+      this._destroyMesh();
+      this._createMesh();
+    }
+
     this._pushUniforms();
     this._pushShadowUniforms();
   }
@@ -605,9 +648,22 @@ export class VolumetricClouds {
       }
     }
 
-    // ── Standard box cloud mesh follows camera ───────────────────────────────
+    // ── Standard cloud mesh position ───────────────────────────────────────
     if (this._mesh && !this._halfResRT && !this._impostorPlanes?.length && cam) {
-      this._mesh.position.copy(cam.position);
+      const topY = this._p.cameraRelativeHeight
+        ? cam.position.y + this._p.cloudTop
+        : this._p.cloudTop;
+      const size = this._computeCloudMeshSize();
+      let yPos = topY;
+      let centerY = topY;
+
+      if (this._p.cloudShape === 'dome' || this._p.cloudShape === 'cube') {
+        yPos = topY - (size * 0.5);
+        centerY = topY - (size * 0.5);
+      }
+
+      this._cloudCenter.set(cam.position.x, centerY, cam.position.z);
+      this._mesh.position.set(cam.position.x, yPos, cam.position.z);
     }
 
     // ── Compute absolute cloud slab heights ───────────────────────────────────
@@ -685,6 +741,9 @@ export class VolumetricClouds {
         uSkyZenith:           { value: this._p.skyZenith.clone() },
         uCloudBase:           { value: this._p.cloudBase },
         uCloudTop:            { value: this._p.cloudTop },
+        uCloudShape:          { value: this._p.cloudShapeIndex },
+        uCloudVolumeSize:     { value: this._p.cloudVolumeSize },
+        uCloudCenter:         { value: this._cloudCenter.clone() },
         uBloomBrightness:     { value: this._p.bloomBrightness },
         uCloudBloomThreshold: { value: this._p.cloudBloomThreshold },
         uMorphSpeed:          { value: this._p.morphSpeed },
@@ -695,22 +754,24 @@ export class VolumetricClouds {
       side:        THREE.BackSide,
     });
 
-    const geo = new THREE.BoxGeometry(1800, 1800, 1800);
+    const geo = this._getCloudGeometry();
     this._mesh = new THREE.Mesh(geo, mat);
+    if (this._p.cloudShape === 'plane') this._mesh.rotation.x = -Math.PI / 2;
     this._mesh.name          = '__cyco_clouds';
     this._mesh.raycast       = () => {};
     this._mesh.frustumCulled = false;
     this._mesh.renderOrder   = 1;
     scene.add(this._mesh);
+
+    if (this._p.shadowEnabled) {
+      this._createShadowMesh();
+    }
+
   }
 
-  _createShadowMesh() {
+  _createShadowMeshWebGL() {
     const scene = this._vpe?.scene;
     if (!scene) return;
-    if (this._vpe?.rendererManager?.renderer?.isWebGPURenderer) {
-      this._createShadowMeshWebGPU();
-      return;
-    }
     this._destroyShadowMesh();
 
     const mat = new THREE.ShaderMaterial({
@@ -726,6 +787,9 @@ export class VolumetricClouds {
         uSunDir:         { value: this._p.sunDir.clone() },
         uCloudBase:      { value: this._p.cloudBase },
         uCloudTop:       { value: this._p.cloudTop },
+        uCloudShape:     { value: this._p.cloudShapeIndex },
+        uCloudVolumeSize:{ value: this._p.cloudVolumeSize },
+        uCloudCenter:    { value: this._cloudCenter.clone() },
         uShadowStrength: { value: this._p.shadowStrength },
         uMorphSpeed:     { value: this._p.morphSpeed },
       },
@@ -738,7 +802,6 @@ export class VolumetricClouds {
       blendDst:            THREE.ZeroFactor,
     });
 
-    // Large flat plane follows camera XZ to always cover visible ground
     const geo  = new THREE.PlaneGeometry(12000, 12000);
     const mesh = new THREE.Mesh(geo, mat);
     mesh.rotation.x    = -Math.PI / 2;
@@ -803,6 +866,55 @@ export class VolumetricClouds {
     this._shadowMesh = null;
   }
 
+  _getSkyReferenceDiameter() {
+    const sky = this._vpe?._activeSkyType === 'physical'
+      ? this._vpe.physicalSky
+      : this._vpe.gradientSky;
+    const mesh = sky?._mesh;
+    if (!mesh) return 900000;
+
+    const bbox = new THREE.Box3().setFromObject(mesh);
+    const size = bbox.getSize(new THREE.Vector3());
+    return Math.max(size.x, size.y, size.z, 900000);
+  }
+
+  _getSkyReferenceSize() {
+    const sky = this._vpe?._activeSkyType === 'physical'
+      ? this._vpe.physicalSky
+      : this._vpe.gradientSky;
+    const source = sky?._mesh;
+    if (!source) return 450000;
+
+    const bb = new THREE.Box3().setFromObject(source);
+    const size = bb.getSize(new THREE.Vector3());
+    return Math.max(size.x, size.y, size.z, 450000);
+  }
+
+  _computeCloudMeshSize() {
+    const baseSize = Math.max(100, this._p.cloudVolumeSize);
+    const skySize = this._getSkyReferenceSize();
+    const thicknessSize = Math.max(0, this._p.cloudTop - this._p.cloudBase) * 2.0;
+
+    if (!this._p.cameraRelativeHeight) {
+      const maxShapeSize = skySize * 0.95;
+      const desiredSize = Math.max(baseSize, thicknessSize);
+      return Math.min(desiredSize, maxShapeSize);
+    }
+
+    return baseSize;
+  }
+
+  _getCloudGeometry() {
+    const size = this._computeCloudMeshSize();
+    if (this._p.cloudShape === 'dome') {
+      return new THREE.SphereGeometry(size * 0.5, 64, 32, 0, Math.PI * 2, 0, Math.PI * 0.5);
+    }
+    if (this._p.cloudShape === 'plane') {
+      return new THREE.PlaneGeometry(size, size);
+    }
+    return new THREE.BoxGeometry(size, size, size);
+  }
+
   _pushUniforms() {
     if (this._isWebGPU) return;  // reference() nodes auto-read this._p each frame
     if (!this._mesh?.material?.uniforms) return;
@@ -814,6 +926,9 @@ export class VolumetricClouds {
     u.uWindAngle.value           = this._p.windAngle;
     u.uCloudBase.value           = this._p.cloudBase;
     u.uCloudTop.value            = this._p.cloudTop;
+    u.uCloudShape.value          = this._p.cloudShapeIndex;
+    u.uCloudVolumeSize.value     = this._p.cloudVolumeSize;
+    u.uCloudCenter.value.copy(this._cloudCenter);
     u.uBloomBrightness.value     = this._p.bloomBrightness;
     u.uCloudBloomThreshold.value = this._p.cloudBloomThreshold;
     u.uMorphSpeed.value          = this._p.morphSpeed;
@@ -858,6 +973,14 @@ export class VolumetricClouds {
     }
   }
 
+  _createShadowMesh() {
+    if (this._vpe?.rendererManager?.renderer?.isWebGPURenderer) {
+      this._createShadowMeshWebGPU();
+    } else {
+      this._createShadowMeshWebGL();
+    }
+  }
+
   /**
    * Build a TSL NodeMaterial cloud mesh for WebGPU/WebGL2 renderers.
    * @param {THREE.Scene} targetScene  scene to add the mesh to
@@ -874,17 +997,18 @@ export class VolumetricClouds {
 
     try {
       const webgpuMod = await import('three/webgpu');
-      const { MeshBasicNodeMaterial } = webgpuMod;
+      const { MeshBasicNodeMaterial, TSL } = webgpuMod;
+      const tsl = TSL ?? await import('three/tsl');
       const {
         Fn, Loop, Break, If, Discard,
         float, vec3, vec4,
-        positionWorld, cameraPosition, reference,
-        clamp, smoothstep, mix, normalize, dot, length, abs, max, min,
+        positionWorld, cameraPosition, reference, uniform,
+        clamp, smoothstep, step, mix, normalize, dot, length, abs, max, min,
         exp, sin, cos,
         mx_fractal_noise_float,
-      } = webgpuMod.TSL;
+      } = tsl;
 
-      // ── Reference nodes — auto-read from this / this._p every render frame ──
+      // ── Reference / uniform nodes — auto-read from this / this._p every render frame ──
       const rTime       = reference('_tslTime',            'float', this);
       const rCoverage   = reference('coverage',            'float', this._p);
       const rDensity    = reference('density',             'float', this._p);
@@ -896,10 +1020,13 @@ export class VolumetricClouds {
       const rSunColor   = reference('sunColor',            'color', this._p);
       const rSkyHorizon = reference('skyHorizon',          'color', this._p);
       const rSkyZenith  = reference('skyZenith',           'color', this._p);
-      const rCloudBase  = reference('_absCloudBase',        'float', this);
-      const rCloudTop   = reference('_absCloudTop',         'float', this);
-      const rBloomBrt   = reference('bloomBrightness',     'float', this._p);
-      const rBloomThr   = reference('cloudBloomThreshold', 'float', this._p);
+      const rCloudBase      = reference('_absCloudBase',        'float', this);
+      const rCloudTop       = reference('_absCloudTop',         'float', this);
+      const rCloudShape     = reference('cloudShapeIndex',      'float', this._p);
+      const rCloudVolumeSize= reference('cloudVolumeSize',      'float', this._p);
+      const rCloudCenter    = reference('_cloudCenter',        'vec3',  this);
+      const rBloomBrt       = reference('bloomBrightness',      'float', this._p);
+      const rBloomThr       = reference('cloudBloomThreshold',  'float', this._p);
 
       // ── Cloud density: FBM via MaterialX fractal noise ────────────────────
       const cloudDensityFn = Fn(([p]) => {
@@ -931,7 +1058,42 @@ export class VolumetricClouds {
         ).mul(float(0.5)).add(float(0.5)).mul(float(0.28));
 
         const d = base.add(detail).sub(float(1.0).sub(rCoverage.mul(float(0.95))));
-        return max(float(0), d).mul(profile).mul(rDensity).mul(float(2.5));
+        const mask = cloudShapeMaskFn(p);
+        return max(float(0), d).mul(profile).mul(rDensity).mul(float(2.5)).mul(mask);
+      });
+
+      const cloudShapeMaskFn = Fn(([p]) => {
+        const halfSize = rCloudVolumeSize.mul(float(0.5));
+        const local = vec3(
+          p.x.sub(rCloudCenter.x),
+          p.y.sub(rCloudCenter.y),
+          p.z.sub(rCloudCenter.z)
+        );
+
+        const cubeMask = mix(
+          float(0), float(1),
+          max(max(abs(local.x), abs(local.y)), abs(local.z)).lessThanEqual(halfSize)
+        );
+        const domeCenterY = rCloudTop.sub(halfSize);
+        const domeDelta = vec3(local.x, p.y.sub(domeCenterY), local.z);
+        const domeMask = mix(float(0), float(1), length(domeDelta).lessThanEqual(halfSize))
+          .mul(mix(float(0), float(1), p.y.lessThanEqual(rCloudTop)));
+
+        const planeBand = float(15.0);
+        const planeMask = mix(float(0), float(1), abs(local.x).lessThanEqual(halfSize))
+          .mul(mix(float(0), float(1), abs(local.z).lessThanEqual(halfSize)))
+          .mul(mix(float(0), float(1), abs(p.y.sub(rCloudTop)).lessThanEqual(planeBand)));
+
+        const isCube  = mix(float(0), float(1), rCloudShape.lessThanEqual(float(0.5)));
+        const isDome  = mix(
+          float(0), float(1),
+          rCloudShape.greaterThan(float(0.5)).and(rCloudShape.lessThanEqual(float(1.5)))
+        );
+        const isPlane = mix(float(0), float(1), rCloudShape.greaterThan(float(1.5)));
+
+        return cubeMask.mul(isCube)
+          .add(domeMask.mul(isDome))
+          .add(planeMask.mul(isPlane));
       });
 
       // ── Light march: Q.lightSteps samples toward sun ──────────────────────
@@ -988,11 +1150,9 @@ export class VolumetricClouds {
 
           // Box (Chebyshev) distance fade — gives a rectangular cloud boundary
           // instead of the circular/spherical cone the old length() produced.
-          const hDist    = max(abs(pos.x.sub(ro.x)), abs(pos.z.sub(ro.z)));
-          const distFade = float(1.0).sub(smoothstep(float(1800.0), float(2600.0), hDist));
-
+          const shapeMask = cloudShapeMaskFn(pos);
           const d = cloudDensityFn(pos)
-            .mul(elevScale).mul(horizonFade).mul(distFade).toVar();
+            .mul(elevScale).mul(horizonFade).mul(shapeMask).toVar();
 
           If(d.greaterThan(float(0.001)), () => {
             hit.assign(float(1));
@@ -1048,15 +1208,16 @@ export class VolumetricClouds {
         transparent: true,
         depthWrite:  false,
         depthTest:   !!this._p.skyMode,
-        side:        THREE.BackSide,
+        side:        THREE.DoubleSide,
       });
       mat.colorNode = colorNode;
       // Push every cloud fragment to depth 1.0 (far plane) so opaque objects
       // always appear in front when depthTest is enabled (sky-layer mode).
       if (this._p.skyMode) mat.depthNode = float(1.0);
 
-      const geo = new THREE.BoxGeometry(1800, 1800, 1800);
+      const geo = this._getCloudGeometry();
       const mesh = new THREE.Mesh(geo, mat);
+      if (this._p.cloudShape === 'plane') mesh.rotation.x = -Math.PI / 2;
       mesh.name          = '__cyco_clouds';
       mesh.raycast       = () => {};
       mesh.frustumCulled = false;
@@ -1392,14 +1553,15 @@ export class VolumetricClouds {
 
     try {
       const webgpuMod = await import('three/webgpu');
-      const { MeshBasicNodeMaterial } = webgpuMod;
+      const { MeshBasicNodeMaterial, TSL } = webgpuMod;
+      const tsl = TSL ?? await import('three/tsl');
       const {
         Fn, Loop, If, Discard,
         float, vec3, vec4,
-        positionWorld, reference,
+        positionWorld, reference, uniform,
         clamp, smoothstep, max, min, exp, sin, cos,
         mx_fractal_noise_float,
-      } = webgpuMod.TSL;
+      } = tsl;
 
       const rTime       = reference('_tslTime',       'float', this);
       const rCoverage   = reference('coverage',       'float', this._p);
