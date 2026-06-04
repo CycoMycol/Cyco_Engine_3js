@@ -240,10 +240,14 @@ export class PhysicsWorldPanel extends BasePanel {
     // Active plane
     frag.appendChild(this._labelRow('Active Plane'));
     const planeRow = document.createElement('div');
-    planeRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;';
+    planeRow.style.cssText = 'display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;';
+    const planeLabels = {
+      xy: 'XY — side-scroller (Z=0)',
+      xz: 'XZ — top-down (Y=0)',
+    };
     ['xy', 'xz'].forEach(val => {
       const lbl = document.createElement('label');
-      lbl.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-color,#ccc);';
+      lbl.style.cssText = 'display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text-color,#ccc);flex:1;min-width:140px;';
       const radio = document.createElement('input');
       radio.type  = 'radio';
       radio.name  = 'physics-plane';
@@ -251,7 +255,7 @@ export class PhysicsWorldPanel extends BasePanel {
       radio.checked = s.plane2d === val;
       radio.addEventListener('change', () => { if (radio.checked) s.plane2d = val; });
       lbl.appendChild(radio);
-      lbl.appendChild(document.createTextNode(val.toUpperCase()));
+      lbl.appendChild(document.createTextNode(planeLabels[val]));
       planeRow.appendChild(lbl);
     });
     frag.appendChild(planeRow);

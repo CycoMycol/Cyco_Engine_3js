@@ -156,6 +156,7 @@ if (typeof window !== 'undefined') {
     get contactShadows()  { return viewportEngine.contactShadows; },
     get postPipeline()    { return postPipeline; },
     get physicsManager()  { return gameRuntime.physicsManager; },
+    get physicsEditHelper() { return physicsEditHelper; },
   };
 }
 

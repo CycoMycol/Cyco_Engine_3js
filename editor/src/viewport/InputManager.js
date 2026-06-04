@@ -78,12 +78,14 @@ export class InputManager {
     this._onPrefsChg    = this._onPrefsChg.bind(this);
     this._onRuntimeState = this._onRuntimeState.bind(this);
     this._onTick        = this._onTick.bind(this);
+    this._onPhysicsInputChange = this._onPhysicsInputChange.bind(this);
 
     document.addEventListener('keydown',               this._onKeyDown);
     document.addEventListener('keyup',                 this._onKeyUp);
     window.addEventListener('cyco-preferences-change', this._onPrefsChg);
     window.addEventListener('cyco-runtime-state',      this._onRuntimeState);
     window.addEventListener('cyco-vp-tick',            this._onTick);
+    window.addEventListener('cyco-physics-input-change', this._onPhysicsInputChange);
   }
 
   // ─── Keybindings ─────────────────────────────────────────────────────────
@@ -144,6 +146,12 @@ export class InputManager {
       this._bindings = merged;
     } else {
       this._bindings = this._loadBindings();
+    }
+  }
+
+  _onPhysicsInputChange({ detail: { bindings } = {} } = {}) {
+    if (bindings && typeof bindings === 'object') {
+      this._physicsBindings = { ...DEFAULT_PHYSICS_BINDINGS, ...bindings };
     }
   }
 
@@ -367,5 +375,6 @@ export class InputManager {
     window.removeEventListener('cyco-preferences-change', this._onPrefsChg);
     window.removeEventListener('cyco-runtime-state',      this._onRuntimeState);
     window.removeEventListener('cyco-vp-tick',            this._onTick);
+    window.removeEventListener('cyco-physics-input-change', this._onPhysicsInputChange);
   }
 }

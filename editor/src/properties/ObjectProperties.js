@@ -590,9 +590,10 @@ export class ObjectProperties {
         break;
 
       case 'Ragdoll':
+        _field('Preset', _select(['humanoid', 'quadruped'], comp.preset ?? 'humanoid', v => { comp.preset = v; }));
         body.appendChild((() => {
           const p = document.createElement('p');
-          p.textContent = 'Ragdoll builder — Phase 11.';
+          p.textContent = 'Generates a runtime ragdoll from the selected preset when play mode starts.';
           p.style.cssText = 'font-size:11px;color:var(--text-muted,#888);margin:0;';
           return p;
         })());

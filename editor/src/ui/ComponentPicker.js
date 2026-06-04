@@ -47,7 +47,7 @@ export const COMPONENT_TABS = [
         id: 'advanced',
         label: 'Advanced',
         components: [
-          { type: 'Ragdoll', desc: 'Articulated ragdoll (Phase 11)' },
+          { type: 'Ragdoll', desc: 'Articulated ragdoll preset' },
         ],
       },
     ],
@@ -89,7 +89,7 @@ export const COMPONENT_TABS = [
         id: 'advanced',
         label: 'Advanced',
         components: [
-          { type: 'Ragdoll', desc: 'Articulated ragdoll (Phase 11)' },
+          { type: 'Ragdoll', desc: 'Articulated ragdoll preset' },
         ],
       },
     ],
@@ -149,7 +149,7 @@ const DEFAULTS = {
   'Mesh Trigger':          { type: 'Mesh Trigger',         mode: 'convexHull', isTrigger: true },
   'Character Controller':  { type: 'Character Controller', offset: 0.01, maxSlopeAngle: 45, autoStepHeight: 0.25, snapToGround: true, moveSpeed: 5, jumpVelocity: 8, controlled: true },
   'Joint':                 { type: 'Joint',                jointType: 'fixed', targetUuid: '', axis: { x: 0, y: 1, z: 0 }, anchorA: { x: 0, y: 0, z: 0 }, anchorB: { x: 0, y: 0, z: 0 } },
-  'Ragdoll':               { type: 'Ragdoll' },
+  'Ragdoll':               { type: 'Ragdoll', preset: 'humanoid' },
   'Script':                { type: 'Script', path: '' },
   'UI Panel':              { type: 'UI Panel', title: 'Panel', layout: 'vertical' },
   'UI Button':             { type: 'UI Button', label: 'Button', onClick: '' },
