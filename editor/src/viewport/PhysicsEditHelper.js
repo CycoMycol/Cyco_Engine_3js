@@ -137,15 +137,21 @@ export class PhysicsEditHelper {
     const mat   = new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.75 });
 
     let geo = null;
+    const bbox = new THREE.Box3().setFromObject(obj);
+    const extents = new THREE.Vector3();
+    if (!bbox.isEmpty()) bbox.getSize(extents);
 
     switch (comp.type) {
       case 'Box Collider': {
-        // Use component override, or derive from geometry bounding box (object-local)
         let hx = 0.5, hy = 0.5, hz = 0.5;
         if (comp.halfExtents) {
           hx = comp.halfExtents.x ?? 0.5;
           hy = comp.halfExtents.y ?? 0.5;
           hz = comp.halfExtents.z ?? 0.5;
+        } else if (!bbox.isEmpty()) {
+          hx = Math.max(extents.x * 0.5, 0.05);
+          hy = Math.max(extents.y * 0.5, 0.05);
+          hz = Math.max(extents.z * 0.5, 0.05);
         } else if (obj.geometry) {
           obj.geometry.computeBoundingBox();
           const bb = obj.geometry.boundingBox;
@@ -153,8 +159,6 @@ export class PhysicsEditHelper {
             hx = (bb.max.x - bb.min.x) * 0.5;
             hy = (bb.max.y - bb.min.y) * 0.5;
             hz = (bb.max.z - bb.min.z) * 0.5;
-            // Apply object scale so the wireframe matches the visual mesh
-            // (scale is already included in child transform, so local half-extents are correct)
           }
         }
         geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2));
@@ -163,18 +167,28 @@ export class PhysicsEditHelper {
 
       case 'Sphere Collider': {
         let r = comp.radius ?? 0.5;
-        if (comp.radius == null && obj.geometry) {
-          obj.geometry.computeBoundingSphere();
-          r = obj.geometry.boundingSphere?.radius ?? 0.5;
+        if (comp.radius == null) {
+          if (obj.geometry) {
+            obj.geometry.computeBoundingSphere();
+            r = obj.geometry.boundingSphere?.radius ?? r;
+          } else if (!bbox.isEmpty()) {
+            r = Math.max(extents.x, extents.y, extents.z) * 0.5;
+          }
         }
-        geo = new THREE.EdgesGeometry(new THREE.SphereGeometry(r, 12, 8));
+        geo = new THREE.EdgesGeometry(new THREE.SphereGeometry(Math.max(r, 0.05), 12, 8));
         break;
       }
 
       case 'Capsule Collider': {
-        const hh = comp.halfHeight ?? 0.5;
-        const r  = comp.radius     ?? 0.25;
-        geo = new THREE.EdgesGeometry(new THREE.CapsuleGeometry(r, hh * 2, 4, 8));
+        let hh = comp.halfHeight ?? 0.5;
+        let r  = comp.radius     ?? 0.25;
+        if (comp.halfHeight == null || comp.radius == null) {
+          if (!bbox.isEmpty()) {
+            r = comp.radius ?? Math.max(Math.min(extents.x, extents.z) * 0.25, 0.05);
+            hh = comp.halfHeight ?? Math.max(extents.y * 0.5 - r, 0.05);
+          }
+        }
+        geo = new THREE.EdgesGeometry(new THREE.CapsuleGeometry(Math.max(r, 0.05), Math.max(hh * 2, 0.1), 4, 8));
         break;
       }
 

@@ -250,7 +250,12 @@ export class TransformGizmo {
   /** Called by GameRuntime.play() — hides gizmo during play mode. */
   suspend() { this.detach(); if (this._helper) this._helper.visible = false; }
   /** Called by GameRuntime.stop() — restores gizmo after play mode. */
-  restore()  { if (this._helper) this._helper.visible = true; }
+  restore()  {
+    if (this._helper) this._helper.visible = true;
+    if (this.controls && this._mode !== 'select' && this._targetObject) {
+      this.controls.attach(this._targetObject);
+    }
+  }
 
   // ─── Disposal ─────────────────────────────────────────────────────────────
 

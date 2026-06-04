@@ -49,6 +49,9 @@ export class GameRuntime {
     /** @type {string|null} JSON snapshot of scene before play */
     this._snapshot = null;
 
+    /** @type {string[]} Selected object cycoIds preserved across Play/Stop */
+    this._selectedIds = [];
+
     /** @type {HTMLElement|null} */
     this._badge = null;
 
@@ -71,6 +74,9 @@ export class GameRuntime {
     // 1. Serialise scene as restore point
     const sceneJson = this.sceneManager.serializeActiveScene();
     this._snapshot  = sceneJson ? JSON.stringify(sceneJson) : null;
+    this._selectedIds = [...this.selectionManager.selected]
+      .map(obj => obj?.userData?.cycoId)
+      .filter(Boolean);
 
     // 2. Lock hierarchy
     window.dispatchEvent(new CustomEvent('cyco-hierarchy-lock', { detail: { locked: true } }));
@@ -119,6 +125,7 @@ export class GameRuntime {
             dirty: false,
           }
         );
+        window.dispatchEvent(new CustomEvent('cyco-scene-switch'));
       } catch (e) {
         console.error('[GameRuntime] Scene restore failed:', e);
       }
@@ -131,7 +138,10 @@ export class GameRuntime {
     // 3. Restore gizmo
     this.transformGizmo.restore();
 
-    // 4. Resume selection
+    // 4. Rebuild selection after scene restore
+    this.selectionManager.clearSelection();
+    this._restoreSelectionFromIds(this._selectedIds);
+    this._selectedIds = [];
     this.selectionManager.resume();
 
     // 5. Remove PLAYING badge
@@ -147,6 +157,19 @@ export class GameRuntime {
   }
 
   // ─── PLAYING badge ────────────────────────────────────────────────────────
+
+  _restoreSelectionFromIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    const scene = this.sceneManager.getActiveScene?.();
+    if (!scene) return;
+
+    const idSet = new Set(ids);
+    scene.traverse((obj) => {
+      if (idSet.has(obj.userData?.cycoId)) {
+        this.selectionManager.selectObject(obj);
+      }
+    });
+  }
 
   _showBadge() {
     if (this._badge) return;

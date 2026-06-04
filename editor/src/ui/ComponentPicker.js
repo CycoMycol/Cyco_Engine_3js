@@ -1,10 +1,12 @@
-﻿/**
+﻿import * as THREE from 'three';
+
+/**
  * ComponentPicker.js — Dockable component picker panel helper.
  * Opened by the "Add Component" button in ObjectProperties.
  *
  * Usage:
  *   ComponentPicker.show(anchorElement, (type) => { ... });
- *   ComponentPicker.defaultParams(type) → {type, ...defaults}
+ *   ComponentPicker.defaultParams(type, object) → {type, ...defaults}
  */
 
 export const COMPONENT_TABS = [
@@ -274,12 +276,51 @@ export const ComponentPicker = {
 
   /**
    * Return a fresh default-params object for the given component type.
+   * Optionally derive collider size from the target object.
    * @param {string} type
+   * @param {import('three').Object3D} [object]
    * @returns {object}
    */
-  defaultParams(type) {
+  defaultParams(type, object) {
     const tmpl = DEFAULTS[type];
     if (!tmpl) return { type };
-    return JSON.parse(JSON.stringify(tmpl)); // deep clone
+    const result = JSON.parse(JSON.stringify(tmpl)); // deep clone
+
+    if (!object || !['Box Collider', 'Sphere Collider', 'Capsule Collider', 'Mesh Collider',
+      'Box Trigger', 'Sphere Trigger', 'Capsule Trigger', 'Mesh Trigger'].includes(type)) {
+      return result;
+    }
+
+    const bbox = new THREE.Box3().setFromObject(object);
+    if (!bbox.isEmpty()) {
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+      const maxSize = Math.max(size.x, size.y, size.z, 0.01);
+      switch (type) {
+        case 'Box Collider':
+        case 'Box Trigger':
+          result.halfExtents = {
+            x: Math.max(size.x * 0.5, 0.05),
+            y: Math.max(size.y * 0.5, 0.05),
+            z: Math.max(size.z * 0.5, 0.05),
+          };
+          break;
+        case 'Sphere Collider':
+        case 'Sphere Trigger':
+          result.radius = Math.max(maxSize * 0.5, 0.05);
+          break;
+        case 'Capsule Collider':
+        case 'Capsule Trigger': {
+          const radius = Math.max(Math.min(size.x, size.z) * 0.25, 0.05);
+          result.radius = radius;
+          result.halfHeight = Math.max(size.y * 0.5 - radius, 0.05);
+          break;
+        }
+        default:
+          break;
+      }
+    }
+
+    return result;
   },
 };

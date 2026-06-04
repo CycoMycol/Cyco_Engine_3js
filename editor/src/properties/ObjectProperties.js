@@ -294,7 +294,7 @@ export class ObjectProperties {
           console.warn(`[ObjectProperties] Only one "${type}" per object.`);
           return;
         }
-        const comp = ComponentPicker.defaultParams(type);
+        const comp = ComponentPicker.defaultParams(type, obj);
         components.push(comp);
         // Rebuild the panel to show new component
         this._el.innerHTML = '';

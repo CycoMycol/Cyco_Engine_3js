@@ -86,7 +86,10 @@ export class SelectionManager {
     this._setHoveredObject(null); // also clear hover outline
     window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
   }
-
+  selectObject(object) {
+    if (!object || this.selected.has(object)) return;
+    this._selectObject(object);
+  }
   // ─── Initialisation ───────────────────────────────────────────────────────
 
   _onVpReady(event) {
