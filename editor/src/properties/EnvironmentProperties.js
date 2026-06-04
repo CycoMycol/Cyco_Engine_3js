@@ -95,9 +95,10 @@ export class EnvironmentProperties {
     this._typeSelect = typeSelect;
     body.appendChild(row('Type', typeSelect));
 
-    const initShape = (ve?._activeSkyType === 'physical'
-      ? ve?.physicalSky?._p?.shape
-      : ve?.gradientSky?._p?.shape)
+    const initShape = ve?._skyShape
+      ?? (ve?._activeSkyType === 'physical'
+        ? ve?.physicalSky?._p?.shape
+        : ve?.gradientSky?._p?.shape)
       ?? (ve?.rendererManager?.renderer?.isWebGPURenderer ? 'cube' : 'dome');
     const shapeSelect = select({
       options: [
