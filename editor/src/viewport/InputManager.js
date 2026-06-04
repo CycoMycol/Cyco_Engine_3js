@@ -173,6 +173,11 @@ export class InputManager {
     if (this._keysDown.has(pb.moveLeft))     dx -= 1;
     if (this._keysDown.has(pb.moveRight))    dx += 1;
     if (dx !== 0 || dz !== 0) {
+      const len = Math.hypot(dx, dz);
+      if (len > 1) {
+        dx /= len;
+        dz /= len;
+      }
       window.dispatchEvent(new CustomEvent('cyco-input-move', { detail: { x: dx, z: dz } }));
     }
   }

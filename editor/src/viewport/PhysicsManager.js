@@ -54,13 +54,19 @@ export class PhysicsManager {
     this._handleToUuid       = new Map(); // collider handle → uuid
     this._prevTriggerPairs   = new Set();
     this._characterControllers = new Map();
-    this._debugEnabled       = false;
-    this._debugMesh          = null;
-    this._debugScene         = null;
+    this._characterStates      = new Map();
+    this._debugEnabled         = false;
+    this._debugMesh            = null;
+    this._debugScene           = null;
+    this._scene                = null;
+    this._gravity              = null;
 
-    this._onTick      = this._onTick.bind(this);
-    this._onInputMove = this._onInputMove.bind(this);
-    this._onInputJump = this._onInputJump.bind(this);
+    this._onTick           = this._onTick.bind(this);
+    this._onInputMove      = this._onInputMove.bind(this);
+    this._onInputJump      = this._onInputJump.bind(this);
+    this._onRaycastRequest = this._onRaycastRequest.bind(this);
+    this._onDebugToggle    = this._onDebugToggle.bind(this);
+    window.addEventListener('cyco-physics-debug-toggle', this._onDebugToggle);
   }
 
   // ─── Public API ──────────────────────────────────────────────────────────
@@ -99,12 +105,16 @@ export class PhysicsManager {
     }
 
     this._RAPIER = RAPIER;
+    this._scene  = scene;
 
     try {
       const g = mode === '2d'
         ? new RAPIER.Vector2(gravity?.x ?? 0, gravity?.y ?? -9.81)
         : new RAPIER.Vector3(gravity?.x ?? 0, gravity?.y ?? -9.81, gravity?.z ?? 0);
       this._world = new RAPIER.World(g);
+      this._gravity = mode === '2d'
+        ? { x: gravity?.x ?? 0, y: gravity?.y ?? -9.81 }
+        : { x: gravity?.x ?? 0, y: gravity?.y ?? -9.81, z: gravity?.z ?? 0 };
     } catch (e) {
       this._reportError('Failed to create Rapier world.', e);
       return;
@@ -115,9 +125,10 @@ export class PhysicsManager {
 
     if (this._debugEnabled) this._createDebugRenderer(scene);
 
-    window.addEventListener('cyco-vp-tick',    this._onTick);
-    window.addEventListener('cyco-input-move', this._onInputMove);
-    window.addEventListener('cyco-input-jump', this._onInputJump);
+    window.addEventListener('cyco-vp-tick',         this._onTick);
+    window.addEventListener('cyco-input-move',      this._onInputMove);
+    window.addEventListener('cyco-input-jump',      this._onInputJump);
+    window.addEventListener('cyco-physics-raycast', this._onRaycastRequest);
 
     console.log('[PhysicsManager] Initialised in', mode, 'mode.');
   }
@@ -127,6 +138,8 @@ export class PhysicsManager {
     window.removeEventListener('cyco-vp-tick',    this._onTick);
     window.removeEventListener('cyco-input-move', this._onInputMove);
     window.removeEventListener('cyco-input-jump', this._onInputJump);
+    window.removeEventListener('cyco-physics-raycast', this._onRaycastRequest);
+    window.removeEventListener('cyco-physics-debug-toggle', this._onDebugToggle);
 
     if (this._world) {
       for (const cc of this._characterControllers.values()) {
@@ -134,6 +147,7 @@ export class PhysicsManager {
       }
     }
     this._characterControllers.clear();
+    this._characterStates.clear();
 
     if (this._debugMesh && this._debugScene) {
       this._debugScene.remove(this._debugMesh);
@@ -142,6 +156,8 @@ export class PhysicsManager {
       this._debugMesh  = null;
       this._debugScene = null;
     }
+
+    this._scene = null;
 
     if (this._world) {
       try { this._world.free(); } catch { /* ignore */ }
@@ -161,7 +177,27 @@ export class PhysicsManager {
   }
 
   /** @param {boolean} enabled */
-  setDebugEnabled(enabled) { this._debugEnabled = enabled; }
+  setDebugEnabled(enabled) {
+    this._debugEnabled = !!enabled;
+    if (!this._world) return;
+    if (this._debugEnabled && !this._debugMesh && this._scene) {
+      this._createDebugRenderer(this._scene);
+    }
+    if (!this._debugEnabled && this._debugMesh) {
+      if (this._debugScene) {
+        this._debugScene.remove(this._debugMesh);
+      }
+      this._debugMesh.geometry.dispose();
+      this._debugMesh.material.dispose();
+      this._debugMesh  = null;
+      this._debugScene = null;
+    }
+  }
+
+  _onDebugToggle(e) {
+    const enabled = e?.detail?.enabled ?? !this._debugEnabled;
+    this.setDebugEnabled(enabled);
+  }
 
   /**
    * Cast a ray into the live physics world.
@@ -196,6 +232,7 @@ export class PhysicsManager {
     this._accumulator += e.detail?.delta ?? 0;
     let steps = 0;
     while (this._accumulator >= FIXED_DT && steps < MAX_SUBSTEPS) {
+      this._updateCharacterControllers(FIXED_DT);
       this._world.timestep = FIXED_DT;
       this._world.step();
       this._accumulator -= FIXED_DT;
@@ -220,7 +257,16 @@ export class PhysicsManager {
       if (!Array.isArray(comps) || comps.length === 0) return;
 
       const rbComp = comps.find(c => c.type === 'Rigid Body');
-      if (!rbComp) return;
+      const ccComp = comps.find(c => c.type === 'Character Controller');
+      if (!rbComp && !ccComp) return;
+
+      let bodyType = rbComp?.bodyType ?? (ccComp ? 'kinematic' : 'static');
+      if (ccComp && bodyType !== 'kinematic') {
+        console.warn(
+          `[PhysicsManager] Character Controller on "${obj.name || obj.uuid}" requires a kinematic body; forcing kinematic.`
+        );
+        bodyType = 'kinematic';
+      }
 
       // Non-uniform scale warning
       obj.getWorldScale(_tmpScale);
@@ -236,7 +282,6 @@ export class PhysicsManager {
       obj.getWorldPosition(_tmpPos);
       obj.getWorldQuaternion(_tmpQuat);
 
-      const bodyType = rbComp.bodyType ?? 'dynamic';
       let bodyDesc;
       if (bodyType === 'static') {
         bodyDesc = R.RigidBodyDesc.fixed();
@@ -276,8 +321,15 @@ export class PhysicsManager {
         }
       }
 
-      if (comps.find(c => c.type === 'Character Controller')) {
-        this._createCharacterController(obj, comps.find(c => c.type === 'Character Controller'));
+      if (ccComp) {
+        this._createCharacterController(obj, ccComp);
+        this._characterStates.set(obj.uuid, {
+          desiredDir:    { x: 0, z: 0 },
+          verticalVelocity: 0,
+          jumpRequested: false,
+          grounded:      true,
+          config:        ccComp,
+        });
       }
     });
   }
@@ -286,10 +338,12 @@ export class PhysicsManager {
     if (!this._world || !this._RAPIER) return null;
     const R = this._RAPIER;
     let desc = null;
+    const isTrigger = comp.isTrigger || String(comp.type).endsWith('Trigger');
 
     try {
       switch (comp.type) {
-        case 'Box Collider': {
+        case 'Box Collider':
+        case 'Box Trigger': {
           let hx = comp.halfExtents?.x ?? 0.5;
           let hy = comp.halfExtents?.y ?? 0.5;
           let hz = comp.halfExtents?.z ?? 0.5;
@@ -309,7 +363,8 @@ export class PhysicsManager {
             : R.ColliderDesc.cuboid(hx, hy, hz);
           break;
         }
-        case 'Sphere Collider': {
+        case 'Sphere Collider':
+        case 'Sphere Trigger': {
           let r = comp.radius ?? 0.5;
           if (obj.geometry && comp.radius == null) {
             obj.geometry.computeBoundingSphere();
@@ -323,11 +378,13 @@ export class PhysicsManager {
           desc = R.ColliderDesc.ball(r);
           break;
         }
-        case 'Capsule Collider': {
+        case 'Capsule Collider':
+        case 'Capsule Trigger': {
           desc = R.ColliderDesc.capsule(comp.halfHeight ?? 0.5, comp.radius ?? 0.25);
           break;
         }
-        case 'Mesh Collider': {
+        case 'Mesh Collider':
+        case 'Mesh Trigger': {
           if (this._mode === '2d') { console.warn('[PhysicsManager] Mesh Collider unsupported in 2D.'); return null; }
           if (!obj.geometry) { console.warn('[PhysicsManager] Mesh Collider: no geometry on', obj.name || obj.uuid); return null; }
           const verts = new Float32Array(obj.geometry.attributes.position.array);
@@ -355,7 +412,7 @@ export class PhysicsManager {
 
     if (!desc) return null;
 
-    if (comp.isTrigger)                        desc.setSensor(true);
+    if (isTrigger)                             desc.setSensor(true);
     if (typeof comp.restitution === 'number')  desc.setRestitution(comp.restitution);
     if (typeof comp.friction    === 'number')  desc.setFriction(comp.friction);
     if (typeof comp.density     === 'number')  desc.setDensity(comp.density);
@@ -383,12 +440,18 @@ export class PhysicsManager {
         const bodyA = this._bodyMap.get(obj.uuid);
         const bodyB = this._bodyMap.get(comp.targetUuid);
         if (!bodyA || !bodyB) { console.warn('[PhysicsManager] Joint: body not found for', comp.targetUuid); continue; }
-        const a1 = this._mode === '2d' ? zero2 : zero3;
-        const a2 = this._mode === '2d' ? zero2 : zero3;
+        const a1 = this._mode === '2d'
+          ? { x: comp.anchorA?.x ?? 0, y: comp.anchorA?.y ?? 0 }
+          : { x: comp.anchorA?.x ?? 0, y: comp.anchorA?.y ?? 0, z: comp.anchorA?.z ?? 0 };
+        const a2 = this._mode === '2d'
+          ? { x: comp.anchorB?.x ?? 0, y: comp.anchorB?.y ?? 0 }
+          : { x: comp.anchorB?.x ?? 0, y: comp.anchorB?.y ?? 0, z: comp.anchorB?.z ?? 0 };
         try {
           let jd;
           switch (comp.jointType ?? 'fixed') {
-            case 'fixed':    jd = R.JointData.fixed(a1, identQ, a2, identQ); break;
+            case 'fixed':
+              jd = R.JointData.fixed(a1, identQ, a2, identQ);
+              break;
             case 'revolute':
               jd = this._mode === '2d'
                 ? R.JointData.revolute(a1, a2)
@@ -433,29 +496,46 @@ export class PhysicsManager {
       cc.computeColliderMovement(cols[0], desiredMovement);
       const mv = cc.computedMovement();
       const t  = body.translation();
-      body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y, z: (t.z ?? 0) + (mv.z ?? 0) });
+      if (this._mode === '2d') {
+        body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y });
+      } else {
+        body.setNextKinematicTranslation({ x: t.x + mv.x, y: t.y + mv.y, z: t.z + mv.z });
+      }
+      return mv;
     } catch (e) {
       console.warn('[PhysicsManager] moveCharacter error:', e);
+      return null;
     }
   }
 
   _onInputMove(e) {
-    if (!this._characterControllers.size) return;
     const { x = 0, z = 0 } = e.detail ?? {};
-    const speed = 5;
-    for (const [uuid] of this._characterControllers) {
-      this.moveCharacter(uuid, this._mode === '2d'
-        ? { x: x * speed * FIXED_DT, y: 0 }
-        : { x: x * speed * FIXED_DT, y: 0, z: z * speed * FIXED_DT });
+    const len = Math.hypot(x, z);
+    const dir = len > 1 ? { x: x / len, z: z / len } : { x, z };
+    for (const [uuid, state] of this._characterStates) {
+      if (state.config?.controlled === false) continue;
+      state.desiredDir = dir;
     }
   }
 
   _onInputJump() {
-    const impulse = this._mode === '2d' ? { x: 0, y: 8 } : { x: 0, y: 8, z: 0 };
-    for (const [uuid] of this._characterControllers) {
-      const body = this._bodyMap.get(uuid);
-      if (body) try { body.applyImpulse(impulse, true); } catch { /* ignore */ }
+    for (const [uuid, state] of this._characterStates) {
+      if (state.config?.controlled === false) continue;
+      state.jumpRequested = true;
     }
+  }
+
+  _onRaycastRequest(e) {
+    const detail = e.detail ?? {};
+    const origin = detail.origin;
+    const direction = detail.direction;
+    const maxToi = typeof detail.maxToi === 'number' ? detail.maxToi : 100;
+    if (!origin || !direction) {
+      console.warn('[PhysicsManager] cyco-physics-raycast missing origin/direction.');
+      return;
+    }
+    const result = this.raycast(origin, direction, maxToi);
+    window.dispatchEvent(new CustomEvent('cyco-physics-raycast-result', { detail: { ...result, requestId: detail.requestId ?? null } }));
   }
 
   // ─── Transform Sync ───────────────────────────────────────────────────────
@@ -484,6 +564,58 @@ export class PhysicsManager {
   }
 
   // ─── Trigger / Collision Events ───────────────────────────────────────────
+
+  _updateCharacterControllers(dt) {
+    if (!this._world) return;
+    for (const [uuid, state] of this._characterStates) {
+      if (state.config?.controlled === false) continue;
+      const cc   = this._characterControllers.get(uuid);
+      const body = this._bodyMap.get(uuid);
+      const cols = this._colliderMap.get(uuid);
+      if (!cc || !body || !cols?.length) continue;
+
+      const cfg         = state.config;
+      const speed       = typeof cfg.moveSpeed === 'number' ? cfg.moveSpeed : 5;
+      const jumpVel     = typeof cfg.jumpVelocity === 'number' ? cfg.jumpVelocity : 8;
+      const dir         = { x: state.desiredDir.x ?? 0, z: state.desiredDir.z ?? 0 };
+      const len         = Math.hypot(dir.x, dir.z);
+      if (len > 1) {
+        dir.x /= len;
+        dir.z /= len;
+      }
+
+      let movement;
+      if (this._mode === '2d') {
+        movement = {
+          x: dir.x * speed * dt,
+          y: dir.z * speed * dt,
+        };
+      } else {
+        if (state.jumpRequested && state.grounded) {
+          state.verticalVelocity = jumpVel;
+          state.jumpRequested  = false;
+          state.grounded       = false;
+        }
+        const gravityY = typeof this._gravity?.y === 'number' ? this._gravity.y : -9.81;
+        state.verticalVelocity += gravityY * dt;
+        movement = {
+          x: dir.x * speed * dt,
+          y: state.verticalVelocity * dt,
+          z: dir.z * speed * dt,
+        };
+      }
+
+      const mv = this.moveCharacter(uuid, movement);
+      if (!mv) continue;
+      if (this._mode === '3d') {
+        const onGround = Math.abs(mv.y) < 1e-4 && state.verticalVelocity <= 0;
+        if (onGround) state.verticalVelocity = 0;
+        state.grounded = onGround;
+      } else {
+        state.grounded = true;
+      }
+    }
+  }
 
   _checkTriggers() {
     if (!this._world) return;

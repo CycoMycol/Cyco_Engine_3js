@@ -1,5 +1,5 @@
-/**
- * ComponentPicker.js — Floating searchable component picker.
+﻿/**
+ * ComponentPicker.js — Dockable component picker panel helper.
  * Opened by the "Add Component" button in ObjectProperties.
  *
  * Usage:
@@ -7,169 +7,269 @@
  *   ComponentPicker.defaultParams(type) → {type, ...defaults}
  */
 
-const COMPONENT_GROUPS = [
+export const COMPONENT_TABS = [
   {
-    label: 'Physics',
-    components: [
-      { type: 'Rigid Body',           desc: 'Simulated physics body' },
-      { type: 'Box Collider',         desc: 'Axis-aligned box shape' },
-      { type: 'Sphere Collider',      desc: 'Sphere collision shape' },
-      { type: 'Capsule Collider',     desc: 'Capsule collision shape' },
-      { type: 'Mesh Collider',        desc: 'ConvexHull or TriMesh shape' },
-      { type: 'Character Controller', desc: 'Physics character movement' },
-      { type: 'Joint',                desc: 'Connect two bodies' },
-      { type: 'Ragdoll',              desc: 'Articulated ragdoll (Phase 11)' },
+    id: '2d',
+    label: '2D',
+    groups: [
+      {
+        id: 'physics',
+        label: 'Physics',
+        components: [
+          { type: 'Rigid Body',           desc: 'Simulated physics body' },
+          { type: 'Character Controller', desc: 'Physics character movement' },
+          { type: 'Joint',                desc: 'Connect two bodies' },
+        ],
+      },
+      {
+        id: 'colliders',
+        label: 'Colliders',
+        components: [
+          { type: 'Box Collider',     desc: 'Axis-aligned box shape' },
+          { type: 'Sphere Collider',  desc: 'Sphere collision shape' },
+          { type: 'Capsule Collider', desc: 'Capsule collision shape' },
+          { type: 'Mesh Collider',    desc: 'ConvexHull or TriMesh shape' },
+        ],
+      },
+      {
+        id: 'triggers',
+        label: 'Triggers',
+        components: [
+          { type: 'Box Trigger',     desc: 'Box-shaped sensor volume' },
+          { type: 'Sphere Trigger',  desc: 'Sphere-shaped sensor volume' },
+          { type: 'Capsule Trigger', desc: 'Capsule-shaped sensor volume' },
+          { type: 'Mesh Trigger',    desc: 'Mesh-based sensor volume' },
+        ],
+      },
+      {
+        id: 'advanced',
+        label: 'Advanced',
+        components: [
+          { type: 'Ragdoll', desc: 'Articulated ragdoll (Phase 11)' },
+        ],
+      },
     ],
   },
   {
-    label: 'Scripting',
-    components: [
-      { type: 'Script', desc: 'Custom game script (stub)' },
+    id: '3d',
+    label: '3D',
+    groups: [
+      {
+        id: 'physics',
+        label: 'Physics',
+        components: [
+          { type: 'Rigid Body',           desc: 'Simulated physics body' },
+          { type: 'Character Controller', desc: 'Physics character movement' },
+          { type: 'Joint',                desc: 'Connect two bodies' },
+        ],
+      },
+      {
+        id: 'colliders',
+        label: 'Colliders',
+        components: [
+          { type: 'Box Collider',     desc: 'Axis-aligned box shape' },
+          { type: 'Sphere Collider',  desc: 'Sphere collision shape' },
+          { type: 'Capsule Collider', desc: 'Capsule collision shape' },
+          { type: 'Mesh Collider',    desc: 'ConvexHull or TriMesh shape' },
+        ],
+      },
+      {
+        id: 'triggers',
+        label: 'Triggers',
+        components: [
+          { type: 'Box Trigger',     desc: 'Box-shaped sensor volume' },
+          { type: 'Sphere Trigger',  desc: 'Sphere-shaped sensor volume' },
+          { type: 'Capsule Trigger', desc: 'Capsule-shaped sensor volume' },
+          { type: 'Mesh Trigger',    desc: 'Mesh-based sensor volume' },
+        ],
+      },
+      {
+        id: 'advanced',
+        label: 'Advanced',
+        components: [
+          { type: 'Ragdoll', desc: 'Articulated ragdoll (Phase 11)' },
+        ],
+      },
     ],
   },
   {
+    id: 'script',
+    label: 'Script',
+    groups: [
+      {
+        id: 'scripting',
+        label: 'Scripting',
+        components: [
+          { type: 'Script', desc: 'Custom game script (stub)' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'ui',
+    label: 'UI',
+    groups: [
+      {
+        id: 'ui',
+        label: 'UI',
+        components: [
+          { type: 'UI Panel', desc: 'User interface container stub' },
+          { type: 'UI Button', desc: 'Interactive button stub' },
+          { type: 'UI Text', desc: 'Display text label stub' },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'audio',
     label: 'Audio',
-    components: [
-      { type: 'Audio Source', desc: 'Spatial audio emitter (stub)' },
+    groups: [
+      {
+        id: 'audio',
+        label: 'Audio',
+        components: [
+          { type: 'Audio Source', desc: 'Spatial audio emitter (stub)' },
+        ],
+      },
     ],
   },
 ];
 
-/** Default parameters for each component type */
 const DEFAULTS = {
   'Rigid Body':            { type: 'Rigid Body',           bodyType: 'dynamic', mass: 1, linearDamping: 0, angularDamping: 0, lockRotation: false },
   'Box Collider':          { type: 'Box Collider',         halfExtents: { x: 0.5, y: 0.5, z: 0.5 }, isTrigger: false, friction: 0.5, restitution: 0 },
   'Sphere Collider':       { type: 'Sphere Collider',      radius: 0.5, isTrigger: false, friction: 0.5, restitution: 0 },
   'Capsule Collider':      { type: 'Capsule Collider',     radius: 0.25, halfHeight: 0.5, isTrigger: false },
   'Mesh Collider':         { type: 'Mesh Collider',        mode: 'convexHull', isTrigger: false },
-  'Character Controller':  { type: 'Character Controller', offset: 0.01, maxSlopeAngle: 45, autoStepHeight: 0.25, snapToGround: true },
-  'Joint':                 { type: 'Joint',                jointType: 'fixed', targetUuid: '' },
+  'Box Trigger':           { type: 'Box Trigger',          halfExtents: { x: 0.5, y: 0.5, z: 0.5 }, isTrigger: true },
+  'Sphere Trigger':        { type: 'Sphere Trigger',       radius: 0.5, isTrigger: true },
+  'Capsule Trigger':       { type: 'Capsule Trigger',      radius: 0.25, halfHeight: 0.5, isTrigger: true },
+  'Mesh Trigger':          { type: 'Mesh Trigger',         mode: 'convexHull', isTrigger: true },
+  'Character Controller':  { type: 'Character Controller', offset: 0.01, maxSlopeAngle: 45, autoStepHeight: 0.25, snapToGround: true, moveSpeed: 5, jumpVelocity: 8, controlled: true },
+  'Joint':                 { type: 'Joint',                jointType: 'fixed', targetUuid: '', axis: { x: 0, y: 1, z: 0 }, anchorA: { x: 0, y: 0, z: 0 }, anchorB: { x: 0, y: 0, z: 0 } },
   'Ragdoll':               { type: 'Ragdoll' },
   'Script':                { type: 'Script', path: '' },
+  'UI Panel':              { type: 'UI Panel', title: 'Panel', layout: 'vertical' },
+  'UI Button':             { type: 'UI Button', label: 'Button', onClick: '' },
+  'UI Text':               { type: 'UI Text', text: 'Label', fontSize: 14 },
   'Audio Source':          { type: 'Audio Source', src: '', loop: false, autoPlay: false, volume: 1 },
 };
 
-let _picker = null;
+let _pendingSelect = null;
+let _outsideClickHandler = null;
+let _anchorElement = null;
 
-function _removePicker() {
-  if (_picker) {
-    _picker.remove();
-    _picker = null;
-  }
+function _removeOutsideClickListener() {
+  if (!_outsideClickHandler) return;
+  document.removeEventListener('pointerdown', _outsideClickHandler, true);
+  document.removeEventListener('mousedown', _outsideClickHandler, true);
+  document.removeEventListener('touchstart', _outsideClickHandler, true);
+  _outsideClickHandler = null;
+  _anchorElement = null;
+}
+
+function _setupOutsideClickListener(panelId, anchor) {
+  _removeOutsideClickListener();
+  _anchorElement = anchor || null;
+  _outsideClickHandler = (event) => {
+    const panel = window.__cyco?.dockviewApi?.getPanel(panelId);
+    if (!panel) {
+      _removeOutsideClickListener();
+      return;
+    }
+
+    const groupEl = panel.api.group?.element;
+    if (groupEl && groupEl.contains(event.target)) return;
+    if (_anchorElement && _anchorElement.contains(event.target)) return;
+
+    panel.api.close?.();
+    _removeOutsideClickListener();
+  };
+
+  document.addEventListener('pointerdown', _outsideClickHandler, true);
+  document.addEventListener('mousedown', _outsideClickHandler, true);
+  document.addEventListener('touchstart', _outsideClickHandler, true);
 }
 
 export const ComponentPicker = {
   /**
-   * Show the component picker near `anchor`, calling `onSelect(type)` when chosen.
-   * @param {HTMLElement} anchor
+   * Show the component picker as a dockable panel, calling `onSelect(type)` when chosen.
+   * @param {HTMLElement} _anchor
    * @param {(type: string) => void} onSelect
    */
-  show(anchor, onSelect) {
-    _removePicker();
-
-    const picker = document.createElement('div');
-    _picker = picker;
-    picker.style.cssText = `
-      position:fixed;z-index:9999;
-      background:var(--bg,#141414);border:1px solid var(--border-color,#444);
-      border-radius:4px;box-shadow:0 4px 20px rgba(0,0,0,.6);
-      width:240px;max-height:340px;display:flex;flex-direction:column;
-      font-size:12px;
-    `;
-
-    // ── Search ────────────────────────────────────────────────────────────
-    const searchWrap = document.createElement('div');
-    searchWrap.style.cssText = 'padding:8px;border-bottom:1px solid var(--border-color,#333);flex-shrink:0;';
-    const searchInput = document.createElement('input');
-    searchInput.type = 'text';
-    searchInput.placeholder = 'Search components…';
-    searchInput.style.cssText = `
-      width:100%;box-sizing:border-box;background:var(--bg2,#1e1e1e);
-      border:1px solid var(--border-color,#444);color:var(--text-bright,#fff);
-      padding:5px 8px;border-radius:3px;font-size:12px;outline:none;
-    `;
-    searchWrap.appendChild(searchInput);
-    picker.appendChild(searchWrap);
-
-    // ── List ─────────────────────────────────────────────────────────────
-    const list = document.createElement('div');
-    list.style.cssText = 'overflow-y:auto;flex:1;';
-
-    function buildList(query) {
-      list.innerHTML = '';
-      const q = query.toLowerCase().trim();
-      COMPONENT_GROUPS.forEach(group => {
-        const matches = group.components.filter(c =>
-          !q || c.type.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q)
-        );
-        if (!matches.length) return;
-
-        const groupHdr = document.createElement('div');
-        groupHdr.textContent = group.label;
-        groupHdr.style.cssText = `
-          padding:4px 10px;font-size:10px;font-weight:700;letter-spacing:.05em;
-          color:var(--text-muted,#666);text-transform:uppercase;
-          background:var(--bg2,#1a1a1a);
-        `;
-        list.appendChild(groupHdr);
-
-        matches.forEach(c => {
-          const item = document.createElement('div');
-          item.style.cssText = `
-            padding:6px 12px;cursor:pointer;display:flex;flex-direction:column;
-            border-bottom:1px solid var(--border-color,#222);
-            transition:background .1s;
-          `;
-          item.addEventListener('mouseenter', () => { item.style.background = 'var(--accent-dim,#0050a0)'; });
-          item.addEventListener('mouseleave', () => { item.style.background = ''; });
-
-          const name = document.createElement('span');
-          name.textContent = c.type;
-          name.style.cssText = 'color:var(--text-bright,#fff);';
-
-          const desc = document.createElement('span');
-          desc.textContent = c.desc;
-          desc.style.cssText = 'font-size:10px;color:var(--text-muted,#777);';
-
-          item.appendChild(name);
-          item.appendChild(desc);
-          item.addEventListener('click', () => {
-            _removePicker();
-            onSelect(c.type);
-          });
-          list.appendChild(item);
-        });
-      });
+  show(_anchor, onSelect) {
+    _pendingSelect = onSelect;
+    const dvApi = window.__cyco?.dockviewApi;
+    if (!dvApi) {
+      console.warn('[ComponentPicker] dockview API unavailable; cannot open dockable picker.');
+      return;
     }
 
-    buildList('');
-    picker.appendChild(list);
+    const existing = dvApi.getPanel('component-picker');
+    if (existing) {
+      try {
+        existing.api.group.api.setActive?.();
+      } catch (_) {}
+      return;
+    }
 
-    searchInput.addEventListener('input', () => buildList(searchInput.value));
+    const anchorRect = _anchor?.getBoundingClientRect();
+    const edgeMargin = 28;
+    const width = Math.min(280, window.innerWidth - edgeMargin * 2);
+    const height = Math.min(360, window.innerHeight - edgeMargin * 2);
+    let x = Math.round((window.innerWidth - width) / 2);
+    let y = Math.round(window.innerHeight * 0.14);
 
-    // ── Position near anchor ─────────────────────────────────────────────
-    document.body.appendChild(picker);
-    const rect  = anchor.getBoundingClientRect();
-    const ph    = 340;
-    const pw    = 240;
-    let top  = rect.bottom + 4;
-    let left = rect.left;
-    if (top + ph > window.innerHeight - 10) top = rect.top - ph - 4;
-    if (left + pw > window.innerWidth  - 10) left = window.innerWidth - pw - 10;
-    picker.style.top  = Math.max(4, top)  + 'px';
-    picker.style.left = Math.max(4, left) + 'px';
-
-    // Focus search
-    requestAnimationFrame(() => searchInput.focus());
-
-    // ── Close on outside click ────────────────────────────────────────────
-    const onDocClick = (e) => {
-      if (!picker.contains(e.target)) {
-        _removePicker();
-        document.removeEventListener('mousedown', onDocClick, true);
+    if (anchorRect) {
+      const rightSide = Math.round(anchorRect.right + 18);
+      const leftSide = Math.round(anchorRect.left - width - 18);
+      const centerAlign = Math.round(anchorRect.left + anchorRect.width / 2 - width / 2 + 12);
+      const rightEdgeOffset = Math.round(window.innerWidth - width - 100);
+      if (rightEdgeOffset >= edgeMargin) {
+        x = rightEdgeOffset;
+      } else if (centerAlign >= edgeMargin && centerAlign + width <= window.innerWidth - edgeMargin) {
+        x = centerAlign;
+      } else if (rightSide + width <= window.innerWidth - edgeMargin) {
+        x = rightSide;
+      } else if (leftSide >= edgeMargin) {
+        x = leftSide;
+      } else {
+        x = Math.min(Math.max(edgeMargin, Math.round(anchorRect.left + 8)), window.innerWidth - width - edgeMargin);
       }
-    };
-    document.addEventListener('mousedown', onDocClick, true);
+      const above = Math.round(anchorRect.top - height - 12);
+      const below = Math.round(anchorRect.bottom + 12);
+      if (above >= edgeMargin) {
+        y = above;
+      } else if (below + height <= window.innerHeight - edgeMargin) {
+        y = below;
+      } else {
+        y = Math.min(Math.max(edgeMargin, above), window.innerHeight - height - edgeMargin);
+      }
+    } else {
+      x = Math.max(edgeMargin, window.innerWidth - width - 100);
+      y = Math.min(Math.max(edgeMargin, Math.round(window.innerHeight * 0.14)), window.innerHeight - height - edgeMargin);
+    }
+
+    dvApi.addPanel({
+      id: 'component-picker',
+      component: 'ComponentPickerPanel',
+      title: 'Add Component',
+      floating: {
+        x,
+        y,
+        width,
+        height,
+      },
+    });
+
+    _setupOutsideClickListener('component-picker', _anchor);
+  },
+
+  _fireSelect(type) {
+    const cb = _pendingSelect;
+    _pendingSelect = null;
+    _removeOutsideClickListener();
+    if (typeof cb === 'function') cb(type);
   },
 
   /**

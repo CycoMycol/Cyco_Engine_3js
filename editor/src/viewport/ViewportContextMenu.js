@@ -87,6 +87,11 @@ export class ViewportContextMenu {
     }));
 
     menu.appendChild(this._makeSeparator());
+    menu.appendChild(this._makeItem('Toggle Physics Debug Wireframe', () => {
+      this._hide();
+      window.dispatchEvent(new CustomEvent('cyco-physics-debug-toggle', { detail: {} }));
+    }));
+    menu.appendChild(this._makeSeparator());
 
     if (hit) {
       // Focus

@@ -473,7 +473,7 @@ const LayoutManager = {
    * in the grid (top-left) rather than floating.
    */
   _stripTransientPanels(layout) {
-    const TRANSIENT = new Set(['camera-view', 'stats-panel']);
+    const TRANSIENT = new Set(['camera-view', 'stats-panel', 'component-picker']);
     if (!layout) return layout;
 
     // Early exit: if no transient panels exist in this layout, don't touch the grid tree.

@@ -456,6 +456,11 @@ html, body {
 .cyco-engine-theme .dv-resize-container {
   border-radius: 10px;
   overflow: hidden;
+  z-index: 12000 !important;
+}
+.ce-component-picker-tab,
+.ce-component-picker-tab * {
+  color: var(--ce-accent-orange) !important;
 }
 .cyco-engine-theme .dv-groupview {
   border-radius: 10px;

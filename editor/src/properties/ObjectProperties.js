@@ -279,8 +279,8 @@ export class ObjectProperties {
       border-radius:3px;transition:color .15s,border-color .15s;
     `;
     addBtn.addEventListener('mouseenter', () => {
-      addBtn.style.color = 'var(--text-bright,#fff)';
-      addBtn.style.borderColor = 'var(--accent,#0078d4)';
+      addBtn.style.color = 'var(--ce-accent-orange)';
+      addBtn.style.borderColor = 'var(--ce-accent-orange)';
     });
     addBtn.addEventListener('mouseleave', () => {
       addBtn.style.color = 'var(--text-muted,#888)';
@@ -421,7 +421,8 @@ export class ObjectProperties {
         _field('Lock Rotation', _checkbox(comp.lockRotation, v => { comp.lockRotation = v; }));
         break;
 
-      case 'Box Collider': {
+      case 'Box Collider':
+      case 'Box Trigger': {
         const hx = comp.halfExtents?.x ?? 0.5;
         const hy = comp.halfExtents?.y ?? 0.5;
         const hz = comp.halfExtents?.z ?? 0.5;
@@ -429,47 +430,91 @@ export class ObjectProperties {
         _field('Half X', _numInput(hx, v => { comp.halfExtents.x = v; }, 0.01));
         _field('Half Y', _numInput(hy, v => { comp.halfExtents.y = v; }, 0.01));
         _field('Half Z', _numInput(hz, v => { comp.halfExtents.z = v; }, 0.01));
-        _field('Is Trigger', _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Box Trigger', v => { comp.isTrigger = v; }));
         _field('Friction',     _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
         _field('Restitution',  _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
         break;
       }
       case 'Sphere Collider':
+      case 'Sphere Trigger':
         _field('Radius',      _numInput(comp.radius      ?? 0.5, v => { comp.radius      = v; }, 0.01));
-        _field('Is Trigger',  _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Is Trigger',  _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }));
         _field('Friction',    _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
         _field('Restitution', _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
         break;
 
       case 'Capsule Collider':
+      case 'Capsule Trigger':
         _field('Radius',      _numInput(comp.radius      ?? 0.25, v => { comp.radius      = v; }, 0.01));
         _field('Half Height', _numInput(comp.halfHeight   ?? 0.5,  v => { comp.halfHeight  = v; }, 0.01));
-        _field('Is Trigger',  _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Is Trigger',  _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }));
         break;
 
       case 'Mesh Collider':
+      case 'Mesh Trigger':
         _field('Mode', _select(['convexHull', 'trimesh'], comp.mode ?? 'convexHull', v => { comp.mode = v; }));
-        _field('Is Trigger', _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Mesh Trigger', v => { comp.isTrigger = v; }));
         break;
 
       case 'Character Controller':
         _field('Offset',         _numInput(comp.offset        ?? 0.01,  v => { comp.offset        = v; }, 0.001));
+        _field('Move Speed',     _numInput(comp.moveSpeed     ?? 5,     v => { comp.moveSpeed     = v; }, 0.1));
+        _field('Jump Velocity',  _numInput(comp.jumpVelocity  ?? 8,     v => { comp.jumpVelocity  = v; }, 0.1));
         _field('Max Slope (°)',  _numInput(comp.maxSlopeAngle ?? 45,    v => { comp.maxSlopeAngle  = v; }, 1));
-        _field('Auto Step H',   _numInput(comp.autoStepHeight ?? 0.25,  v => { comp.autoStepHeight = v; }, 0.01));
+        _field('Auto Step H',    _numInput(comp.autoStepHeight ?? 0.25,  v => { comp.autoStepHeight = v; }, 0.01));
         _field('Snap to Ground', _checkbox(comp.snapToGround !== false,  v => { comp.snapToGround  = v; }));
+        _field('Controlled',     _checkbox(comp.controlled !== false,    v => { comp.controlled    = v; }));
         break;
 
       case 'Joint':
+        if (!comp.axis) comp.axis = { x: 0, y: 1, z: 0 };
+        if (!comp.anchorA) comp.anchorA = { x: 0, y: 0, z: 0 };
+        if (!comp.anchorB) comp.anchorB = { x: 0, y: 0, z: 0 };
         _field('Joint Type', _select(['fixed', 'revolute', 'prismatic', 'spherical'], comp.jointType ?? 'fixed', v => { comp.jointType = v; }));
         _field('Target UUID', (() => {
+          const container = document.createElement('div');
+          container.style.cssText = 'display:flex;align-items:center;gap:6px;width:100%;';
+
           const inp = document.createElement('input');
           inp.type = 'text';
           inp.value = comp.targetUuid ?? '';
-          inp.placeholder = 'Drag object here';
+          inp.placeholder = 'Use selected object';
           inp.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px 4px;border-radius:2px;font-size:10px;';
           inp.addEventListener('change', () => { comp.targetUuid = inp.value.trim(); });
-          return inp;
+
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.textContent = 'Use Selected';
+          btn.style.cssText = 'padding:3px 6px;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);border-radius:3px;cursor:pointer;font-size:10px;';
+          btn.addEventListener('click', () => {
+            const selMgr = window.__cyco?.selectionManager;
+            const selected = selMgr?.selected?.size ? [...selMgr.selected] : [];
+            const target = selected.find(o => o !== this.object && o.uuid);
+            if (target) {
+              comp.targetUuid = target.uuid;
+              inp.value = target.uuid;
+            }
+          });
+
+          container.appendChild(inp);
+          container.appendChild(btn);
+          return container;
         })());
+        if (comp.jointType === 'revolute' || comp.jointType === 'prismatic') {
+          _field('Axis X', _numInput(comp.axis.x, v => { comp.axis.x = v; }, 0.1));
+          _field('Axis Y', _numInput(comp.axis.y, v => { comp.axis.y = v; }, 0.1));
+          _field('Axis Z', _numInput(comp.axis.z, v => { comp.axis.z = v; }, 0.1));
+        }
+        _field('Anchor A X', _numInput(comp.anchorA.x, v => { comp.anchorA.x = v; }, 0.1));
+        _field('Anchor A Y', _numInput(comp.anchorA.y, v => { comp.anchorA.y = v; }, 0.1));
+        if (this.object.isMesh || this.object.isGroup || this.object.isObject3D) {
+          _field('Anchor A Z', _numInput(comp.anchorA.z, v => { comp.anchorA.z = v; }, 0.1));
+        }
+        _field('Anchor B X', _numInput(comp.anchorB.x, v => { comp.anchorB.x = v; }, 0.1));
+        _field('Anchor B Y', _numInput(comp.anchorB.y, v => { comp.anchorB.y = v; }, 0.1));
+        if (this.object.isMesh || this.object.isGroup || this.object.isObject3D) {
+          _field('Anchor B Z', _numInput(comp.anchorB.z, v => { comp.anchorB.z = v; }, 0.1));
+        }
         break;
 
       case 'Ragdoll':
