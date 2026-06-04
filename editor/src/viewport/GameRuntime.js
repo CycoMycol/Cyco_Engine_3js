@@ -29,6 +29,7 @@
  */
 
 import * as THREE from 'three';
+import { PhysicsManager } from './PhysicsManager.js';
 
 export class GameRuntime {
   /**
@@ -50,6 +51,9 @@ export class GameRuntime {
 
     /** @type {HTMLElement|null} */
     this._badge = null;
+
+    /** Physics runtime — only alive during Play */
+    this.physicsManager = new PhysicsManager();
 
     this._onPlay = this._onPlay.bind(this);
     this._onStop = this._onStop.bind(this);
@@ -80,7 +84,17 @@ export class GameRuntime {
     // 5. Show PLAYING badge
     this._showBadge();
 
-    // 6. Notify UI (play button → stop button appearance)
+    // 6. Start physics (if configured)
+    const sceneMeta = this.sceneManager.sceneRegistry.get(this.sceneManager.activeSceneId);
+    const physicsMode = sceneMeta?.physicsMode ?? 'none';
+    if (physicsMode !== 'none') {
+      const scene   = this.sceneManager.getActiveScene();
+      const gravity = sceneMeta?.gravity  ?? { x: 0, y: -9.81, z: 0 };
+      const plane2d = sceneMeta?.plane2d  ?? 'xy';
+      await this.physicsManager.init(scene, physicsMode, gravity, plane2d);
+    }
+
+    // 7. Notify UI (play button → stop button appearance)
     window.dispatchEvent(new CustomEvent('cyco-runtime-state', { detail: { playing: true } }));
 
     // Future Phase 16: call onStart() on all Script components
@@ -125,6 +139,9 @@ export class GameRuntime {
 
     // 6. Notify UI (stop button → play button appearance)
     window.dispatchEvent(new CustomEvent('cyco-runtime-state', { detail: { playing: false } }));
+
+    // 7. Dispose physics
+    this.physicsManager.dispose();
 
     // Future Phase 16: call onDestroy() on all Script components
   }

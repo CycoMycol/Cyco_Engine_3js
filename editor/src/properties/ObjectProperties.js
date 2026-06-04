@@ -6,7 +6,8 @@
  */
 
 import * as THREE from 'three';
-import { section, row, vec3, readOnly, colorSwatch, slider, numInput, nameHeader, checkbox } from './propUtils.js';
+import { section, row, vec3, readOnly, colorSwatch, slider, numInput, nameHeader, checkbox, select } from './propUtils.js';
+import { ComponentPicker } from '../ui/ComponentPicker.js';
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
@@ -65,6 +66,9 @@ export class ObjectProperties {
     if (!obj.isLight && !obj.isCamera && !obj.userData?._isHelper) {
       this._buildShadow(obj);
     }
+
+    // Physics components
+    this._buildComponents(obj);
   }
 
   _buildTransform(obj) {
@@ -248,6 +252,242 @@ export class ObjectProperties {
     }
 
     this._el.appendChild(sec);
+  }
+
+  // ── Physics Components ────────────────────────────────────────────────────
+
+  _buildComponents(obj) {
+    // Ensure userData.physics structure exists
+    if (!obj.userData.physics) obj.userData.physics = {};
+    if (!Array.isArray(obj.userData.physics.components)) obj.userData.physics.components = [];
+
+    const components = obj.userData.physics.components;
+
+    // ── Existing component sections ──────────────────────────────────────
+    components.forEach((comp, idx) => {
+      const sec = this._buildComponentSection(comp, obj, idx);
+      if (sec) this._el.appendChild(sec);
+    });
+
+    // ── Add Component button ─────────────────────────────────────────────
+    const addBtn = document.createElement('button');
+    addBtn.textContent = '+ Add Component';
+    addBtn.style.cssText = `
+      display:block;width:100%;margin:8px 0 4px;padding:6px;
+      background:var(--bg2,#1e1e1e);border:1px dashed var(--border-color,#444);
+      color:var(--text-muted,#888);cursor:pointer;font-size:11px;
+      border-radius:3px;transition:color .15s,border-color .15s;
+    `;
+    addBtn.addEventListener('mouseenter', () => {
+      addBtn.style.color = 'var(--text-bright,#fff)';
+      addBtn.style.borderColor = 'var(--accent,#0078d4)';
+    });
+    addBtn.addEventListener('mouseleave', () => {
+      addBtn.style.color = 'var(--text-muted,#888)';
+      addBtn.style.borderColor = 'var(--border-color,#444)';
+    });
+    addBtn.addEventListener('click', (e) => {
+      ComponentPicker.show(e.currentTarget, (type) => {
+        // Prevent duplicate Rigid Body or Character Controller
+        const singles = ['Rigid Body', 'Character Controller', 'Ragdoll'];
+        if (singles.includes(type) && components.some(c => c.type === type)) {
+          console.warn(`[ObjectProperties] Only one "${type}" per object.`);
+          return;
+        }
+        const comp = ComponentPicker.defaultParams(type);
+        components.push(comp);
+        // Rebuild the panel to show new component
+        this._el.innerHTML = '';
+        this._posVec = null; this._rotVec = null; this._sclVec = null;
+        this._build();
+      });
+    });
+    this._el.appendChild(addBtn);
+  }
+
+  /**
+   * Build a collapsible section for a single physics component.
+   * @param {object} comp
+   * @param {THREE.Object3D} obj
+   * @param {number} idx
+   */
+  _buildComponentSection(comp, obj, idx) {
+    const wrapper = document.createElement('div');
+    wrapper.style.cssText = 'margin-bottom:4px;';
+
+    // ── Header ───────────────────────────────────────────────────────────
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display:flex;align-items:center;justify-content:space-between;
+      padding:5px 8px;background:var(--bg2,#1e1e1e);
+      border:1px solid var(--border-color,#333);border-radius:3px;
+      cursor:pointer;user-select:none;
+    `;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = comp.type;
+    titleSpan.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-bright,#fff);';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.textContent = '×';
+    removeBtn.title = 'Remove component';
+    removeBtn.style.cssText = `
+      background:none;border:none;color:var(--text-muted,#888);
+      cursor:pointer;font-size:14px;line-height:1;padding:0 2px;
+      transition:color .15s;
+    `;
+    removeBtn.addEventListener('mouseenter', () => { removeBtn.style.color = '#e07272'; });
+    removeBtn.addEventListener('mouseleave', () => { removeBtn.style.color = 'var(--text-muted,#888)'; });
+    removeBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      obj.userData.physics.components.splice(idx, 1);
+      this._el.innerHTML = '';
+      this._posVec = null; this._rotVec = null; this._sclVec = null;
+      this._build();
+    });
+
+    // Toggle collapse
+    let collapsed = false;
+    const body = document.createElement('div');
+    body.style.cssText = 'padding:8px;background:var(--bg,#141414);border:1px solid var(--border-color,#333);border-top:none;border-radius:0 0 3px 3px;';
+    header.addEventListener('click', () => {
+      collapsed = !collapsed;
+      body.style.display = collapsed ? 'none' : 'block';
+    });
+
+    header.appendChild(titleSpan);
+    header.appendChild(removeBtn);
+    wrapper.appendChild(header);
+
+    // ── Component-specific fields ─────────────────────────────────────
+    this._buildComponentFields(comp, body);
+    wrapper.appendChild(body);
+
+    return wrapper;
+  }
+
+  /**
+   * Build editable fields for a specific component type.
+   */
+  _buildComponentFields(comp, body) {
+    const _field = (label, inputEl) => {
+      const r = document.createElement('div');
+      r.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:2px 0;';
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.cssText = 'font-size:11px;color:var(--text-muted,#999);flex-shrink:0;margin-right:6px;';
+      r.appendChild(lbl);
+      r.appendChild(inputEl);
+      body.appendChild(r);
+    };
+
+    const _numInput = (value, onChange, step = 0.01) => {
+      const inp = document.createElement('input');
+      inp.type  = 'number';
+      inp.value = value ?? 0;
+      inp.step  = step;
+      inp.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px 4px;border-radius:2px;font-size:11px;';
+      inp.addEventListener('change', () => onChange(parseFloat(inp.value)));
+      return inp;
+    };
+
+    const _checkbox = (value, onChange) => {
+      const inp = document.createElement('input');
+      inp.type = 'checkbox';
+      inp.checked = !!value;
+      inp.addEventListener('change', () => onChange(inp.checked));
+      return inp;
+    };
+
+    const _select = (opts, value, onChange) => {
+      const sel = document.createElement('select');
+      sel.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px;border-radius:2px;font-size:11px;';
+      opts.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = opt.textContent = o;
+        if (o === value) opt.selected = true;
+        sel.appendChild(opt);
+      });
+      sel.addEventListener('change', () => onChange(sel.value));
+      return sel;
+    };
+
+    switch (comp.type) {
+      case 'Rigid Body':
+        _field('Body Type', _select(['dynamic', 'static', 'kinematic'], comp.bodyType ?? 'dynamic', v => { comp.bodyType = v; }));
+        _field('Mass',           _numInput(comp.mass ?? 1,           v => { comp.mass           = v; }, 0.1));
+        _field('Linear Damping', _numInput(comp.linearDamping ?? 0,  v => { comp.linearDamping  = v; }, 0.01));
+        _field('Angular Damping',_numInput(comp.angularDamping ?? 0, v => { comp.angularDamping = v; }, 0.01));
+        _field('Lock Rotation', _checkbox(comp.lockRotation, v => { comp.lockRotation = v; }));
+        break;
+
+      case 'Box Collider': {
+        const hx = comp.halfExtents?.x ?? 0.5;
+        const hy = comp.halfExtents?.y ?? 0.5;
+        const hz = comp.halfExtents?.z ?? 0.5;
+        if (!comp.halfExtents) comp.halfExtents = { x: hx, y: hy, z: hz };
+        _field('Half X', _numInput(hx, v => { comp.halfExtents.x = v; }, 0.01));
+        _field('Half Y', _numInput(hy, v => { comp.halfExtents.y = v; }, 0.01));
+        _field('Half Z', _numInput(hz, v => { comp.halfExtents.z = v; }, 0.01));
+        _field('Is Trigger', _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Friction',     _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
+        _field('Restitution',  _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
+        break;
+      }
+      case 'Sphere Collider':
+        _field('Radius',      _numInput(comp.radius      ?? 0.5, v => { comp.radius      = v; }, 0.01));
+        _field('Is Trigger',  _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        _field('Friction',    _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
+        _field('Restitution', _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
+        break;
+
+      case 'Capsule Collider':
+        _field('Radius',      _numInput(comp.radius      ?? 0.25, v => { comp.radius      = v; }, 0.01));
+        _field('Half Height', _numInput(comp.halfHeight   ?? 0.5,  v => { comp.halfHeight  = v; }, 0.01));
+        _field('Is Trigger',  _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        break;
+
+      case 'Mesh Collider':
+        _field('Mode', _select(['convexHull', 'trimesh'], comp.mode ?? 'convexHull', v => { comp.mode = v; }));
+        _field('Is Trigger', _checkbox(comp.isTrigger, v => { comp.isTrigger = v; }));
+        break;
+
+      case 'Character Controller':
+        _field('Offset',         _numInput(comp.offset        ?? 0.01,  v => { comp.offset        = v; }, 0.001));
+        _field('Max Slope (°)',  _numInput(comp.maxSlopeAngle ?? 45,    v => { comp.maxSlopeAngle  = v; }, 1));
+        _field('Auto Step H',   _numInput(comp.autoStepHeight ?? 0.25,  v => { comp.autoStepHeight = v; }, 0.01));
+        _field('Snap to Ground', _checkbox(comp.snapToGround !== false,  v => { comp.snapToGround  = v; }));
+        break;
+
+      case 'Joint':
+        _field('Joint Type', _select(['fixed', 'revolute', 'prismatic', 'spherical'], comp.jointType ?? 'fixed', v => { comp.jointType = v; }));
+        _field('Target UUID', (() => {
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.value = comp.targetUuid ?? '';
+          inp.placeholder = 'Drag object here';
+          inp.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px 4px;border-radius:2px;font-size:10px;';
+          inp.addEventListener('change', () => { comp.targetUuid = inp.value.trim(); });
+          return inp;
+        })());
+        break;
+
+      case 'Ragdoll':
+        body.appendChild((() => {
+          const p = document.createElement('p');
+          p.textContent = 'Ragdoll builder — Phase 11.';
+          p.style.cssText = 'font-size:11px;color:var(--text-muted,#888);margin:0;';
+          return p;
+        })());
+        break;
+
+      default: {
+        const p = document.createElement('p');
+        p.textContent = `No editable fields for "${comp.type}".`;
+        p.style.cssText = 'font-size:11px;color:var(--text-muted,#888);margin:0;';
+        body.appendChild(p);
+      }
+    }
   }
 
   // ── Shadow ─────────────────────────────────────────────────────────────────

@@ -545,6 +545,7 @@ function environmentMenu() {
     { label: 'Environment',     action: () => show('environment') },
     { label: 'Renderer',        action: () => show('renderer') },
     { label: 'Post Processing', action: () => show('post-processing') },
+    { label: 'Physics',         action: () => show('physics') },
     { separator: true },
     { label: 'Lighting', submenu: [
       { label: 'Global Illumination', action: () => {} },

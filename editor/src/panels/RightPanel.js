@@ -18,6 +18,7 @@ import { GridProperties }           from '../properties/GridProperties.js';
 import { RendererProperties }       from '../properties/RendererProperties.js';
 import { EnvironmentProperties }    from '../properties/EnvironmentProperties.js';
 import { PostProcessingProperties } from '../properties/PostProcessingProperties.js';
+import { PhysicsWorldWindow }        from '../ui/PhysicsWorldWindow.js';
 
 export class RightPanel extends BasePanel {
   constructor() {
@@ -153,6 +154,10 @@ export class RightPanel extends BasePanel {
       case 'post-processing':
         comp = new PostProcessingProperties();
         break;
+      case 'physics':
+        // Physics settings live in a floating panel, not the right panel
+        PhysicsWorldWindow.open();
+        return;
       default:
         if (object) {
           comp = new ObjectProperties(object);

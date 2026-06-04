@@ -409,6 +409,7 @@ export class CenterPanel extends BasePanel {
     const items = [];
     items.push(_ddCheckRow('Physics Edit Mode', this._physicsEdit, (v) => {
       this._physicsEdit = v;
+      window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: v } }));
     }));
     items.push(_ddSep());
     CAMERA_VIEWS.forEach(v => {

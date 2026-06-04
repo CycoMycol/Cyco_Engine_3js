@@ -16,6 +16,8 @@ import { RightViewportPanel } from './panels/RightViewportPanel.js';
 import { CameraViewPanel }    from './panels/CameraViewPanel.js';
 import { StatsPanel }         from './panels/StatsPanel.js';
 import { PreferencesPanel }   from './panels/PreferencesPanel.js';
+import { PhysicsWorldPanel }  from './panels/PhysicsWorldPanel.js';
+import { InputManagerPanel }  from './panels/InputManagerPanel.js';
 
 // ── Default layout snapshot ────────────────────────────────────────────────────
 // Captured from the user's preferred arrangement:
@@ -42,6 +44,8 @@ export function initLayout(container) {
         case 'CameraViewPanel':    return new CameraViewPanel();
         case 'StatsPanel':         return new StatsPanel();
         case 'PreferencesPanel':   return new PreferencesPanel();
+        case 'PhysicsWorldPanel':  return new PhysicsWorldPanel();
+        case 'InputManagerPanel':  return new InputManagerPanel();
         default: throw new Error(`Unknown component: ${options.name}`);
       }
     },

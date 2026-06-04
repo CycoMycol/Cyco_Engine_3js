@@ -64,10 +64,14 @@ export class SceneManager {
    */
   registerScene(id, scene, meta = {}) {
     this.sceneRegistry.set(id, {
-      name:      meta.name ?? 'Scene',
+      name:        meta.name ?? 'Scene',
       scene,
-      dirty:     false,
-      isDefault: !!meta.isDefault,
+      dirty:       false,
+      isDefault:   !!meta.isDefault,
+      // Physics world settings (edited via Physics World Window)
+      physicsMode: meta.physicsMode ?? 'none',
+      gravity:     meta.gravity     ?? { x: 0, y: -9.81, z: 0 },
+      plane2d:     meta.plane2d     ?? 'xy',
     });
     if (!this.activeSceneId) this.activeSceneId = id;
   }

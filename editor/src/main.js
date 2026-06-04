@@ -14,6 +14,8 @@ import LayoutManager     from './layout-manager.js';
 import { initLayout, DEFAULT_LAYOUT }    from './layout.js';
 import ProjectManager    from './project/ProjectManager.js';
 import GameManager       from './ui/GameManager.js';
+import { PhysicsWorldWindow }  from './ui/PhysicsWorldWindow.js';
+import { InputManagerWindow }  from './ui/InputManagerWindow.js';
 
 // ── Viewport modules ───────────────────────────────────────────────────────────
 import { RendererManager }        from './viewport/RendererManager.js';
@@ -26,6 +28,7 @@ import { RenderModeManager }      from './viewport/RenderModeManager.js';
 import { PostProcessingPipeline } from './viewport/PostProcessingPipeline.js';
 import { CommandManager }         from './viewport/CommandManager.js';
 import { GameRuntime }            from './viewport/GameRuntime.js';
+import { PhysicsEditHelper }      from './viewport/PhysicsEditHelper.js';
 import { InputManager }           from './viewport/InputManager.js';
 import { ViewportStats }          from './viewport/ViewportStats.js';
 import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
@@ -76,7 +79,8 @@ ProjectManager.init();
 
 // ── 6. Wire toolbar action events ─────────────────────────────────────────────
 document.addEventListener('cyco-action', (e) => {
-  if (e.detail === 'game-manager') GameManager.open();
+  if (e.detail === 'game-manager')  GameManager.open();
+  if (e.detail === 'input-manager') InputManagerWindow.open();
 });
 
 // ── 7. Viewport system bootstrap (Section 6 — VIEWPORT_PLAN.md) ───────────────
@@ -123,6 +127,7 @@ viewportEngine.postProcessing = postPipeline;
 // Undo/redo + play mode
 const commandManager        = new CommandManager();
 const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, selectionManager, transformGizmo); // eslint-disable-line no-unused-vars
+const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-disable-line no-unused-vars
 
 // Input + stats
 const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
@@ -150,6 +155,7 @@ if (typeof window !== 'undefined') {
     get gradientSky()     { return viewportEngine.gradientSky; },
     get contactShadows()  { return viewportEngine.contactShadows; },
     get postPipeline()    { return postPipeline; },
+    get physicsManager()  { return gameRuntime.physicsManager; },
   };
 }
 

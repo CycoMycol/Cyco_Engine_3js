@@ -43,6 +43,15 @@ const DEFAULT_BINDINGS = {
 };
 
 const STORAGE_KEY = 'cyco-keybindings';
+const PHYSICS_INPUT_KEY = 'cyco-physics-input';
+
+const DEFAULT_PHYSICS_BINDINGS = {
+  moveForward:  'w',
+  moveBack:     's',
+  moveLeft:     'a',
+  moveRight:    'd',
+  jump:         ' ',
+};
 
 export class InputManager {
   /**
@@ -56,12 +65,25 @@ export class InputManager {
     this.engine           = viewportEngine;
 
     this._bindings = this._loadBindings();
+    this._physicsBindings = this._loadPhysicsBindings();
 
-    this._onKeyDown  = this._onKeyDown.bind(this);
-    this._onPrefsChg = this._onPrefsChg.bind(this);
+    /** Set of currently held key strings (for physics continuous movement) */
+    this._keysDown = new Set();
 
-    document.addEventListener('keydown',              this._onKeyDown);
+    /** True during Play mode — enables physics input dispatch */
+    this._playing = false;
+
+    this._onKeyDown     = this._onKeyDown.bind(this);
+    this._onKeyUp       = this._onKeyUp.bind(this);
+    this._onPrefsChg    = this._onPrefsChg.bind(this);
+    this._onRuntimeState = this._onRuntimeState.bind(this);
+    this._onTick        = this._onTick.bind(this);
+
+    document.addEventListener('keydown',               this._onKeyDown);
+    document.addEventListener('keyup',                 this._onKeyUp);
     window.addEventListener('cyco-preferences-change', this._onPrefsChg);
+    window.addEventListener('cyco-runtime-state',      this._onRuntimeState);
+    window.addEventListener('cyco-vp-tick',            this._onTick);
   }
 
   // ─── Keybindings ─────────────────────────────────────────────────────────
@@ -105,6 +127,14 @@ export class InputManager {
     }
   }
 
+  _loadPhysicsBindings() {
+    try {
+      const raw = localStorage.getItem(PHYSICS_INPUT_KEY);
+      if (raw) return { ...DEFAULT_PHYSICS_BINDINGS, ...JSON.parse(raw) };
+    } catch { /* ignore */ }
+    return { ...DEFAULT_PHYSICS_BINDINGS };
+  }
+
   _onPrefsChg({ detail: { prefs } = {} } = {}) {
     if (prefs?.keybindings) {
       const merged = { ...DEFAULT_BINDINGS };
@@ -119,10 +149,52 @@ export class InputManager {
 
   // ─── Key event handler ───────────────────────────────────────────────────
 
+  _onKeyUp(event) {
+    const k = event.key.toLowerCase();
+    this._keysDown.delete(k);
+    this._keysDown.delete(event.key); // handle space etc.
+  }
+
+  _onRuntimeState(e) {
+    this._playing = !!e.detail?.playing;
+    if (!this._playing) this._keysDown.clear();
+  }
+
+  /**
+   * Physics movement tick — dispatches cyco-input-move every frame while keys are held.
+   * Only active during Play mode.
+   */
+  _onTick() {
+    if (!this._playing) return;
+    const pb = this._physicsBindings;
+    let dx = 0, dz = 0;
+    if (this._keysDown.has(pb.moveForward))  dz -= 1;
+    if (this._keysDown.has(pb.moveBack))     dz += 1;
+    if (this._keysDown.has(pb.moveLeft))     dx -= 1;
+    if (this._keysDown.has(pb.moveRight))    dx += 1;
+    if (dx !== 0 || dz !== 0) {
+      window.dispatchEvent(new CustomEvent('cyco-input-move', { detail: { x: dx, z: dz } }));
+    }
+  }
+
   _onKeyDown(event) {
+    // Track held keys for physics movement
+    this._keysDown.add(event.key.toLowerCase());
+    this._keysDown.add(event.key); // preserve original casing for space ' '
+
     // Don't intercept shortcuts when typing in inputs, textareas, etc.
     const tag = document.activeElement?.tagName ?? '';
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(tag)) return;
+
+    // During play mode: handle physics jump, skip editor shortcuts
+    if (this._playing) {
+      const pb = this._physicsBindings;
+      if (event.key === pb.jump) {
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('cyco-input-jump'));
+      }
+      return;
+    }
 
     const key    = this._keyString(event);
     const b      = this._bindings;
@@ -286,6 +358,9 @@ export class InputManager {
 
   dispose() {
     document.removeEventListener('keydown',               this._onKeyDown);
+    document.removeEventListener('keyup',                 this._onKeyUp);
     window.removeEventListener('cyco-preferences-change', this._onPrefsChg);
+    window.removeEventListener('cyco-runtime-state',      this._onRuntimeState);
+    window.removeEventListener('cyco-vp-tick',            this._onTick);
   }
 }
