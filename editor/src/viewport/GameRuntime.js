@@ -57,6 +57,7 @@ export class GameRuntime {
 
     /** Physics runtime — only alive during Play */
     this.physicsManager = new PhysicsManager();
+    this._scriptInstances = new Map();
 
     this._onPlay = this._onPlay.bind(this);
     this._onStop = this._onStop.bind(this);
@@ -93,12 +94,14 @@ export class GameRuntime {
     // 6. Start physics (if configured)
     const sceneMeta = this.sceneManager.sceneRegistry.get(this.sceneManager.activeSceneId);
     const physicsMode = sceneMeta?.physicsMode ?? 'none';
+    const scene = this.sceneManager.getActiveScene();
     if (physicsMode !== 'none') {
-      const scene   = this.sceneManager.getActiveScene();
       const gravity = sceneMeta?.gravity  ?? { x: 0, y: -9.81, z: 0 };
       const plane2d = sceneMeta?.plane2d  ?? 'xy';
       await this.physicsManager.init(scene, physicsMode, gravity, plane2d);
     }
+
+    this._startScriptComponents(scene);
 
     // 7. Notify UI (play button → stop button appearance)
     window.dispatchEvent(new CustomEvent('cyco-runtime-state', { detail: { playing: true } }));
@@ -150,10 +153,74 @@ export class GameRuntime {
     // 6. Notify UI (stop button → play button appearance)
     window.dispatchEvent(new CustomEvent('cyco-runtime-state', { detail: { playing: false } }));
 
-    // 7. Dispose physics
-    this.physicsManager.dispose();
+    // 7. Stop scripts
+    this._stopScriptComponents(this.sceneManager.getActiveScene());
 
-    // Future Phase 16: call onDestroy() on all Script components
+    // 8. Dispose physics
+    this.physicsManager.dispose();
+  }
+
+  _startScriptComponents(scene) {
+    if (!scene) return;
+    this._scriptInstances.clear();
+    scene.traverse((obj) => {
+      const comps = obj.userData?.physics?.components;
+      if (!Array.isArray(comps)) return;
+      comps.forEach((comp, index) => {
+        if (comp?.type !== 'Script') return;
+        const instance = this._createScriptInstance(obj, comp);
+        if (!instance) return;
+        this._scriptInstances.set(`${obj.uuid}:${index}`, instance);
+        try {
+          instance.onStart?.(obj, scene, comp);
+        } catch (e) {
+          console.warn('[GameRuntime] Script onStart failed:', e, comp.path);
+        }
+      });
+    });
+  }
+
+  _stopScriptComponents(scene) {
+    if (!scene) return;
+    for (const instance of this._scriptInstances.values()) {
+      try {
+        instance.onDestroy?.(instance.object, scene, instance.component);
+      } catch (e) {
+        console.warn('[GameRuntime] Script onDestroy failed:', e, instance.component.path);
+      }
+    }
+    this._scriptInstances.clear();
+  }
+
+  _createScriptInstance(object, comp) {
+    if (!comp || comp.type !== 'Script') return null;
+    const instance = {
+      object,
+      component: comp,
+      path: comp.path || '',
+      onStart: null,
+      onDestroy: null,
+    };
+
+    if (typeof comp.onStart === 'string' && comp.onStart.trim()) {
+      try {
+        instance.onStart = new Function('object', 'scene', 'component', comp.onStart);
+      } catch (e) {
+        console.warn('[GameRuntime] Invalid Script onStart code:', e, comp.path);
+      }
+    }
+    if (typeof comp.onDestroy === 'string' && comp.onDestroy.trim()) {
+      try {
+        instance.onDestroy = new Function('object', 'scene', 'component', comp.onDestroy);
+      } catch (e) {
+        console.warn('[GameRuntime] Invalid Script onDestroy code:', e, comp.path);
+      }
+    }
+
+    if (!instance.onStart && !instance.onDestroy) {
+      return null;
+    }
+    return instance;
   }
 
   // ─── PLAYING badge ────────────────────────────────────────────────────────

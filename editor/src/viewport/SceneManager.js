@@ -225,7 +225,22 @@ export class SceneManager {
    * @returns {object}
    */
   serializeActiveScene() {
-    return this.getActiveScene()?.toJSON() ?? null;
+    const scene = this.getActiveScene();
+    if (!scene) return null;
+
+    const json = scene.toJSON();
+    const entry = this.sceneRegistry.get(this.activeSceneId);
+    if (entry) {
+      const meta = {
+        physicsMode: entry.physicsMode,
+        gravity:     entry.gravity,
+        plane2d:     entry.plane2d,
+      };
+      json.object = json.object || {};
+      json.object.userData = json.object.userData || {};
+      json.object.userData.physicsSettings = meta;
+    }
+    return json;
   }
 
   /**
@@ -245,6 +260,14 @@ export class SceneManager {
   loadSceneFromJSON(json) {
     const entry = this.sceneRegistry.get(this.activeSceneId);
     if (!entry) return;
+    // Apply persisted scene metadata if present
+    const persistedMeta = json?.object?.userData?.physicsSettings;
+    if (persistedMeta && typeof persistedMeta === 'object') {
+      entry.physicsMode = persistedMeta.physicsMode ?? entry.physicsMode;
+      entry.gravity     = persistedMeta.gravity     ?? entry.gravity;
+      entry.plane2d     = persistedMeta.plane2d     ?? entry.plane2d;
+    }
+
     // Dispose old objects
     entry.scene.traverse(child => this._disposeNode(child));
     entry.scene.clear();

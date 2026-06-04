@@ -599,6 +599,42 @@ export class ObjectProperties {
         })());
         break;
 
+      case 'Script': {
+        if (!comp.path) comp.path = '';
+        if (typeof comp.onStart !== 'string') comp.onStart = '';
+        if (typeof comp.onDestroy !== 'string') comp.onDestroy = '';
+
+        const pathInput = document.createElement('input');
+        pathInput.type = 'text';
+        pathInput.value = comp.path;
+        pathInput.placeholder = 'scripts/myBehaviour.js';
+        pathInput.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px 4px;border-radius:2px;font-size:11px;';
+        pathInput.addEventListener('change', () => { comp.path = pathInput.value.trim(); _dispatchPhysicsEditUpdate(); });
+        _field('Script Path', pathInput, 'Optional script asset path for this component.');
+
+        const startArea = document.createElement('textarea');
+        startArea.value = comp.onStart;
+        startArea.placeholder = 'console.log("onStart", object.name);';
+        startArea.style.cssText = 'flex:1;min-width:0;min-height:80px;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:4px;border-radius:3px;font-size:11px;font-family:monospace;resize:vertical;';
+        startArea.addEventListener('input', () => { comp.onStart = startArea.value; _dispatchPhysicsEditUpdate(); });
+        _field('On Start', startArea, 'JavaScript executed when play begins.');
+
+        const destroyArea = document.createElement('textarea');
+        destroyArea.value = comp.onDestroy;
+        destroyArea.placeholder = 'console.log("onDestroy", object.name);';
+        destroyArea.style.cssText = 'flex:1;min-width:0;min-height:80px;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:4px;border-radius:3px;font-size:11px;font-family:monospace;resize:vertical;';
+        destroyArea.addEventListener('input', () => { comp.onDestroy = destroyArea.value; _dispatchPhysicsEditUpdate(); });
+        _field('On Destroy', destroyArea, 'JavaScript executed when play stops.');
+
+        body.appendChild((() => {
+          const p = document.createElement('p');
+          p.textContent = 'Enter code bodies for onStart and onDestroy. For example: object.position.x += 1;';
+          p.style.cssText = 'font-size:11px;color:var(--text-muted,#888);margin:8px 0 0;';
+          return p;
+        })());
+        break;
+      }
+
       default: {
         const p = document.createElement('p');
         p.textContent = `No editable fields for "${comp.type}".`;

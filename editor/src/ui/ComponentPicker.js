@@ -150,7 +150,7 @@ const DEFAULTS = {
   'Character Controller':  { type: 'Character Controller', offset: 0.01, maxSlopeAngle: 45, autoStepHeight: 0.25, snapToGround: true, moveSpeed: 5, jumpVelocity: 8, controlled: true },
   'Joint':                 { type: 'Joint',                jointType: 'fixed', targetUuid: '', axis: { x: 0, y: 1, z: 0 }, anchorA: { x: 0, y: 0, z: 0 }, anchorB: { x: 0, y: 0, z: 0 } },
   'Ragdoll':               { type: 'Ragdoll', preset: 'humanoid' },
-  'Script':                { type: 'Script', path: '' },
+  'Script':                { type: 'Script', path: '', onStart: '', onDestroy: '' },
   'UI Panel':              { type: 'UI Panel', title: 'Panel', layout: 'vertical' },
   'UI Button':             { type: 'UI Button', label: 'Button', onClick: '' },
   'UI Text':               { type: 'UI Text', text: 'Label', fontSize: 14 },
