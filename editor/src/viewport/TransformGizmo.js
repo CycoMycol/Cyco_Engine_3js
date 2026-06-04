@@ -53,6 +53,7 @@ export class TransformGizmo {
     this._onSnap             = this._onSnap.bind(this);
     this._onWorld            = this._onWorld.bind(this);
     this._onGizmoSize        = this._onGizmoSize.bind(this);
+    this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
     this._onVpTick           = this._onVpTick.bind(this);
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
@@ -70,6 +71,7 @@ export class TransformGizmo {
     window.addEventListener('cyco-rvp-world',         this._onWorld);
     window.addEventListener('cyco-vp-world',          this._onWorld);
     window.addEventListener('cyco-gizmo-size',        this._onGizmoSize);
+    window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
   }
 
   // ─── Build ────────────────────────────────────────────────────────────────
@@ -224,6 +226,20 @@ export class TransformGizmo {
     this.controls?.setSpace(this._space);
   }
 
+  _onPhysicsEditMode(event) {
+    const enabled = !!event.detail?.enabled;
+    if (!this.controls) return;
+    if (enabled) {
+      this.controls.detach();
+      this.controls.enabled = false;
+    } else {
+      this.controls.enabled = true;
+      if (this._mode !== 'select' && this._targetObject) {
+        this.controls.attach(this._targetObject);
+      }
+    }
+  }
+
   _onGizmoSize(event) {
     if (this.controls) this.controls.size = event.detail.size ?? 1;
   }
@@ -270,8 +286,7 @@ export class TransformGizmo {
     window.removeEventListener('cyco-rvp-snap',              this._onSnap);
     window.removeEventListener('cyco-rvp-world',             this._onWorld);
     window.removeEventListener('cyco-vp-world',              this._onWorld);
-    window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
-
+    window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);    window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
     if (this.controls) {
       this.engine.scene?.remove(this.controls);
       this.controls.dispose();

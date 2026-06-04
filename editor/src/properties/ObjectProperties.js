@@ -370,46 +370,80 @@ export class ObjectProperties {
    * Build editable fields for a specific component type.
    */
   _buildComponentFields(comp, body) {
-    const _field = (label, inputEl) => {
+    const _dispatchPhysicsEditUpdate = () => {
+      window.dispatchEvent(new CustomEvent('cyco-physics-edit-update', { detail: { object: this.object, component: comp } }));
+    };
+
+    const _rebuildPanel = () => {
+      this._el.innerHTML = '';
+      this._posVec = null;
+      this._rotVec = null;
+      this._sclVec = null;
+      this._build();
+    };
+
+    const _field = (label, inputEl, tooltip) => {
       const r = document.createElement('div');
-      r.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:2px 0;';
+      r.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:4px 0;';
       const lbl = document.createElement('span');
       lbl.textContent = label;
       lbl.style.cssText = 'font-size:11px;color:var(--text-muted,#999);flex-shrink:0;margin-right:6px;';
+      lbl.title = tooltip || label;
       r.appendChild(lbl);
       r.appendChild(inputEl);
       body.appendChild(r);
     };
 
-    const _numInput = (value, onChange, step = 0.01) => {
-      const inp = document.createElement('input');
-      inp.type  = 'number';
-      inp.value = value ?? 0;
-      inp.step  = step;
-      inp.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px 4px;border-radius:2px;font-size:11px;';
-      inp.addEventListener('change', () => onChange(parseFloat(inp.value)));
-      return inp;
+    const _numInput = (value, onChange, step = 0.01, decimals = 3, min, max) => {
+      return numInput({
+        value,
+        step,
+        min,
+        max,
+        decimals,
+        onChange: (v) => { onChange(v); _dispatchPhysicsEditUpdate(); },
+      });
     };
 
     const _checkbox = (value, onChange) => {
-      const inp = document.createElement('input');
-      inp.type = 'checkbox';
-      inp.checked = !!value;
-      inp.addEventListener('change', () => onChange(inp.checked));
-      return inp;
+      return checkbox({
+        checked: !!value,
+        onChange: (v) => { onChange(v); _dispatchPhysicsEditUpdate(); },
+      });
     };
 
-    const _select = (opts, value, onChange) => {
-      const sel = document.createElement('select');
-      sel.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px;border-radius:2px;font-size:11px;';
-      opts.forEach(o => {
-        const opt = document.createElement('option');
-        opt.value = opt.textContent = o;
-        if (o === value) opt.selected = true;
-        sel.appendChild(opt);
+    const _select = (options, value, onChange) => {
+      const normalized = options.map((option) => (
+        Array.isArray(option) ? option : [option, option]
+      ));
+      const sel = select({
+        options: normalized,
+        value,
+        onChange: (v) => { onChange(v); _dispatchPhysicsEditUpdate(); },
       });
-      sel.addEventListener('change', () => onChange(sel.value));
+      sel.style.cssText = 'flex:1;min-width:0;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);padding:2px;border-radius:2px;font-size:11px;';
       return sel;
+    };
+
+    const _vec3Input = (x, y, z, onChange, scrubSpeed = 0.1) => {
+      const control = vec3((axis, val) => {
+        const values = [x, y, z];
+        values[axis] = val;
+        onChange(values[0], values[1], values[2]);
+        _dispatchPhysicsEditUpdate();
+      }, scrubSpeed);
+      control.setValues(x, y, z);
+      return control.el;
+    };
+
+    const _actionButton = (label, onClick) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.className = 'ce-prop-btn';
+      btn.style.cssText = 'padding:3px 7px;background:var(--bg2,#1e1e1e);border:1px solid var(--border-color,#444);color:var(--text-color,#ccc);border-radius:3px;cursor:pointer;font-size:11px;';
+      btn.addEventListener('click', onClick);
+      return btn;
     };
 
     switch (comp.type) {
@@ -427,28 +461,66 @@ export class ObjectProperties {
         const hy = comp.halfExtents?.y ?? 0.5;
         const hz = comp.halfExtents?.z ?? 0.5;
         if (!comp.halfExtents) comp.halfExtents = { x: hx, y: hy, z: hz };
-        _field('Half X', _numInput(hx, v => { comp.halfExtents.x = v; }, 0.01));
-        _field('Half Y', _numInput(hy, v => { comp.halfExtents.y = v; }, 0.01));
-        _field('Half Z', _numInput(hz, v => { comp.halfExtents.z = v; }, 0.01));
-        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Box Trigger', v => { comp.isTrigger = v; }));
-        _field('Friction',     _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
-        _field('Restitution',  _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
+        _field('Half Extents', _vec3Input(hx, hy, hz, (x, y, z) => {
+          comp.halfExtents.x = x;
+          comp.halfExtents.y = y;
+          comp.halfExtents.z = z;
+        }, 0.05), 'Half sizes in world units; same unit conventions as object transforms.');
+        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Box Trigger', v => { comp.isTrigger = v; }),
+          'Collider acts as a sensor and does not generate physical contacts.');
+        _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
+          'Coefficient of friction: 0 = slippery, 1 = rough.');
+        _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
+          'Bounciness: 0 = no bounce, 1 = perfect bounce.');
+        _field('Auto Fit', _actionButton('Auto Fit', () => {
+          const bbox = new THREE.Box3().setFromObject(obj);
+          const size = bbox.getSize(new THREE.Vector3());
+          comp.halfExtents = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
+          _rebuildPanel();
+          _dispatchPhysicsEditUpdate();
+        }), 'Fit the collider to object bounds using world-space size.');
         break;
       }
       case 'Sphere Collider':
-      case 'Sphere Trigger':
-        _field('Radius',      _numInput(comp.radius      ?? 0.5, v => { comp.radius      = v; }, 0.01));
-        _field('Is Trigger',  _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }));
-        _field('Friction',    _numInput(comp.friction    ?? 0.5, v => { comp.friction    = v; }, 0.01));
-        _field('Restitution', _numInput(comp.restitution ?? 0,   v => { comp.restitution = v; }, 0.01));
+      case 'Sphere Trigger': {
+        _field('Radius', _numInput(comp.radius ?? 0.5, v => { comp.radius = v; }, 0.01, 3, 0, Infinity),
+          'Collider radius in world units; matches object transform units.');
+        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }),
+          'Collider acts as a sensor and does not generate physical contacts.');
+        _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
+          'Coefficient of friction: 0 = slippery, 1 = rough.');
+        _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
+          'Bounciness: 0 = no bounce, 1 = perfect bounce.');
+        _field('Auto Fit', _actionButton('Auto Fit', () => {
+          const sphere = new THREE.Sphere();
+          const bbox = new THREE.Box3().setFromObject(obj);
+          bbox.getBoundingSphere(sphere);
+          comp.radius = sphere.radius;
+          _rebuildPanel();
+          _dispatchPhysicsEditUpdate();
+        }), 'Fit the radius to object bounds in world space.');
         break;
-
+      }
       case 'Capsule Collider':
-      case 'Capsule Trigger':
-        _field('Radius',      _numInput(comp.radius      ?? 0.25, v => { comp.radius      = v; }, 0.01));
-        _field('Half Height', _numInput(comp.halfHeight   ?? 0.5,  v => { comp.halfHeight  = v; }, 0.01));
-        _field('Is Trigger',  _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }));
+      case 'Capsule Trigger': {
+        _field('Radius', _numInput(comp.radius ?? 0.25, v => { comp.radius = v; }, 0.01, 3, 0, Infinity),
+          'Capsule radius in world units.');
+        _field('Half Height', _numInput(comp.halfHeight ?? 0.5, v => { comp.halfHeight = v; }, 0.01, 3, 0, Infinity),
+          'Straight segment half-height, excluding the rounded ends.');
+        _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }),
+          'Collider acts as a sensor and does not generate physical contacts.');
+        _field('Auto Fit', _actionButton('Auto Fit', () => {
+          const bbox = new THREE.Box3().setFromObject(obj);
+          const size = bbox.getSize(new THREE.Vector3());
+          const radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
+          const halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
+          comp.radius = radius;
+          comp.halfHeight = halfHeight;
+          _rebuildPanel();
+          _dispatchPhysicsEditUpdate();
+        }), 'Fit the capsule to object bounds in world space.');
         break;
+      }
 
       case 'Mesh Collider':
       case 'Mesh Trigger':

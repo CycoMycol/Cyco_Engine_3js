@@ -19,6 +19,10 @@ export class LeftToolbarPanel extends BasePanel {
     this._toolBtns    = {};
     this._viewBtns    = {};
     this._floatBtn    = null;
+    this._physicsEdit = false;
+    this._physicsEditBtn = null;
+    this._onPhysicsEditMode = this._onPhysicsEditMode.bind(this);
+    window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
   }
 
   // ── Abstract getters ────────────────────────────────────────────────────────
@@ -72,6 +76,12 @@ export class LeftToolbarPanel extends BasePanel {
     transformBtn.dataset.tool = 'transform';
     this._toolBtns['transform'] = transformBtn;
     bar.appendChild(transformBtn);
+
+    this._physicsEditBtn = _toolBtn(_toolIcon('editCollider'), 'Edit Collider', () => {
+      window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: !this._physicsEdit } }));
+    });
+    this._physicsEditBtn.dataset.tool = 'editCollider';
+    bar.appendChild(this._physicsEditBtn);
 
     bar.appendChild(_toolSep());
 
@@ -149,12 +159,22 @@ export class LeftToolbarPanel extends BasePanel {
       tb.innerHTML = _toolIcon(this._lastTransformTool);
       tb.title     = _toolTip(this._lastTransformTool);
     }
+    if (this._physicsEditBtn) {
+      this._physicsEditBtn.classList.toggle('active', this._physicsEdit);
+    }
   }
 
   _refreshViewBtns() {
     Object.entries(this._viewBtns).forEach(([id, btn]) => {
       btn.classList.toggle('active', id === this._viewMode);
     });
+  }
+
+  _onPhysicsEditMode(event) {
+    this._physicsEdit = !!event.detail?.enabled;
+    if (this._physicsEditBtn) {
+      this._physicsEditBtn.classList.toggle('active', this._physicsEdit);
+    }
   }
 
   // ── Header actions (drag handle) ────────────────────────────────────────────
@@ -305,6 +325,11 @@ function _toolIcon(id) {
       <path d="M12.5 2.5H17.5V7.5L15.5 5.5 10.5 10.5 9.5 9.5 14.5 4.5Z"/>
       <path d="M7.5 17.5H2.5V12.5L4.5 14.5 9.5 9.5 10.5 10.5 5.5 15.5Z"/>
     </svg>`;
+    case 'editCollider': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 14v1.5A1.5 1.5 0 0 0 6.5 17H14"/>
+      <path d="M14 3.5a1.5 1.5 0 0 1 2.12 0l.38.38a1.5 1.5 0 0 1 0 2.12L8.5 14.5 5 15l.5-3.5L14 3.5Z"/>
+      <path d="M7 13l3-3"/>
+    </svg>`;
     case 'rect': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-dasharray="3 2">
       <rect x="3.5" y="3.5" width="13" height="13" rx="1"/>
       <circle cx="3.5" cy="3.5" r="1.8" fill="currentColor" stroke="none"/>
@@ -345,6 +370,7 @@ function _toolTip(id) {
     case 'translate': return 'Translate  W';
     case 'rotate':    return 'Rotate  E';
     case 'scale':     return 'Scale  R';
+    case 'editCollider': return 'Edit Collider';
     default:          return '';
   }
 }

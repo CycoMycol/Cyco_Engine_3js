@@ -59,9 +59,11 @@ export class CenterPanel extends BasePanel {
     this._onHistoryChange     = this._onHistoryChange.bind(this);
     this._onRuntimeState      = this._onRuntimeState.bind(this);
     this._onEditorCamChanged  = this._onEditorCamChanged.bind(this);
+    this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
     window.addEventListener('cyco-history-change',        this._onHistoryChange);
     window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
+    window.addEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
   }
 
   _buildContent() {
@@ -397,6 +399,10 @@ export class CenterPanel extends BasePanel {
     this._renderMode = mode;
     this._renderHandle.refresh();
     window.dispatchEvent(new CustomEvent('cyco-vp-rendermode', { detail: { mode } }));
+  }
+
+  _onPhysicsEditMode(event) {
+    this._physicsEdit = !!event.detail?.enabled;
   }
 
   _toggleSkyWireframe(enabled) {

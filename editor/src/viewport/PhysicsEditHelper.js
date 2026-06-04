@@ -48,16 +48,22 @@ export class PhysicsEditHelper {
     this._onEditMode    = this._onEditMode.bind(this);
     this._onRuntimeState = this._onRuntimeState.bind(this);
     this._onSceneSwitch = this._onSceneSwitch.bind(this);
+    this._onSceneDirty  = this._onSceneDirty.bind(this);
+    this._onEditUpdate  = this._onEditUpdate.bind(this);
 
     window.addEventListener('cyco-physics-edit-mode', this._onEditMode);
     window.addEventListener('cyco-runtime-state',     this._onRuntimeState);
     window.addEventListener('cyco-scene-switch',      this._onSceneSwitch);
+    window.addEventListener('cyco-scene-dirty',       this._onSceneDirty);
+    window.addEventListener('cyco-physics-edit-update',this._onEditUpdate);
   }
 
   dispose() {
     window.removeEventListener('cyco-physics-edit-mode', this._onEditMode);
     window.removeEventListener('cyco-runtime-state',     this._onRuntimeState);
     window.removeEventListener('cyco-scene-switch',      this._onSceneSwitch);
+    window.removeEventListener('cyco-scene-dirty',       this._onSceneDirty);
+    window.removeEventListener('cyco-physics-edit-update',this._onEditUpdate);
     this._clearAll();
   }
 
@@ -84,6 +90,14 @@ export class PhysicsEditHelper {
   }
 
   _onSceneSwitch() {
+    if (this._enabled && !this._playing) this._rebuild();
+  }
+
+  _onSceneDirty() {
+    if (this._enabled && !this._playing) this._rebuild();
+  }
+
+  _onEditUpdate() {
     if (this._enabled && !this._playing) this._rebuild();
   }
 

@@ -70,6 +70,8 @@ The play button (`CenterPanel._playBtn`) is already wired — it dispatches `cyc
 The `CenterPanel._physicsEdit` checkbox currently sets a local bool and does nothing else.
 
 8. Update `CenterPanel.js` checkbox handler to dispatch `cyco-physics-edit-mode { enabled: v }`
+8b. Add an `Edit Collider` icon button to `LeftToolbarPanel.js` between the transform button and the 2D/3D view buttons. Clicking it toggles the same `cyco-physics-edit-mode` state and keeps the toolbar button active while collider edit mode is enabled.
+8c. Ensure physics edit mode is an exclusive editor mode: normal object transform editing is suspended while collider edit mode is active and the gizmo uses a distinct collider-edit color/style.
 9. Create `editor/src/viewport/PhysicsEditHelper.js`:
    - Listens to `cyco-physics-edit-mode`, `cyco-hierarchy-add`, `cyco-hierarchy-remove`, `cyco-scene-dirty`
    - Enabled: adds Three.js helper overlays per physics component — color-coded: blue = static, green = dynamic, orange = trigger
@@ -77,6 +79,18 @@ The `CenterPanel._physicsEdit` checkbox currently sets a local bool and does not
    - Works purely from Three.js geometry — no Rapier required
    - `update(object3d)` — refreshes helper for a single object
 10. Instantiate `PhysicsEditHelper` in `ViewportEngine.js`
+
+---
+
+## Phase 2c: Collider UI + Measurement Alignment
+
+11. Update all collider component UIs in `ObjectProperties.js` to use the editor's modern property controls (`propUtils.slider()`, `propUtils.numInput()`, `propUtils.vec3()` with drag scrub handles) so the collider inspector matches the rest of the editor.
+12. Ensure collider dimensions use the same measurement conventions as object `position`, `rotation`, and `scale` values, so collider sizing aligns with world/grid units.
+13. Add tooltips or inline guidance for physics fields such as `Friction` and `Restitution`.
+14. Add an `Auto Fit` action for `Box Collider`, `Sphere Collider`, and `Capsule Collider` that reads world-space object bounds and updates collider dimensions accordingly.
+15. Dispatch a `cyco-physics-edit-update` event after collider property changes so overlay helpers refresh immediately while edit mode is active.
+
+---
 
 ---
 
