@@ -360,7 +360,7 @@ export class ObjectProperties {
     wrapper.appendChild(header);
 
     // ── Component-specific fields ─────────────────────────────────────
-    this._buildComponentFields(comp, body);
+    this._buildComponentFields(comp, body, obj);
     wrapper.appendChild(body);
 
     return wrapper;
@@ -368,8 +368,11 @@ export class ObjectProperties {
 
   /**
    * Build editable fields for a specific component type.
+   * @param {object} comp
+   * @param {HTMLElement} body
+   * @param {THREE.Object3D} obj  The object this component is attached to.
    */
-  _buildComponentFields(comp, body) {
+  _buildComponentFields(comp, body, obj) {
     const _dispatchPhysicsEditUpdate = () => {
       window.dispatchEvent(new CustomEvent('cyco-physics-edit-update', { detail: { object: this.object, component: comp } }));
     };
@@ -426,8 +429,10 @@ export class ObjectProperties {
     };
 
     const _vec3Input = (x, y, z, onChange, scrubSpeed = 0.1) => {
+      // Keep a live triplet so successive edits read the latest value of every axis
+      // (avoids the stale-closure bug that otherwise overwrites sibling axis values).
+      const values = [x, y, z];
       const control = vec3((axis, val) => {
-        const values = [x, y, z];
         values[axis] = val;
         onChange(values[0], values[1], values[2]);
         _dispatchPhysicsEditUpdate();
