@@ -478,8 +478,7 @@ export class ObjectProperties {
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          // Compute bounding box in world space and fit collider
-          obj.geometry.computeBoundingBox();
+          obj.updateMatrixWorld(true);
           const bbox = new THREE.Box3().setFromObject(obj);
           const size = bbox.getSize(new THREE.Vector3());
           comp.halfExtents = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
@@ -499,10 +498,9 @@ export class ObjectProperties {
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          // Compute bounding sphere in world space and fit collider
-          obj.geometry.computeBoundingSphere();
-          const sphere = new THREE.Sphere();
+          obj.updateMatrixWorld(true);
           const bbox = new THREE.Box3().setFromObject(obj);
+          const sphere = new THREE.Sphere();
           bbox.getBoundingSphere(sphere);
           comp.radius = sphere.radius;
           _rebuildPanel();
@@ -519,8 +517,7 @@ export class ObjectProperties {
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          // Compute bounding box in world space and fit collider
-          obj.geometry.computeBoundingBox();
+          obj.updateMatrixWorld(true);
           const bbox = new THREE.Box3().setFromObject(obj);
           const size = bbox.getSize(new THREE.Vector3());
           const radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);

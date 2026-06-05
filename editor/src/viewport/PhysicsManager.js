@@ -703,16 +703,15 @@ export class PhysicsManager {
           let hx = comp.halfExtents?.x ?? 0.5;
           let hy = comp.halfExtents?.y ?? 0.5;
           let hz = comp.halfExtents?.z ?? 0.5;
-          // Always compute from geometry if available (handles scaled objects correctly)
-          if (obj.geometry) {
-            obj.geometry.computeBoundingBox();
-            const bb = obj.geometry.boundingBox;
-            if (bb) {
-              const ws = new THREE.Vector3();
-              obj.getWorldScale(ws);
-              hx = (bb.max.x - bb.min.x) * 0.5 * Math.abs(ws.x);
-              hy = (bb.max.y - bb.min.y) * 0.5 * Math.abs(ws.y);
-              hz = (bb.max.z - bb.min.z) * 0.5 * Math.abs(ws.z);
+          // Compute from object bounds only if not already set (handles scaled objects correctly)
+          if (!comp.halfExtents) {
+            obj.updateMatrixWorld(true);
+            const bbox = new THREE.Box3().setFromObject(obj);
+            if (!bbox.isEmpty()) {
+              const size = bbox.getSize(new THREE.Vector3());
+              hx = size.x * 0.5;
+              hy = size.y * 0.5;
+              hz = size.z * 0.5;
             }
           }
           desc = this._mode === '2d'
@@ -723,14 +722,14 @@ export class PhysicsManager {
         case 'Sphere Collider':
         case 'Sphere Trigger': {
           let r = comp.radius ?? 0.5;
-          // Always compute from geometry if available (handles scaled objects correctly)
-          if (obj.geometry) {
-            obj.geometry.computeBoundingSphere();
-            const bs = obj.geometry.boundingSphere;
-            if (bs) {
-              const ws = new THREE.Vector3();
-              obj.getWorldScale(ws);
-              r = bs.radius * Math.max(Math.abs(ws.x), Math.abs(ws.y), Math.abs(ws.z));
+          // Compute from object bounds only if not already set (handles scaled objects correctly)
+          if (comp.radius == null) {
+            obj.updateMatrixWorld(true);
+            const bbox = new THREE.Box3().setFromObject(obj);
+            if (!bbox.isEmpty()) {
+              const sphere = new THREE.Sphere();
+              bbox.getBoundingSphere(sphere);
+              r = sphere.radius;
             }
           }
           desc = R.ColliderDesc.ball(r);
@@ -740,18 +739,18 @@ export class PhysicsManager {
         case 'Capsule Trigger': {
           let radius = comp.radius ?? 0.25;
           let halfHeight = comp.halfHeight ?? 0.5;
-          // Always compute from geometry if available (handles scaled objects correctly)
-          if (obj.geometry) {
-            obj.geometry.computeBoundingBox();
-            const bb = obj.geometry.boundingBox;
-            if (bb) {
-              const ws = new THREE.Vector3();
-              obj.getWorldScale(ws);
-              const size = new THREE.Vector3();
-              size.set(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
-              size.multiply(ws);
-              radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
-              halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
+          // Compute from object bounds only if not already set (handles scaled objects correctly)
+          if (comp.radius == null || comp.halfHeight == null) {
+            obj.updateMatrixWorld(true);
+            const bbox = new THREE.Box3().setFromObject(obj);
+            if (!bbox.isEmpty()) {
+              const size = bbox.getSize(new THREE.Vector3());
+              if (comp.radius == null) {
+                radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
+              }
+              if (comp.halfHeight == null) {
+                halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
+              }
             }
           }
           desc = R.ColliderDesc.capsule(halfHeight, radius);
@@ -761,7 +760,22 @@ export class PhysicsManager {
         case 'Mesh Trigger': {
           if (this._mode === '2d') { console.warn('[PhysicsManager] Mesh Collider unsupported in 2D.'); return null; }
           if (!obj.geometry) { console.warn('[PhysicsManager] Mesh Collider: no geometry on', obj.name || obj.uuid); return null; }
-          const verts = new Float32Array(obj.geometry.attributes.position.array);
+
+          const srcPositions = obj.geometry.attributes.position.array;
+          const verts = new Float32Array(srcPositions.length);
+          verts.set(srcPositions);
+
+          const ws = new THREE.Vector3();
+          obj.getWorldScale(ws);
+          const sx = Math.abs(ws.x), sy = Math.abs(ws.y), sz = Math.abs(ws.z);
+          if (sx !== 1 || sy !== 1 || sz !== 1) {
+            for (let i = 0; i < verts.length; i += 3) {
+              verts[i]   *= sx;
+              verts[i+1] *= sy;
+              verts[i+2] *= sz;
+            }
+          }
+
           if (comp.mode === 'trimesh') {
             if (!obj.geometry.index) { console.warn('[PhysicsManager] Trimesh requires indexed geometry.'); return null; }
             desc = R.ColliderDesc.trimesh(verts, new Uint32Array(obj.geometry.index.array));

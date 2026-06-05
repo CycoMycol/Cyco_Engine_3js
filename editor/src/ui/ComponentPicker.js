@@ -291,7 +291,13 @@ export const ComponentPicker = {
       return result;
     }
 
+    // Ensure world matrix is up to date
+    object.updateMatrixWorld(true);
+
+    // Compute the world-space bounds for the object. This handles scale, rotation,
+    // hierarchy, and any children that contribute to the shape.
     const bbox = new THREE.Box3().setFromObject(object);
+
     if (!bbox.isEmpty()) {
       const size = new THREE.Vector3();
       bbox.getSize(size);
@@ -306,12 +312,15 @@ export const ComponentPicker = {
           };
           break;
         case 'Sphere Collider':
-        case 'Sphere Trigger':
-          result.radius = Math.max(maxSize * 0.5, 0.05);
+        case 'Sphere Trigger': {
+          const sphere = new THREE.Sphere();
+          bbox.getBoundingSphere(sphere);
+          result.radius = Math.max(sphere.radius, 0.05);
           break;
+        }
         case 'Capsule Collider':
         case 'Capsule Trigger': {
-          const radius = Math.max(Math.min(size.x, size.z) * 0.25, 0.05);
+          const radius = Math.max(Math.min(size.x, size.z) * 0.5, 0.05);
           result.radius = radius;
           result.halfHeight = Math.max(size.y * 0.5 - radius, 0.05);
           break;

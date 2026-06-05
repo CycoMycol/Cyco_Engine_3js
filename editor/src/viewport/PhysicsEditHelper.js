@@ -175,6 +175,13 @@ export class PhysicsEditHelper {
             hz = (bb.max.z - bb.min.z) * 0.5;
           }
         }
+
+        const ws = new THREE.Vector3();
+        obj.getWorldScale(ws);
+        hx = Math.max(hx / Math.max(Math.abs(ws.x), 1e-6), 0.05);
+        hy = Math.max(hy / Math.max(Math.abs(ws.y), 1e-6), 0.05);
+        hz = Math.max(hz / Math.max(Math.abs(ws.z), 1e-6), 0.05);
+
         geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2));
         break;
       }
@@ -189,7 +196,12 @@ export class PhysicsEditHelper {
             r = Math.max(extents.x, extents.y, extents.z) * 0.5;
           }
         }
-        geo = new THREE.EdgesGeometry(new THREE.SphereGeometry(Math.max(r, 0.05), 12, 8));
+
+        const ws = new THREE.Vector3();
+        obj.getWorldScale(ws);
+        const inv = 1 / Math.max(Math.abs(ws.x), Math.abs(ws.y), Math.abs(ws.z), 1e-6);
+        const localRadius = Math.max(r * inv, 0.05);
+        geo = new THREE.EdgesGeometry(new THREE.SphereGeometry(localRadius, 12, 8));
         break;
       }
 
@@ -202,7 +214,14 @@ export class PhysicsEditHelper {
             hh = comp.halfHeight ?? Math.max(extents.y * 0.5 - r, 0.05);
           }
         }
-        geo = new THREE.EdgesGeometry(new THREE.CapsuleGeometry(Math.max(r, 0.05), Math.max(hh * 2, 0.1), 4, 8));
+
+        const ws = new THREE.Vector3();
+        obj.getWorldScale(ws);
+        const invXZ = 1 / Math.max(Math.abs(ws.x), Math.abs(ws.z), 1e-6);
+        const invY = 1 / Math.max(Math.abs(ws.y), 1e-6);
+        const localRadius = Math.max(r * invXZ, 0.05);
+        const localHalfHeight = Math.max(hh * invY, 0.05);
+        geo = new THREE.EdgesGeometry(new THREE.CapsuleGeometry(Math.max(localRadius, 0.05), Math.max(localHalfHeight * 2, 0.1), 4, 8));
         break;
       }
 
