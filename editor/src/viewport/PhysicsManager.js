@@ -700,11 +700,11 @@ export class PhysicsManager {
       switch (comp.type) {
         case 'Box Collider':
         case 'Box Trigger': {
-          let hx = comp.halfExtents?.x ?? 0.5;
-          let hy = comp.halfExtents?.y ?? 0.5;
-          let hz = comp.halfExtents?.z ?? 0.5;
+          let hx = comp.scale?.x ?? comp.halfExtents?.x ?? 0.5;
+          let hy = comp.scale?.y ?? comp.halfExtents?.y ?? 0.5;
+          let hz = comp.scale?.z ?? comp.halfExtents?.z ?? 0.5;
           // Compute from object bounds only if not already set (handles scaled objects correctly)
-          if (!comp.halfExtents) {
+          if (!comp.scale && !comp.halfExtents) {
             obj.updateMatrixWorld(true);
             const bbox = new THREE.Box3().setFromObject(obj);
             if (!bbox.isEmpty()) {
@@ -721,9 +721,11 @@ export class PhysicsManager {
         }
         case 'Sphere Collider':
         case 'Sphere Trigger': {
-          let r = comp.radius ?? 0.5;
+          let r = comp.scale
+            ? ((comp.scale.x ?? 0.5) + (comp.scale.y ?? 0.5) + (comp.scale.z ?? 0.5)) / 3
+            : comp.radius ?? 0.5;
           // Compute from object bounds only if not already set (handles scaled objects correctly)
-          if (comp.radius == null) {
+          if (!comp.scale && comp.radius == null) {
             obj.updateMatrixWorld(true);
             const bbox = new THREE.Box3().setFromObject(obj);
             if (!bbox.isEmpty()) {
@@ -737,18 +739,18 @@ export class PhysicsManager {
         }
         case 'Capsule Collider':
         case 'Capsule Trigger': {
-          let radius = comp.radius ?? 0.25;
-          let halfHeight = comp.halfHeight ?? 0.5;
+          let radius = comp.scale?.x ?? comp.radius ?? 0.25;
+          let halfHeight = comp.scale?.y ?? comp.halfHeight ?? 0.5;
           // Compute from object bounds only if not already set (handles scaled objects correctly)
-          if (comp.radius == null || comp.halfHeight == null) {
+          if ((!comp.scale && comp.radius == null) || (!comp.scale && comp.halfHeight == null)) {
             obj.updateMatrixWorld(true);
             const bbox = new THREE.Box3().setFromObject(obj);
             if (!bbox.isEmpty()) {
               const size = bbox.getSize(new THREE.Vector3());
-              if (comp.radius == null) {
+              if (!comp.scale && comp.radius == null) {
                 radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
               }
-              if (comp.halfHeight == null) {
+              if (!comp.scale && comp.halfHeight == null) {
                 halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
               }
             }
@@ -804,10 +806,19 @@ export class PhysicsManager {
     if (typeof comp.restitution === 'number')  desc.setRestitution(comp.restitution);
     if (typeof comp.friction    === 'number')  desc.setFriction(comp.friction);
     if (typeof comp.density     === 'number')  desc.setDensity(comp.density);
-    if (comp.offset) {
+    const position = comp.position || comp.offset;
+    if (position) {
       this._mode === '2d'
-        ? desc.setTranslation(comp.offset.x ?? 0, comp.offset.y ?? 0)
-        : desc.setTranslation(comp.offset.x ?? 0, comp.offset.y ?? 0, comp.offset.z ?? 0);
+        ? desc.setTranslation(position.x ?? 0, position.y ?? 0)
+        : desc.setTranslation(position.x ?? 0, position.y ?? 0, position.z ?? 0);
+    }
+    if (comp.rotation && this._mode !== '2d') {
+      desc.setRotation({
+        x: comp.rotation.x ?? 0,
+        y: comp.rotation.y ?? 0,
+        z: comp.rotation.z ?? 0,
+        w: comp.rotation.w ?? 1,
+      });
     }
 
     return this._world.createCollider(desc, body);

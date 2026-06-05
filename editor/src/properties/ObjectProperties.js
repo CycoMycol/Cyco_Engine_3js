@@ -462,15 +462,48 @@ export class ObjectProperties {
 
       case 'Box Collider':
       case 'Box Trigger': {
-        const hx = comp.halfExtents?.x ?? 0.5;
-        const hy = comp.halfExtents?.y ?? 0.5;
-        const hz = comp.halfExtents?.z ?? 0.5;
-        if (!comp.halfExtents) comp.halfExtents = { x: hx, y: hy, z: hz };
-        _field('Scale', _vec3Input(hx, hy, hz, (x, y, z) => {
-          comp.halfExtents.x = x;
-          comp.halfExtents.y = y;
-          comp.halfExtents.z = z;
-        }, 0.05), 'Half sizes in world units; same unit conventions as object transforms.');
+        const position = comp.position || comp.offset || { x: 0, y: 0, z: 0 };
+        const scale = comp.scale || {
+          x: comp.halfExtents?.x ?? 0.5,
+          y: comp.halfExtents?.y ?? 0.5,
+          z: comp.halfExtents?.z ?? 0.5,
+        };
+        if (!comp.scale) comp.scale = { ...scale };
+        if (!comp.position) comp.position = { ...position };
+        if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
+        const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
+          comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
+        ), 'XYZ');
+
+        _field('Scale', _vec3Input(scale.x, scale.y, scale.z, (x, y, z) => {
+          comp.scale.x = x;
+          comp.scale.y = y;
+          comp.scale.z = z;
+          comp.halfExtents = { x, y, z };
+        }, 0.05), 'Collider size in world space; uses the local collider transform scale.');
+        _field('Position', _vec3Input(position.x, position.y, position.z, (x, y, z) => {
+          comp.position.x = x;
+          comp.position.y = y;
+          comp.position.z = z;
+          comp.offset = { x, y, z };
+        }, 0.01), 'Collider local position relative to the object pivot.');
+        _field('Rotation', _vec3Input(
+          THREE.MathUtils.radToDeg(euler.x),
+          THREE.MathUtils.radToDeg(euler.y),
+          THREE.MathUtils.radToDeg(euler.z),
+          (x, y, z) => {
+            const e = new THREE.Euler(
+              THREE.MathUtils.degToRad(x),
+              THREE.MathUtils.degToRad(y),
+              THREE.MathUtils.degToRad(z),
+              'XYZ'
+            );
+            const q = new THREE.Quaternion().setFromEuler(e);
+            comp.rotation.x = q.x;
+            comp.rotation.y = q.y;
+            comp.rotation.z = q.z;
+            comp.rotation.w = q.w;
+          }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Box Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
         _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
@@ -481,7 +514,8 @@ export class ObjectProperties {
           obj.updateMatrixWorld(true);
           const bbox = new THREE.Box3().setFromObject(obj);
           const size = bbox.getSize(new THREE.Vector3());
-          comp.halfExtents = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
+          comp.scale = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
+          comp.halfExtents = { ...comp.scale };
           _rebuildPanel();
           _dispatchPhysicsEditUpdate();
         }), 'Fit the collider to object bounds using world-space size.');
@@ -489,8 +523,43 @@ export class ObjectProperties {
       }
       case 'Sphere Collider':
       case 'Sphere Trigger': {
-        _field('Radius', _numInput(comp.radius ?? 0.5, v => { comp.radius = v; }, 0.01, 2, 0, Infinity),
+        const position = comp.position || comp.offset || { x: 0, y: 0, z: 0 };
+        const radius = comp.scale?.x ?? comp.radius ?? 0.5;
+        if (!comp.scale) comp.scale = { x: radius, y: radius, z: radius };
+        if (!comp.position) comp.position = { ...position };
+        if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
+        const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
+          comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
+        ), 'XYZ');
+
+        _field('Radius', _numInput(radius, v => {
+          comp.radius = v;
+          comp.scale = { x: v, y: v, z: v };
+        }, 0.01, 2, 0, Infinity),
           'Collider radius in world units; matches object transform units.');
+        _field('Position', _vec3Input(position.x, position.y, position.z, (x, y, z) => {
+          comp.position.x = x;
+          comp.position.y = y;
+          comp.position.z = z;
+          comp.offset = { x, y, z };
+        }, 0.01), 'Collider local position relative to the object pivot.');
+        _field('Rotation', _vec3Input(
+          THREE.MathUtils.radToDeg(euler.x),
+          THREE.MathUtils.radToDeg(euler.y),
+          THREE.MathUtils.radToDeg(euler.z),
+          (x, y, z) => {
+            const e = new THREE.Euler(
+              THREE.MathUtils.degToRad(x),
+              THREE.MathUtils.degToRad(y),
+              THREE.MathUtils.degToRad(z),
+              'XYZ'
+            );
+            const q = new THREE.Quaternion().setFromEuler(e);
+            comp.rotation.x = q.x;
+            comp.rotation.y = q.y;
+            comp.rotation.z = q.z;
+            comp.rotation.w = q.w;
+          }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
         _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
@@ -503,6 +572,7 @@ export class ObjectProperties {
           const sphere = new THREE.Sphere();
           bbox.getBoundingSphere(sphere);
           comp.radius = sphere.radius;
+          comp.scale = { x: sphere.radius, y: sphere.radius, z: sphere.radius };
           _rebuildPanel();
           _dispatchPhysicsEditUpdate();
         }), 'Fit the radius to object bounds in world space.');
@@ -510,10 +580,53 @@ export class ObjectProperties {
       }
       case 'Capsule Collider':
       case 'Capsule Trigger': {
-        _field('Radius', _numInput(comp.radius ?? 0.25, v => { comp.radius = v; }, 0.01, 2, 0, Infinity),
+        const position = comp.position || comp.offset || { x: 0, y: 0, z: 0 };
+        const scale = comp.scale || {
+          x: comp.radius ?? 0.25,
+          y: comp.halfHeight ?? 0.5,
+          z: comp.radius ?? 0.25,
+        };
+        if (!comp.scale) comp.scale = { ...scale };
+        if (!comp.position) comp.position = { ...position };
+        if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
+        const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
+          comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
+        ), 'XYZ');
+
+        _field('Radius', _numInput(scale.x, v => {
+          comp.radius = v;
+          comp.scale.x = v;
+          comp.scale.z = v;
+        }, 0.01, 2, 0, Infinity),
           'Capsule radius in world units.');
-        _field('Half Height', _numInput(comp.halfHeight ?? 0.5, v => { comp.halfHeight = v; }, 0.01, 2, 0, Infinity),
+        _field('Half Height', _numInput(scale.y, v => {
+          comp.halfHeight = v;
+          comp.scale.y = v;
+        }, 0.01, 2, 0, Infinity),
           'Straight segment half-height, excluding the rounded ends.');
+        _field('Position', _vec3Input(position.x, position.y, position.z, (x, y, z) => {
+          comp.position.x = x;
+          comp.position.y = y;
+          comp.position.z = z;
+          comp.offset = { x, y, z };
+        }, 0.01), 'Collider local position relative to the object pivot.');
+        _field('Rotation', _vec3Input(
+          THREE.MathUtils.radToDeg(euler.x),
+          THREE.MathUtils.radToDeg(euler.y),
+          THREE.MathUtils.radToDeg(euler.z),
+          (x, y, z) => {
+            const e = new THREE.Euler(
+              THREE.MathUtils.degToRad(x),
+              THREE.MathUtils.degToRad(y),
+              THREE.MathUtils.degToRad(z),
+              'XYZ'
+            );
+            const q = new THREE.Quaternion().setFromEuler(e);
+            comp.rotation.x = q.x;
+            comp.rotation.y = q.y;
+            comp.rotation.z = q.z;
+            comp.rotation.w = q.w;
+          }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
@@ -524,6 +637,7 @@ export class ObjectProperties {
           const halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
           comp.radius = radius;
           comp.halfHeight = halfHeight;
+          comp.scale = { x: radius, y: halfHeight, z: radius };
           _rebuildPanel();
           _dispatchPhysicsEditUpdate();
         }), 'Fit the capsule to object bounds in world space.');

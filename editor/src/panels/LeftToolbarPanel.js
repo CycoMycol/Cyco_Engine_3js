@@ -13,14 +13,15 @@ import { BasePanel } from './BasePanel.js';
 export class LeftToolbarPanel extends BasePanel {
   constructor() {
     super();
-    this._activeTool       = 'select';
-    this._lastTransformTool = 'translate'; // what the cycle button currently shows
-    this._viewMode    = '3d';
-    this._toolBtns    = {};
-    this._viewBtns    = {};
-    this._floatBtn    = null;
-    this._physicsEdit = false;
-    this._physicsEditBtn = null;
+    this._activeTool        = 'select';
+    this._lastTransformTool = 'translate'; // what the cycle button currently shows for object mode
+    this._physicsEditTool   = 'translate'; // current collider gizmo submode when physics edit is active
+    this._viewMode          = '3d';
+    this._toolBtns          = {};
+    this._viewBtns          = {};
+    this._floatBtn          = null;
+    this._physicsEdit       = false;
+    this._physicsEditBtn    = null;
     this._onPhysicsEditMode = this._onPhysicsEditMode.bind(this);
     window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
   }
@@ -50,6 +51,9 @@ export class LeftToolbarPanel extends BasePanel {
 
     // Select tool
     const selectBtn = _toolBtn(_toolIcon('select'), _toolTip('select'), () => {
+      if (this._physicsEdit) {
+        window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
+      }
       this._activeTool = 'select';
       this._refreshToolBtns();
       window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: 'select' } }));
@@ -63,6 +67,15 @@ export class LeftToolbarPanel extends BasePanel {
     // First click while ALREADY active: cycle to the next tool.
     const CYCLE = ['translate', 'rotate', 'scale'];
     const transformBtn = _toolBtn(_toolIcon(this._lastTransformTool), _toolTip(this._lastTransformTool), () => {
+      if (this._physicsEdit) {
+        // Cycle the collider edit gizmo mode without switching to object transform.
+        const idx = CYCLE.indexOf(this._physicsEditTool);
+        this._physicsEditTool = CYCLE[(idx + 1) % CYCLE.length];
+        transformBtn.innerHTML = _toolIcon(this._physicsEditTool);
+        transformBtn.title = _toolTip(this._physicsEditTool);
+        window.dispatchEvent(new CustomEvent('cyco-physics-vp-tool', { detail: { mode: this._physicsEditTool } }));
+        return;
+      }
       if (this._activeTool === this._lastTransformTool) {
         // Already on this transform — cycle to next
         const idx = CYCLE.indexOf(this._lastTransformTool);
@@ -78,7 +91,12 @@ export class LeftToolbarPanel extends BasePanel {
     bar.appendChild(transformBtn);
 
     this._physicsEditBtn = _toolBtn(_toolIcon('editCollider'), 'Edit Collider', () => {
-      window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: !this._physicsEdit } }));
+      const enabling = !this._physicsEdit;
+      if (enabling) {
+        this._activeTool = 'editCollider';
+        this._physicsEditTool = 'translate';
+      }
+      window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: enabling } }));
     });
     this._physicsEditBtn.dataset.tool = 'editCollider';
     bar.appendChild(this._physicsEditBtn);
@@ -134,13 +152,19 @@ export class LeftToolbarPanel extends BasePanel {
     // Sync button state when tool changes arrive from other systems (keyboard, etc.)
     window.addEventListener('cyco-vp-tool', (e) => {
       const { mode } = e.detail ?? {};
-      if (['select', 'translate', 'rotate', 'scale'].includes(mode)) {
-        this._activeTool = mode;
-        if (['translate', 'rotate', 'scale'].includes(mode)) {
-          this._lastTransformTool = mode; // keep button showing the active transform
+      if (!['select', 'translate', 'rotate', 'scale'].includes(mode)) return;
+      if (this._physicsEdit) {
+        if (mode === 'select') {
+          window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
         }
         this._refreshToolBtns();
+        return;
       }
+      this._activeTool = mode;
+      if (['translate', 'rotate', 'scale'].includes(mode)) {
+        this._lastTransformTool = mode; // keep button showing the active transform
+      }
+      this._refreshToolBtns();
     });
 
     this._refreshToolBtns();
@@ -152,12 +176,13 @@ export class LeftToolbarPanel extends BasePanel {
     const CYCLE = ['translate', 'rotate', 'scale'];
     const onCycle = CYCLE.includes(this._activeTool);
     const sb = this._toolBtns['select'];
-    if (sb) sb.classList.toggle('active', this._activeTool === 'select');
+    if (sb) sb.classList.toggle('active', !this._physicsEdit && this._activeTool === 'select');
     const tb = this._toolBtns['transform'];
     if (tb) {
-      tb.classList.toggle('active', onCycle);
-      tb.innerHTML = _toolIcon(this._lastTransformTool);
-      tb.title     = _toolTip(this._lastTransformTool);
+      tb.classList.toggle('active', !this._physicsEdit && onCycle);
+      const currentTransform = this._physicsEdit ? this._physicsEditTool : this._lastTransformTool;
+      tb.innerHTML = _toolIcon(currentTransform);
+      tb.title     = _toolTip(currentTransform);
     }
     if (this._physicsEditBtn) {
       this._physicsEditBtn.classList.toggle('active', this._physicsEdit);
@@ -172,9 +197,15 @@ export class LeftToolbarPanel extends BasePanel {
 
   _onPhysicsEditMode(event) {
     this._physicsEdit = !!event.detail?.enabled;
+    if (this._physicsEdit) {
+      this._activeTool = 'editCollider';
+    } else if (this._activeTool === 'editCollider') {
+      this._activeTool = 'select';
+    }
     if (this._physicsEditBtn) {
       this._physicsEditBtn.classList.toggle('active', this._physicsEdit);
     }
+    this._refreshToolBtns();
   }
 
   // ── Header actions (drag handle) ────────────────────────────────────────────

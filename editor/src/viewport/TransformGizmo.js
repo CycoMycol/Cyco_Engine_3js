@@ -13,6 +13,7 @@
  *   cyco-select-node        { object }             — attach gizmo to selection
  *   cyco-deselect-all       {}                     — detach gizmo
  *   cyco-vp-tool            { mode }               — 'translate' | 'rotate' | 'scale'
+ *   cyco-physics-vp-tool    { mode }               — physics edit translate/rotate/scale (collider gizmo only)
  *   cyco-rvp-snap           { enabled, value }     — snap toggle + value
  *   cyco-rvp-world          { isWorld }            — world / local space toggle
  *   cyco-gizmo-size         { size }               — from Preferences
@@ -38,11 +39,14 @@ export class TransformGizmo {
     this._snapEnabled = false;
     this._snapValue   = 0.25;
     this._mode        = 'select'; // default: pointer/select, no gizmo shown
-    this._space       = 'world';
+    this._physicsEdit = false;
+    this._physicsEditMode = 'translate';
+    this._pendingPhysicsAttach = false;
 
     /** State snapshot before a drag begins (for TransformCommand undo). */
     this._matrixBefore = null;
     this._targetObject = null;
+    this._targetProxy  = null;
 
     this._onVpReady          = this._onVpReady.bind(this);
     this._onRendererChanged  = this._onRendererChanged.bind(this);
@@ -50,10 +54,13 @@ export class TransformGizmo {
     this._onSelectNode       = this._onSelectNode.bind(this);
     this._onDeselectAll      = this._onDeselectAll.bind(this);
     this._onTool             = this._onTool.bind(this);
+    this._onPhysicsTool      = this._onPhysicsTool.bind(this);
+    this._onPhysicsProxyReady = this._onPhysicsProxyReady.bind(this);
     this._onSnap             = this._onSnap.bind(this);
     this._onWorld            = this._onWorld.bind(this);
     this._onGizmoSize        = this._onGizmoSize.bind(this);
     this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
+    this._onControlChange    = this._onControlChange.bind(this);
     this._onVpTick           = this._onVpTick.bind(this);
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
@@ -67,6 +74,8 @@ export class TransformGizmo {
       if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
     });
     window.addEventListener('cyco-vp-tool',           this._onTool);
+    window.addEventListener('cyco-physics-vp-tool',   this._onPhysicsTool);
+    window.addEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.addEventListener('cyco-rvp-snap',          this._onSnap);
     window.addEventListener('cyco-rvp-world',         this._onWorld);
     window.addEventListener('cyco-vp-world',          this._onWorld);
@@ -133,16 +142,27 @@ export class TransformGizmo {
       this.selectionManager._gizmoDragging = !!event.value;
     });
 
+    this.controls.addEventListener('change', () => {
+      if (!this._physicsEdit) return;
+      // During collider edit, defer component sync until the drag completes.
+      // Rebuilding proxies while dragging breaks the active TransformControls target.
+    });
+
     // Record matrix before drag for undo
     this.controls.addEventListener('mouseDown', () => {
-      if (this._targetObject) {
-        this._matrixBefore = this._targetObject.matrix.clone();
+      const target = this.controls?.object ?? this._targetObject;
+      if (target) {
+        this._matrixBefore = target.matrix.clone();
       }
     });
 
     // Commit TransformCommand after drag completes
     this.controls.addEventListener('mouseUp', () => {
-      if (this._targetObject && this._matrixBefore) {
+      if (this._physicsEdit) {
+        this._updatePhysicsComponentFromProxy();
+      }
+
+      if (this._targetObject && this._matrixBefore && !this._physicsEdit) {
         const before = this._matrixBefore;
         const after  = this._targetObject.matrix.clone();
         const obj    = this._targetObject;
@@ -153,15 +173,31 @@ export class TransformGizmo {
             undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
           }
         }));
-        this._matrixBefore = null;
       }
+      this._matrixBefore = null;
     });
 
     // Make gizmo non-selectable (tag all descendants + add to nonSelectableSet)
     this._helper = this.controls.getHelper();
     this._helper.traverse(child => { child.userData._isGizmo = true; });
+
+    // Add a visible central gizmo marker so physics edit looks like a universal manipulator.
+    if (!this._helper.getObjectByName('__physics_edit_center_handle__')) {
+      const centerHandle = new THREE.Mesh(
+        new THREE.SphereGeometry(0.075, 12, 8),
+        new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.8, transparent: true })
+      );
+      centerHandle.name = '__physics_edit_center_handle__';
+      centerHandle.userData._isGizmo = true;
+      centerHandle.renderOrder = 999;
+      this._helper.add(centerHandle);
+    }
+
     this.selectionManager.addNonSelectable(this._helper);
     scene.add(this._helper);
+    if (!this._helper.parent) {
+      scene.add(this._helper);
+    }
   }
 
   // ─── Event handlers ───────────────────────────────────────────────────────
@@ -181,12 +217,100 @@ export class TransformGizmo {
     if (renderer) this._build(renderer);
   }
 
+  _onControlChange() {
+    if (!this._physicsEdit) return;
+    this._updatePhysicsComponentFromProxy();
+  }
+
+  _updatePhysicsComponentFromProxy() {
+    const proxy = this._targetProxy ?? this.controls?.object;
+    const comp = proxy?.userData?.physicsComponent;
+    if (!comp) return;
+
+    const pos = proxy.position;
+    comp.position = comp.position || { x: 0, y: 0, z: 0 };
+    comp.position.x = pos.x;
+    comp.position.y = pos.y;
+    comp.position.z = pos.z;
+    comp.offset = comp.offset || { x: 0, y: 0, z: 0 };
+    comp.offset.x = pos.x;
+    comp.offset.y = pos.y;
+    comp.offset.z = pos.z;
+
+    const quat = proxy.quaternion;
+    if (quat) {
+      comp.rotation = comp.rotation || { x: 0, y: 0, z: 0, w: 1 };
+      comp.rotation.x = quat.x;
+      comp.rotation.y = quat.y;
+      comp.rotation.z = quat.z;
+      comp.rotation.w = quat.w;
+    }
+
+    const localScale = proxy.scale;
+    const worldScale = new THREE.Vector3(localScale.x, localScale.y, localScale.z);
+    if (proxy.parent) {
+      const parentScale = new THREE.Vector3();
+      proxy.parent.getWorldScale(parentScale);
+      worldScale.multiply(parentScale);
+    }
+
+    switch (comp.type) {
+      case 'Box Collider':
+      case 'Box Trigger':
+        comp.scale = comp.scale || { x: 0.5, y: 0.5, z: 0.5 };
+        comp.scale.x = worldScale.x;
+        comp.scale.y = worldScale.y;
+        comp.scale.z = worldScale.z;
+        comp.halfExtents = comp.halfExtents || { x: worldScale.x, y: worldScale.y, z: worldScale.z };
+        comp.halfExtents.x = worldScale.x;
+        comp.halfExtents.y = worldScale.y;
+        comp.halfExtents.z = worldScale.z;
+        break;
+      case 'Sphere Collider':
+      case 'Sphere Trigger': {
+        const radius = (worldScale.x + worldScale.y + worldScale.z) / 3;
+        comp.scale = { x: radius, y: radius, z: radius };
+        comp.radius = radius;
+        break;
+      }
+      case 'Capsule Collider':
+      case 'Capsule Trigger': {
+        const radius = (worldScale.x + worldScale.z) * 0.5;
+        comp.scale = { x: radius, y: worldScale.y, z: radius };
+        comp.radius = radius;
+        comp.halfHeight = worldScale.y;
+        break;
+      }
+      default:
+        break;
+    }
+
+    window.dispatchEvent(new CustomEvent('cyco-physics-edit-update', {
+      detail: { object: this._targetObject, component: comp }
+    }));
+  }
+
   _onSelectNode(event) {
     const { object } = event.detail;
     if (!this.controls) return;
 
     if (object && !object.userData.cycoLocked) {
       this._targetObject = object;
+      if (this._physicsEdit) {
+        const proxy = object.userData?._physicsEditProxy;
+        if (proxy) {
+          this._targetProxy = proxy;
+          this.controls.attach(proxy);
+          this.controls.setMode(this._physicsEditMode);
+          this._pendingPhysicsAttach = false;
+          return;
+        }
+        this._pendingPhysicsAttach = true;
+        this.detach();
+        return;
+      }
+
+      this._targetProxy = null;
       if (this._mode !== 'select') {
         this.controls.attach(object);
       }
@@ -200,6 +324,15 @@ export class TransformGizmo {
   _onTool(event) {
     const { mode } = event.detail;
     if (!['translate', 'rotate', 'scale', 'select'].includes(mode)) return;
+    if (this._physicsEdit) {
+      if (mode === 'select') {
+        return;
+      }
+      this._physicsEditMode = mode;
+      this.controls?.setMode(mode);
+      return;
+    }
+
     this._mode = mode;
     if (mode === 'select') {
       // Hide the visual gizmo but keep _targetObject so re-enabling a transform
@@ -209,9 +342,18 @@ export class TransformGizmo {
       this.controls?.setMode(mode);
       // If an object is already selected, re-show the gizmo for it.
       if (this._targetObject) {
-        this.controls?.attach(this._targetObject);
+        this._targetProxy = null;
+        this.controls.attach(this._targetObject);
       }
     }
+  }
+
+  _onPhysicsTool(event) {
+    const { mode } = event.detail;
+    if (!['translate', 'rotate', 'scale'].includes(mode)) return;
+    if (!this._physicsEdit) return;
+    this._physicsEditMode = mode;
+    this.controls?.setMode(mode);
   }
 
   _onSnap(event) {
@@ -228,13 +370,28 @@ export class TransformGizmo {
 
   _onPhysicsEditMode(event) {
     const enabled = !!event.detail?.enabled;
+    this._physicsEdit = enabled;
     if (!this.controls) return;
     if (enabled) {
-      this.controls.detach();
-      this.controls.enabled = false;
-    } else {
       this.controls.enabled = true;
-      if (this._mode !== 'select' && this._targetObject) {
+      if (this._targetObject) {
+        const proxy = this._targetObject.userData?._physicsEditProxy;
+        if (proxy) {
+          this._targetProxy = proxy;
+          this.controls.attach(proxy);
+          this.controls.setMode(this._physicsEditMode);
+          this._pendingPhysicsAttach = false;
+          return;
+        }
+        this._pendingPhysicsAttach = true;
+        this.controls.detach();
+      }
+    } else {
+      this._pendingPhysicsAttach = false;
+      this._targetProxy = null;
+      if (this._mode === 'select') {
+        this.controls.detach();
+      } else if (this._targetObject) {
         this.controls.attach(this._targetObject);
       }
     }
@@ -242,6 +399,16 @@ export class TransformGizmo {
 
   _onGizmoSize(event) {
     if (this.controls) this.controls.size = event.detail.size ?? 1;
+  }
+
+  _onPhysicsProxyReady(event) {
+    if (!this._physicsEdit || !this._pendingPhysicsAttach) return;
+    const { object, proxy } = event.detail ?? {};
+    if (!object || !proxy || object !== this._targetObject) return;
+    this._targetProxy = proxy;
+    this.controls.attach(proxy);
+    this.controls.setMode(this._physicsEditMode);
+    this._pendingPhysicsAttach = false;
   }
 
   _onVpTick(event) {
@@ -283,10 +450,13 @@ export class TransformGizmo {
     window.removeEventListener('cyco-select-node',           this._onSelectNode);
     window.removeEventListener('cyco-deselect-all',          this._onDeselectAll);
     window.removeEventListener('cyco-vp-tool',               this._onTool);
+    window.removeEventListener('cyco-physics-vp-tool',       this._onPhysicsTool);
+    window.removeEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.removeEventListener('cyco-rvp-snap',              this._onSnap);
     window.removeEventListener('cyco-rvp-world',             this._onWorld);
     window.removeEventListener('cyco-vp-world',              this._onWorld);
-    window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);    window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
+    window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
+    window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
     if (this.controls) {
       this.engine.scene?.remove(this.controls);
       this.controls.dispose();
