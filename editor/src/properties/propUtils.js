@@ -156,14 +156,14 @@ export function vec3(onChange, scrubSpeed = 0.1) {
 
     const inp = document.createElement('input');
     inp.type       = 'number';
-    inp.step       = '0.001';
+    inp.step       = '0.01';
     inp.className  = 'ce-prop-num';
-    inp.value      = '0.000';
+    inp.value      = '0.00';
     inp._scrubbing = false;
     inp.addEventListener('change', () => onChange(i, parseFloat(inp.value) || 0));
 
     // Axis tag IS the scrub handle (drag X/Y/Z label to change value)
-    _attachScrub(tag, inp, scrubSpeed, 3);
+    _attachScrub(tag, inp, scrubSpeed, 2);
 
     item.appendChild(tag);
     item.appendChild(inp);
@@ -175,7 +175,7 @@ export function vec3(onChange, scrubSpeed = 0.1) {
     const vals = [x, y, z];
     for (let i = 0; i < 3; i++) {
       if (document.activeElement !== inputs[i] && !inputs[i]._scrubbing) {
-        inputs[i].value = vals[i].toFixed(3);
+        inputs[i].value = vals[i].toFixed(2);
       }
     }
   };

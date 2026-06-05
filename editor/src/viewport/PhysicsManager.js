@@ -703,7 +703,8 @@ export class PhysicsManager {
           let hx = comp.halfExtents?.x ?? 0.5;
           let hy = comp.halfExtents?.y ?? 0.5;
           let hz = comp.halfExtents?.z ?? 0.5;
-          if (obj.geometry && !comp.halfExtents) {
+          // Always compute from geometry if available (handles scaled objects correctly)
+          if (obj.geometry) {
             obj.geometry.computeBoundingBox();
             const bb = obj.geometry.boundingBox;
             if (bb) {
@@ -722,7 +723,8 @@ export class PhysicsManager {
         case 'Sphere Collider':
         case 'Sphere Trigger': {
           let r = comp.radius ?? 0.5;
-          if (obj.geometry && comp.radius == null) {
+          // Always compute from geometry if available (handles scaled objects correctly)
+          if (obj.geometry) {
             obj.geometry.computeBoundingSphere();
             const bs = obj.geometry.boundingSphere;
             if (bs) {
@@ -736,7 +738,23 @@ export class PhysicsManager {
         }
         case 'Capsule Collider':
         case 'Capsule Trigger': {
-          desc = R.ColliderDesc.capsule(comp.halfHeight ?? 0.5, comp.radius ?? 0.25);
+          let radius = comp.radius ?? 0.25;
+          let halfHeight = comp.halfHeight ?? 0.5;
+          // Always compute from geometry if available (handles scaled objects correctly)
+          if (obj.geometry) {
+            obj.geometry.computeBoundingBox();
+            const bb = obj.geometry.boundingBox;
+            if (bb) {
+              const ws = new THREE.Vector3();
+              obj.getWorldScale(ws);
+              const size = new THREE.Vector3();
+              size.set(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z);
+              size.multiply(ws);
+              radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
+              halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
+            }
+          }
+          desc = R.ColliderDesc.capsule(halfHeight, radius);
           break;
         }
         case 'Mesh Collider':

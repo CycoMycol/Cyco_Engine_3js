@@ -466,7 +466,7 @@ export class ObjectProperties {
         const hy = comp.halfExtents?.y ?? 0.5;
         const hz = comp.halfExtents?.z ?? 0.5;
         if (!comp.halfExtents) comp.halfExtents = { x: hx, y: hy, z: hz };
-        _field('Half Extents', _vec3Input(hx, hy, hz, (x, y, z) => {
+        _field('Scale', _vec3Input(hx, hy, hz, (x, y, z) => {
           comp.halfExtents.x = x;
           comp.halfExtents.y = y;
           comp.halfExtents.z = z;
@@ -478,6 +478,8 @@ export class ObjectProperties {
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
+          // Compute bounding box in world space and fit collider
+          obj.geometry.computeBoundingBox();
           const bbox = new THREE.Box3().setFromObject(obj);
           const size = bbox.getSize(new THREE.Vector3());
           comp.halfExtents = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
@@ -488,7 +490,7 @@ export class ObjectProperties {
       }
       case 'Sphere Collider':
       case 'Sphere Trigger': {
-        _field('Radius', _numInput(comp.radius ?? 0.5, v => { comp.radius = v; }, 0.01, 3, 0, Infinity),
+        _field('Radius', _numInput(comp.radius ?? 0.5, v => { comp.radius = v; }, 0.01, 2, 0, Infinity),
           'Collider radius in world units; matches object transform units.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
@@ -497,6 +499,8 @@ export class ObjectProperties {
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
+          // Compute bounding sphere in world space and fit collider
+          obj.geometry.computeBoundingSphere();
           const sphere = new THREE.Sphere();
           const bbox = new THREE.Box3().setFromObject(obj);
           bbox.getBoundingSphere(sphere);
@@ -508,13 +512,15 @@ export class ObjectProperties {
       }
       case 'Capsule Collider':
       case 'Capsule Trigger': {
-        _field('Radius', _numInput(comp.radius ?? 0.25, v => { comp.radius = v; }, 0.01, 3, 0, Infinity),
+        _field('Radius', _numInput(comp.radius ?? 0.25, v => { comp.radius = v; }, 0.01, 2, 0, Infinity),
           'Capsule radius in world units.');
-        _field('Half Height', _numInput(comp.halfHeight ?? 0.5, v => { comp.halfHeight = v; }, 0.01, 3, 0, Infinity),
+        _field('Half Height', _numInput(comp.halfHeight ?? 0.5, v => { comp.halfHeight = v; }, 0.01, 2, 0, Infinity),
           'Straight segment half-height, excluding the rounded ends.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
+          // Compute bounding box in world space and fit collider
+          obj.geometry.computeBoundingBox();
           const bbox = new THREE.Box3().setFromObject(obj);
           const size = bbox.getSize(new THREE.Vector3());
           const radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
@@ -531,6 +537,12 @@ export class ObjectProperties {
       case 'Mesh Trigger':
         _field('Mode', _select(['convexHull', 'trimesh'], comp.mode ?? 'convexHull', v => { comp.mode = v; }));
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Mesh Trigger', v => { comp.isTrigger = v; }));
+        _field('Auto Fit', _actionButton('Auto Fit', () => {
+          // For mesh collider, we use the bounding box to determine the shape
+          // The mode (convexHull/trimesh) is already set, this just updates the mesh data
+          _rebuildPanel();
+          _dispatchPhysicsEditUpdate();
+        }), 'Update mesh collider from object geometry.');
         break;
 
       case 'Character Controller':
