@@ -25,6 +25,8 @@
 
 import * as THREE from 'three';
 
+try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[PhysicsEditHelper] module loaded'); else console.log('[PhysicsEditHelper] module loaded'); } catch (err) {}
+
 const COLORS = {
   'Box Collider':     0x00e676,
   'Sphere Collider':  0x00b0ff,
@@ -60,6 +62,10 @@ export class PhysicsEditHelper {
     window.addEventListener('cyco-scene-dirty',       this._onSceneDirty);
     window.addEventListener('cyco-physics-edit-update',this._onEditUpdate);
     window.addEventListener('cyco-select-node',        this._onSelectNode);
+
+    this._raycaster = new THREE.Raycaster();
+    this._domElement = null;
+    this._onPointerDown = this._onPointerDown.bind(this);
   }
 
   dispose() {
@@ -77,9 +83,97 @@ export class PhysicsEditHelper {
   _onEditMode(e) {
     this._enabled = !!e.detail?.enabled;
     if (this._enabled && !this._playing) {
+      this._attachPointer();
       this._rebuild();
     } else {
+      this._detachPointer();
       this._clearAll();
+    }
+  }
+
+  _attachPointer() {
+    try {
+      const dom = this._engine.rendererManager?.renderer?.domElement;
+      if (dom && dom !== this._domElement) {
+        this._detachPointer();
+        // Listen in capture so physics overlay clicks run before SelectionManager
+        dom.addEventListener('pointerdown', this._onPointerDown, { passive: false, capture: true });
+        this._domElement = dom;
+      }
+    } catch (err) {}
+  }
+
+  _detachPointer() {
+    try {
+      if (this._domElement) {
+        this._domElement.removeEventListener('pointerdown', this._onPointerDown);
+        this._domElement = null;
+      }
+    } catch (err) {}
+  }
+
+  _onPointerDown(e) {
+    if (!this._enabled || this._playing) return;
+    try {
+      // Signal SelectionManager to skip its click handling for this press
+      try { window.__cyco = window.__cyco || {}; window.__cyco._suppressSelectionManagerClick = true; } catch (err) {}
+      // Ensure suppression is cleared eventually in case pointerup is missed
+      setTimeout(() => { try { if (window.__cyco) delete window.__cyco._suppressSelectionManagerClick; } catch (err) {} }, 250);
+      // Do not stop propagation — allow TransformControls and other systems to receive the event
+      const rect = this._domElement.getBoundingClientRect();
+      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      this._raycaster.setFromCamera({ x, y }, this._engine.camera);
+
+      // Build list of overlay objects to test
+      const overlays = [];
+      for (const meshes of this._overlays.values()) {
+        for (const m of meshes) overlays.push(m);
+      }
+      if (overlays.length === 0) return;
+      const hits = this._raycaster.intersectObjects(overlays, true);
+      if (hits && hits.length > 0) {
+        const hit = hits[0];
+        const hitObj = hit.object;
+        const ownerUuid = hitObj.userData?._ownerUuid || hitObj.parent?.userData?._ownerUuid || null;
+        try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[PhysicsEditHelper] overlay hit', { point: hit.point, object: hitObj.name || hitObj.uuid, ownerUuid }); else console.log('[PhysicsEditHelper] overlay hit', { point: hit.point, object: hitObj.name || hitObj.uuid, ownerUuid }); } catch (err) {}
+        if (ownerUuid) {
+          const owner = this._engine.scene?.getObjectByProperty('uuid', ownerUuid) || null;
+          if (owner) {
+            window.dispatchEvent(new CustomEvent('cyco-select-node', { detail: { object: owner } }));
+            // ensure the editor selects the collider for physics edit mode
+            window.dispatchEvent(new CustomEvent('cyco-physics-edit-focus', { detail: { object: owner } }));
+              // prevent the SelectionManager from clearing selection on pointerup
+              try {
+                window.__cyco = window.__cyco || {};
+                window.__cyco._suppressSelectionManagerClick = true;
+              } catch (err) {}
+              // Temporarily disable overlay raycasts for this object's overlays so
+              // TransformControls can receive pointer events for gizmo handles.
+              try {
+                const overlays = this._overlays.get(owner.uuid) || [];
+                for (const o of overlays) {
+                  if (!o.userData) o.userData = {};
+                  if (!o.userData._origRaycast) o.userData._origRaycast = o.raycast;
+                  o.raycast = () => {};
+                }
+                const restore = () => {
+                  const overlays2 = this._overlays.get(owner.uuid) || [];
+                  for (const o of overlays2) {
+                    if (o.userData && o.userData._origRaycast) {
+                      o.raycast = o.userData._origRaycast;
+                      delete o.userData._origRaycast;
+                    }
+                  }
+                  try { document.removeEventListener('pointerup', restore); } catch (e) {}
+                };
+                document.addEventListener('pointerup', restore, { once: true });
+              } catch (err) {}
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('PhysicsEditHelper pointer handling failed', err);
     }
   }
 
@@ -111,8 +205,26 @@ export class PhysicsEditHelper {
   _onEditUpdate(event) {
     if (!this._enabled || this._playing) return;
     const object = event?.detail?.object;
+    // If the user is actively dragging the gizmo, avoid rebuilding overlays
+    // (which can recreate proxy objects and detach TransformControls). Instead
+    // update the proxy transform in-place so visuals follow the gizmo smoothly.
+    const dragging = window.__cyco?.selectionManager?._gizmoDragging ?? false;
     if (object) {
-      this._rebuildObject(object);
+      if (dragging) {
+        try {
+          const proxy = object.userData?._physicsEditProxy;
+          const comp = event?.detail?.component || (object.userData?.physics?.components?.[0]);
+          if (proxy && comp) {
+            this._syncColliderProxy(proxy, comp);
+          }
+        } catch (err) {
+          // fall back to full rebuild on error
+          console.warn('PhysicsEditHelper: live update failed, falling back to rebuild', err);
+          this._rebuildObject(object);
+        }
+      } else {
+        this._rebuildObject(object);
+      }
     } else {
       this._rebuild();
     }
@@ -159,6 +271,18 @@ export class PhysicsEditHelper {
     this._clearAll();
     const scene = this._engine.scene;
     if (!scene) return;
+
+    // Rescue any orphaned proxies that exist in the scene (e.g. after undo/redo or serialization)
+    scene.traverse((obj) => {
+      if (obj.name === '__physics_edit_proxy__' && obj.userData?._ownerUuid) {
+        const owner = scene.getObjectByProperty('uuid', obj.userData._ownerUuid);
+        if (owner && obj.parent !== owner) {
+          if (obj.parent) obj.parent.remove(obj);
+          owner.add(obj);
+          this._proxyObjects.set(owner.uuid, obj);
+        }
+      }
+    });
 
     scene.traverse((obj) => {
       const comps = obj.userData?.physics?.components;
@@ -330,6 +454,18 @@ export class PhysicsEditHelper {
 
     // Apply collider local transform if specified
     const lines = new THREE.LineSegments(geo, mat);
+    // mark ownership for picking
+    lines.userData._ownerUuid = obj.uuid;
+    // allow component to override visual style
+    if (comp.color) {
+      try { lines.material.color.set(comp.color); } catch (err) {}
+    }
+    if (comp.lineOpacity != null) {
+      lines.material.opacity = comp.lineOpacity;
+    }
+    if (comp.lineThickness != null) {
+      try { lines.material.linewidth = comp.lineThickness; } catch (err) {}
+    }
     if (!attachToProxy) {
       const position = this._getColliderLocalPosition(comp);
       lines.position.set(position.x ?? 0, position.y ?? 0, position.z ?? 0);
@@ -350,6 +486,17 @@ export class PhysicsEditHelper {
     lines.frustumCulled = false;
     // Prevent this overlay from being serialised with the scene
     lines.userData._editorOnly = true;
+    try {
+      try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[PhysicsEditHelper] makeOverlay', {
+        type: comp.type,
+        position: lines.position.clone(),
+        quaternion: lines.quaternion.clone(),
+        color: lines.material?.color?.getHexString?.() || null,
+        opacity: lines.material?.opacity,
+        linewidth: lines.material?.linewidth,
+        attachToProxy: !!attachToProxy
+      }); else console.log('[PhysicsEditHelper] makeOverlay', { type: comp.type, position: lines.position.clone(), quaternion: lines.quaternion.clone(), color: lines.material?.color?.getHexString?.() || null, opacity: lines.material?.opacity, linewidth: lines.material?.linewidth, attachToProxy: !!attachToProxy }); } catch (err) {}
+    } catch (err) {}
 
     return lines;
   }
@@ -363,9 +510,30 @@ export class PhysicsEditHelper {
       proxy = new THREE.Object3D();
       proxy.name = '__physics_edit_proxy__';
       proxy.visible = true;
+      proxy.frustumCulled = false;
+      proxy.renderOrder = 997;
+      proxy.userData._editorOnly = true;
       if (!obj.userData) obj.userData = {};
       obj.userData._physicsEditProxy = proxy;
+      // mark proxy with owner uuid so other systems can find it reliably
+      proxy.userData._ownerUuid = obj.uuid;
       obj.add(proxy);
+      // ensure a center handle exists on the proxy so it always follows the collider
+      try {
+        let ch = proxy.getObjectByName('__physics_edit_center_handle__');
+        if (!ch) {
+          ch = new THREE.Mesh(
+            new THREE.SphereGeometry(0.075, 12, 8),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.9, transparent: true })
+          );
+          ch.name = '__physics_edit_center_handle__';
+          ch.userData._isGizmo = true;
+          ch.renderOrder = 999;
+          ch.frustumCulled = false;
+          ch.raycast = () => {};
+          proxy.add(ch);
+        }
+      } catch (err) {}
       this._proxyObjects.set(obj.uuid, proxy);
     } else {
       if (proxy.parent !== obj) {
@@ -375,12 +543,15 @@ export class PhysicsEditHelper {
         obj.add(proxy);
       }
       proxy.visible = true;
+      proxy.frustumCulled = false;
       if (!this._proxyObjects.has(obj.uuid)) {
         this._proxyObjects.set(obj.uuid, proxy);
       }
     }
 
     proxy.userData.physicsComponent = comp;
+    // ensure owner uuid is always present (in case proxy was restored from serialized state)
+    proxy.userData._ownerUuid = proxy.userData._ownerUuid || obj.uuid;
     this._syncColliderProxy(proxy, comp);
     window.dispatchEvent(new CustomEvent('cyco-physics-edit-proxy-ready', {
       detail: { object: obj, proxy }
@@ -460,6 +631,9 @@ export class PhysicsEditHelper {
       if (mesh && mesh.parent) mesh.parent.remove(mesh);
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ visible: false }));
       mesh.userData._isColliderProxyMesh = true;
+      // Make the proxy mesh non-interactive so it doesn't block scene picking
+      mesh.visible = false;
+      mesh.raycast = () => {};
       proxy.add(mesh);
     }
   }

@@ -9,6 +9,17 @@ import * as THREE from 'three';
 THREE.ColorManagement.enabled = true; // ensure correct sRGB handling
 THREE.Cache.enabled           = true; // asset deduplication across loaders
 
+// initialize in-page internal log collector used by debug helpers
+if (typeof window !== 'undefined') {
+  try {
+    window.__cyco_internal_log = window.__cyco_internal_log || [];
+    window.__cyco_log = (tag, payload) => {
+      try { window.__cyco_internal_log.push({ tag, payload, ts: Date.now() }); } catch (e) {}
+      try { console.log(tag, payload); } catch (e) {}
+    };
+  } catch (err) {}
+}
+
 import ThemeManager      from './theme/theme-manager.js';
 import LayoutManager     from './layout-manager.js';
 import { initLayout, DEFAULT_LAYOUT }    from './layout.js';

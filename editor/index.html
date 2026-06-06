@@ -26,6 +26,15 @@
 
   <!-- UMD bundle — must load before any module script -->
   <script src="./libs/dockview-core.min.js"></script>
+  <script>
+    try {
+      window.__cyco_internal_log = window.__cyco_internal_log || [];
+      window.__cyco_log = function(tag, payload) {
+        try { window.__cyco_internal_log.push({ tag, payload, ts: Date.now() }); } catch (e) {}
+        try { console.log(tag, payload); } catch (e) {}
+      };
+    } catch (err) {}
+  </script>
   <script type="module" src="./src/main.js"></script>
 </body>
 </html>

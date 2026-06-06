@@ -212,6 +212,15 @@ export class SelectionManager {
       if (this._selectionHelper) this._selectionHelper.enabled = false;
       return;
     }
+    // If another system (e.g. PhysicsEditHelper) already handled selection on
+    // pointerdown, it sets a suppression flag so we must skip default click handling.
+    if (window.__cyco && window.__cyco._suppressSelectionManagerClick) {
+      try { delete window.__cyco._suppressSelectionManagerClick; } catch (err) {}
+      if (this._selectionHelper) this._selectionHelper.enabled = false;
+      this._pointerDownOnCanvas = false;
+      this._isDragging = false;
+      return;
+    }
     this._pointerDownOnCanvas = false;
 
     if (this._selectionHelper) this._selectionHelper.enabled = false;
