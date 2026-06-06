@@ -29,6 +29,10 @@ export const DEFAULT_PREFS = {
   keybindings: { ...DEFAULT_KEYS },
   gizmo: {
     size: 1,
+    useSeparateGizmoSizes: false,
+    translateSize: 1,
+    rotateSize: 0.55,
+    scaleSize: 0.75,
     axisColorX: '#ff4444',
     axisColorY: '#44ff44',
     axisColorZ: '#4444ff',

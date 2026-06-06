@@ -65,7 +65,7 @@ export class LeftToolbarPanel extends BasePanel {
     // Transform cycle toggle (translate → rotate → scale)
     // First click while NOT active: activate the shown tool (no cycle).
     // First click while ALREADY active: cycle to the next tool.
-    const CYCLE = ['translate', 'rotate', 'scale'];
+    const CYCLE = ['translate', 'rotate', 'scale', 'universal'];
     const transformBtn = _toolBtn(_toolIcon(this._lastTransformTool), _toolTip(this._lastTransformTool), () => {
       if (this._physicsEdit) {
         // Cycle the collider edit gizmo mode without switching to object transform.
@@ -152,7 +152,7 @@ export class LeftToolbarPanel extends BasePanel {
     // Sync button state when tool changes arrive from other systems (keyboard, etc.)
     window.addEventListener('cyco-vp-tool', (e) => {
       const { mode } = e.detail ?? {};
-      if (!['select', 'translate', 'rotate', 'scale'].includes(mode)) return;
+      if (!['select', 'translate', 'rotate', 'scale', 'universal'].includes(mode)) return;
       if (this._physicsEdit) {
         if (mode === 'select') {
           window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
@@ -161,7 +161,7 @@ export class LeftToolbarPanel extends BasePanel {
         return;
       }
       this._activeTool = mode;
-      if (['translate', 'rotate', 'scale'].includes(mode)) {
+      if (['translate', 'rotate', 'scale', 'universal'].includes(mode)) {
         this._lastTransformTool = mode; // keep button showing the active transform
       }
       this._refreshToolBtns();
@@ -173,7 +173,7 @@ export class LeftToolbarPanel extends BasePanel {
   }
 
   _refreshToolBtns() {
-    const CYCLE = ['translate', 'rotate', 'scale'];
+    const CYCLE = ['translate', 'rotate', 'scale', 'universal'];
     const onCycle = CYCLE.includes(this._activeTool);
     const sb = this._toolBtns['select'];
     if (sb) sb.classList.toggle('active', !this._physicsEdit && this._activeTool === 'select');
@@ -356,6 +356,11 @@ function _toolIcon(id) {
       <path d="M12.5 2.5H17.5V7.5L15.5 5.5 10.5 10.5 9.5 9.5 14.5 4.5Z"/>
       <path d="M7.5 17.5H2.5V12.5L4.5 14.5 9.5 9.5 10.5 10.5 5.5 15.5Z"/>
     </svg>`;
+    case 'universal': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="10" cy="10" r="5"/>
+      <line x1="10" y1="2" x2="10" y2="18"/>
+      <line x1="2" y1="10" x2="18" y2="10"/>
+    </svg>`;
     case 'editCollider': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
       <path d="M5 14v1.5A1.5 1.5 0 0 0 6.5 17H14"/>
       <path d="M14 3.5a1.5 1.5 0 0 1 2.12 0l.38.38a1.5 1.5 0 0 1 0 2.12L8.5 14.5 5 15l.5-3.5L14 3.5Z"/>
@@ -401,6 +406,7 @@ function _toolTip(id) {
     case 'translate': return 'Translate  W';
     case 'rotate':    return 'Rotate  E';
     case 'scale':     return 'Scale  R';
+    case 'universal': return 'Universal Gizmo  Q';
     case 'editCollider': return 'Edit Collider';
     default:          return '';
   }

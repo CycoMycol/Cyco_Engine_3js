@@ -1,4 +1,4 @@
-/**
+﻿/**
  * TransformGizmo.js
  * Wraps Three.js TransformControls. Attaches to selected objects,
  * handles mode switching (translate/rotate/scale), snap, and world/local space.
@@ -8,15 +8,15 @@
  * Depends on: ViewportEngine (injected), SelectionManager (injected)
  *
  * Events consumed:
- *   cyco-vp-ready           { scene, camera }      — set up controls after viewport ready
- *   cyco-renderer-changed   { renderer }           — rebuild on renderer swap
- *   cyco-select-node        { object }             — attach gizmo to selection
- *   cyco-deselect-all       {}                     — detach gizmo
- *   cyco-vp-tool            { mode }               — 'translate' | 'rotate' | 'scale'
- *   cyco-physics-vp-tool    { mode }               — physics edit translate/rotate/scale (collider gizmo only)
- *   cyco-rvp-snap           { enabled, value }     — snap toggle + value
- *   cyco-rvp-world          { isWorld }            — world / local space toggle
- *   cyco-gizmo-size         { size }               — from Preferences
+ *   cyco-vp-ready           { scene, camera }      ΓÇö set up controls after viewport ready
+ *   cyco-renderer-changed   { renderer }           ΓÇö rebuild on renderer swap
+ *   cyco-select-node        { object }             ΓÇö attach gizmo to selection
+ *   cyco-deselect-all       {}                     ΓÇö detach gizmo
+ *   cyco-vp-tool            { mode }               ΓÇö 'translate' | 'rotate' | 'scale'
+ *   cyco-physics-vp-tool    { mode }               ΓÇö physics edit translate/rotate/scale (collider gizmo only)
+ *   cyco-rvp-snap           { enabled, value }     ΓÇö snap toggle + value
+ *   cyco-rvp-world          { isWorld }            ΓÇö world / local space toggle
+ *   cyco-gizmo-size         { size }               ΓÇö from Preferences
  */
 
 import * as THREE from 'three';
@@ -35,15 +35,21 @@ export class TransformGizmo {
 
     /** @type {TransformControls|null} */
     this.controls = null;
+    this._tcRotate = null;
+    this._tcScale = null;
+    this._tcs = [];
     /** Separate camera copy used for TransformControls raycasting/rendering. */
     this._controlsCamera = null;
 
     this._snapEnabled = false;
     this._snapValue   = 0.25;
     this._mode        = 'select'; // default: pointer/select, no gizmo shown
+    this._space       = 'world';
     this._physicsEdit = false;
     this._physicsEditMode = 'translate';
     this._pendingPhysicsAttach = false;
+    this._isDragging = false;
+    this._scaleInterceptPending = false;
 
     /** State snapshot before a drag begins (for TransformCommand undo). */
     this._matrixBefore = null;
@@ -86,7 +92,7 @@ export class TransformGizmo {
     window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
   }
 
-  // ─── Build ────────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇΓöÇ Build ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
   _getControlsCamera(camera) {
     if (!camera) return null;
@@ -122,61 +128,114 @@ export class TransformGizmo {
     const scene  = this.engine.scene;
     if (!camera || !scene || !renderer?.domElement) return;
 
-    if (this.controls) {
-      scene.remove(this.controls.getHelper());
-      this.controls.dispose();
+    if (this._tcs.length) {
+      for (const tc of this._tcs) {
+        try {
+          const helper = tc.getHelper();
+          if (helper && helper.parent) helper.parent.remove(helper);
+          tc.dispose();
+        } catch (err) {}
+      }
+      this._tcs = [];
+      this.controls = null;
+      this._tcRotate = null;
+      this._tcScale = null;
     }
 
     const controlCamera = this._getControlsCamera(camera);
     if (!controlCamera) return;
 
-    this.controls = new TransformControls(controlCamera, renderer.domElement);
-    // TransformControls only accepts translate/rotate/scale; use translate as the
-    // internal default when in select mode (gizmo won't be shown anyway).
-    this.controls.setMode(this._mode !== 'select' ? this._mode : 'translate');
-    this.controls.setSpace(this._space);
+    this._tcTranslate = this._createControl('translate', controlCamera.clone(), renderer.domElement);
+    this._tcRotate    = this._createControl('rotate',    controlCamera.clone(), renderer.domElement);
+    this._tcScale     = this._createControl('scale',     controlCamera.clone(), renderer.domElement);
+    this.controls     = this._tcTranslate;
+    this._tcs         = [this._tcTranslate, this._tcRotate, this._tcScale];
+
+    this._tcTranslate.setSize(1.0);
+    this._tcRotate.setSize(0.55);
+    this._tcScale.setSize(0.75);
+
     this._applySnap();
 
-    // CRITICAL — prevents camera orbiting while dragging the gizmo.
-    // Also flags SelectionManager so it ignores the pointer-up that ends the drag.
-    this.controls.addEventListener('dragging-changed', event => {
+    for (const tc of this._tcs) {
+      tc.setColors(0xff2222, 0x00dd44, 0x2255ff, 0xffee00);
+      const helper = tc.getHelper();
+      helper.traverse(child => { child.userData._isGizmo = true; });
+      this.selectionManager.addNonSelectable(helper);
+      scene.add(helper);
+    }
+
+    this._patchGizmosForUniversal();
+    this._setupUniversalIntercept(renderer.domElement);
+    this._setupGlobalFailsafe();
+
+    if (this._targetObject) {
+      for (const tc of this._tcs) {
+        try {
+          tc.attach(this._targetObject);
+        } catch (err) {}
+      }
+      if (this._mode !== 'select') this._show();
+      else this._hide();
+    } else {
+      this._hide();
+    }
+  }
+
+  _createControl(mode, camera, domElement) {
+    const tc = new TransformControls(camera, domElement);
+    tc.setMode(mode);
+    tc.setSpace(this._space);
+    tc.addEventListener('dragging-changed', event => {
       const orbitControls = this.engine.controls;
       if (orbitControls) orbitControls.enabled = !event.value;
       this.selectionManager._gizmoDragging = !!event.value;
-      // Visual feedback: scale up universal gizmo while dragging
+      this._isDragging = !!event.value;
+      if (event.value) this._scaleInterceptPending = false;
       try {
         this._setGizmoActive(!!event.value);
       } catch (err) {}
     });
 
-    this.controls.addEventListener('change', () => {
-      if (!this._physicsEdit) return;
-      // During collider edit, update the component live so the collider moves
-      // with the gizmo. We avoid rebuilding proxies here to prevent detaching
-      // the active target; overlays are children of the proxy so they follow.
-      try {
-        this._updatePhysicsComponentFromProxy();
-      } catch (err) {
-        // swallow errors to avoid breaking the control loop
-        console.warn('Error updating physics component during drag', err);
+    tc.addEventListener('change', () => {
+      if (this._physicsEdit) {
+        try {
+          this._updatePhysicsComponentFromProxy();
+        } catch (err) {
+          console.warn('Error updating physics component during drag', err);
+        }
       }
-      try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[TransformGizmo] change', { axis: this.controls.axis }); else console.log('[TransformGizmo] change', { axis: this.controls.axis }); } catch (err) {}
     });
 
-    // Record matrix before drag for undo
-    this.controls.addEventListener('mouseDown', () => {
-      const target = this.controls?.object ?? this._targetObject;
+    tc.addEventListener('mouseDown', () => {
+      const obj = tc.object;
+      if (!obj) return;
+      this._snapPos = obj.position.clone();
+      this._snapRot = obj.rotation.clone();
+      this._snapScl = obj.scale.clone();
+      this._isDragging = true;
+      this._scaleInterceptPending = false;
+      for (const other of this._tcs) {
+        if (other !== tc) other.enabled = false;
+      }
+      const orbitControls = this.engine.controls;
+      if (orbitControls) orbitControls.enabled = false;
+      const target = tc.object ?? this._targetObject;
       if (target) {
         this._matrixBefore = target.matrix.clone();
       }
-      // Debug: log which axis/handle is engaged (helps diagnose locked axes)
-      try {
-        try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[TransformGizmo] mouseDown', { axis: this.controls.axis, mode: this._physicsEdit ? this._physicsEditMode : this._mode, object: this.controls.object?.name ?? this._targetObject?.name }); else console.log('[TransformGizmo] mouseDown', { axis: this.controls.axis, mode: this._physicsEdit ? this._physicsEditMode : this._mode, object: this.controls.object?.name ?? this._targetObject?.name }); } catch (err) {}
-      } catch (err) {}
     });
 
-    // Commit TransformCommand after drag completes
-    this.controls.addEventListener('mouseUp', () => {
+    tc.addEventListener('mouseUp', () => {
+      this._isDragging = false;
+      if (this._mode === 'universal') {
+        for (const other of this._tcs) other.enabled = true;
+      } else {
+        tc.enabled = true;
+      }
+      const orbitControls = this.engine.controls;
+      if (orbitControls) orbitControls.enabled = true;
+
       if (this._physicsEdit) {
         this._updatePhysicsComponentFromProxy();
       }
@@ -196,32 +255,167 @@ export class TransformGizmo {
       this._matrixBefore = null;
     });
 
-    // Ensure that after a physics edit drag ends, the controls remain attached to the proxy
-    this.controls.addEventListener('mouseUp', () => {
-      if (!this._physicsEdit) return;
-      try {
-        if (this._targetProxy && this.controls.object !== this._targetProxy) {
-          this.controls.attach(this._targetProxy);
-          this._ensureProxyCenterHandle(this._targetProxy);
-        }
-      } catch (err) {}
+    tc.addEventListener('objectChange', () => {
+      if (tc.object) {
+        window.dispatchEvent(new CustomEvent('cyco-object-transform-changed', { detail: { object: tc.object } }));
+      }
     });
 
-    // Make gizmo non-selectable (tag all descendants + add to nonSelectableSet)
-    this._helper = this.controls.getHelper();
-    this._helper.traverse(child => { child.userData._isGizmo = true; });
+    return tc;
+  }
 
-    // Add a visible central gizmo marker so physics edit looks like a universal manipulator.
-    // NOTE: center handle is created per-proxy when entering physics edit mode
-    // so it follows the collider proxy exactly. See _ensureProxyCenterHandle().
+  _attachAllControls(target) {
+    if (!target) return;
+    for (const tc of this._tcs) {
+      try {
+        tc.attach(target);
+      } catch (err) {
+        // ignore attach failures until the target is in the scene graph
+      }
+    }
+  }
 
-    // Ensure universal gizmo visuals (arrows, rings, scale handles) are present.
-    this._ensureUniversalGizmoVisuals();
+  _detachAllControls() {
+    for (const tc of this._tcs) {
+      try {
+        tc.detach();
+      } catch (err) {}
+    }
+  }
 
-    this.selectionManager.addNonSelectable(this._helper);
-    scene.add(this._helper);
-    if (!this._helper.parent) {
-      scene.add(this._helper);
+  _setupGlobalFailsafe() {
+    const cleanup = () => {
+      this._isDragging = false;
+      this._scaleInterceptPending = false;
+      if (this._mode === 'universal') {
+        for (const tc of this._tcs) tc.enabled = true;
+      } else {
+        for (const tc of this._tcs) {
+          tc.enabled = (this._mode === 'translate' && tc.mode === 'translate')
+                    || (this._mode === 'rotate'    && tc.mode === 'rotate')
+                    || (this._mode === 'scale'     && tc.mode === 'scale');
+        }
+      }
+      const orbitControls = this.engine.controls;
+      if (orbitControls) orbitControls.enabled = true;
+    };
+
+    window.addEventListener('pointerup', () => requestAnimationFrame(cleanup));
+    window.addEventListener('pointercancel', () => requestAnimationFrame(cleanup));
+    window.addEventListener('blur', cleanup);
+  }
+
+  _patchGizmosForUniversal() {
+    const removeFrom = (group, predicate) => {
+      group.children.filter(predicate).forEach(c => group.remove(c));
+    };
+
+    const isPlaneOrXYZ = c => ['XYZ','XY','YZ','XZ'].includes(c.name);
+    const isShaft = c => c.geometry?.type === 'CylinderGeometry'
+                      && c.geometry?.parameters?.radiusTop > 0;
+
+    const tGizmo  = this._tcTranslate._gizmo.gizmo['translate'];
+    const tPicker = this._tcTranslate._gizmo.picker['translate'];
+    removeFrom(tGizmo,  isPlaneOrXYZ);
+    removeFrom(tPicker, isPlaneOrXYZ);
+    removeFrom(tGizmo,  isShaft);
+
+    const sGizmo  = this._tcScale._gizmo.gizmo['scale'];
+    const sPicker = this._tcScale._gizmo.picker['scale'];
+    removeFrom(sGizmo,  c => c.geometry?.type === 'CylinderGeometry');
+    removeFrom(sGizmo,  c => ['XY','YZ','XZ'].includes(c.name));
+    removeFrom(sPicker, c => ['XY','YZ','XZ'].includes(c.name));
+
+    const rGizmo  = this._tcRotate._gizmo.gizmo['rotate'];
+    const rPicker = this._tcRotate._gizmo.picker['rotate'];
+    removeFrom(rGizmo,  c => c.name === 'E' || c.name === 'XYZE');
+    removeFrom(rPicker, c => c.name === 'E' || c.name === 'XYZE');
+  }
+
+  _setupUniversalIntercept(canvas) {
+    if (!canvas || !this._tcRotate || !this._tcScale) return;
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+
+    const getNDC = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      mouse.set(
+        (e.clientX - rect.left) / rect.width  *  2 - 1,
+       -((e.clientY - rect.top) / rect.height) * 2 + 1
+      );
+      return mouse;
+    };
+
+    const pickWinner = (ndcMouse) => {
+      raycaster.setFromCamera(ndcMouse, this.engine.camera);
+      if (raycaster.intersectObject(this._tcRotate._gizmo.picker['rotate'], true).length > 0)
+        return 'rotate';
+      if (raycaster.intersectObject(this._tcScale._gizmo.picker['scale'], true).length > 0)
+        return 'scale';
+      return 'translate';
+    };
+
+    const losersFor = (winner) => {
+      if (winner === 'rotate')    return [this._tcTranslate, this._tcScale];
+      if (winner === 'scale')     return [this._tcTranslate, this._tcRotate];
+      return [this._tcRotate, this._tcScale];
+    };
+
+    canvas.addEventListener('pointermove', (e) => {
+      if (this._mode !== 'universal') return;
+      if (!this._tcRotate.object) return;
+      if (this._isDragging) return;
+      const ndc = getNDC(e).clone();
+      queueMicrotask(() => {
+        if (this._isDragging) return;
+        const winner = pickWinner(ndc);
+        const [a, b] = losersFor(winner);
+        a.axis = null;
+        b.axis = null;
+      });
+    });
+
+    canvas.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      if (this._mode !== 'universal') return;
+      if (!this._tcRotate.object) return;
+      const winner = pickWinner(getNDC(e));
+      if (winner === 'translate') return;
+      const [a, b] = losersFor(winner);
+      a.enabled = false;
+      b.enabled = false;
+      this._scaleInterceptPending = true;
+      requestAnimationFrame(() => {
+        if (this._scaleInterceptPending) {
+          this._scaleInterceptPending = false;
+          a.enabled = true;
+          b.enabled = true;
+        }
+      });
+    }, { capture: true });
+  }
+
+  _show() {
+    for (const tc of this._tcs) {
+      const helper = tc.getHelper();
+      const visible = this._mode === 'universal'
+        || (this._mode === 'translate' && tc.mode === 'translate')
+        || (this._mode === 'rotate' && tc.mode === 'rotate')
+        || (this._mode === 'scale' && tc.mode === 'scale');
+      if (helper) helper.visible = visible;
+      if (this._mode !== 'universal') {
+        tc.enabled = visible;
+      } else {
+        tc.enabled = true;
+      }
+    }
+  }
+
+  _hide() {
+    for (const tc of this._tcs) {
+      const helper = tc.getHelper();
+      if (helper) helper.visible = false;
+      tc.enabled = false;
     }
   }
 
@@ -249,7 +443,7 @@ export class TransformGizmo {
     if (ch && ch.parent) ch.parent.remove(ch);
   }
 
-  // ─── Event handlers ───────────────────────────────────────────────────────
+  // ΓöÇΓöÇΓöÇ Event handlers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
   _onVpReady() {
     const renderer = this.engine.rendererManager?.renderer;
@@ -363,9 +557,7 @@ export class TransformGizmo {
     if (object && !object.userData.cycoLocked) {
       this._targetObject = object;
       if (this._physicsEdit) {
-        // Try direct proxy reference first
         let proxy = object.userData?._physicsEditProxy;
-        // If missing, try to find a proxy in the scene tagged with ownerUuid
         if (!proxy && this.engine?.scene) {
           proxy = this.engine.scene.getObjectByProperty('userData._ownerUuid', object.uuid) || null;
         }
@@ -376,58 +568,67 @@ export class TransformGizmo {
           this._pendingPhysicsAttach = false;
           return;
         }
-        // No proxy available yet; mark pending and detach controls so gizmo won't attach to object
         this._pendingPhysicsAttach = true;
         this.controls.detach();
         return;
       }
 
       this._targetProxy = null;
+      for (const tc of this._tcs) {
+        try {
+          tc.attach(object);
+        } catch (err) {
+          // ignore attach failures until the object is in the scene graph
+        }
+      }
       if (this._mode !== 'select') {
-        this.controls.attach(object);
+        this._show();
+      } else {
+        this._hide();
       }
     } else {
       this.detach();
     }
   }
 
-  _onDeselectAll() { this.detach(); }
+  _onDeselectAll() {
+    this.detach();
+    this._hide();
+  }
 
   _onTool(event) {
     const { mode } = event.detail;
-    if (!['translate', 'rotate', 'scale', 'select'].includes(mode)) return;
+    if (!['translate', 'rotate', 'scale', 'select', 'universal'].includes(mode)) return;
     try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[TransformGizmo] tool change', { mode }); else console.log('[TransformGizmo] tool change', { mode }); } catch (err) {}
     if (this._physicsEdit) {
       if (mode === 'select') {
         return;
       }
       this._physicsEditMode = mode;
-      this.controls?.setMode(mode);
+      const safeMode = mode === 'universal' ? 'translate' : mode;
+      this.controls?.setMode(safeMode);
       return;
     }
 
     this._mode = mode;
     if (mode === 'select') {
-      // Hide the visual gizmo but keep _targetObject so re-enabling a transform
-      // mode can re-attach without needing a new selection event.
-      this.controls?.detach();
+      this._detachAllControls();
     } else {
-      this.controls?.setMode(mode);
-      // If an object is already selected, re-show the gizmo for it.
       if (this._targetObject) {
-        this._targetProxy = null;
-        this.controls.attach(this._targetObject);
+        this._attachAllControls(this._targetObject);
       }
     }
+    this._show();
   }
 
   _onPhysicsTool(event) {
     const { mode } = event.detail;
-    if (!['translate', 'rotate', 'scale'].includes(mode)) return;
+    if (!['translate', 'rotate', 'scale', 'universal'].includes(mode)) return;
     try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[TransformGizmo] physics tool change', { mode }); else console.log('[TransformGizmo] physics tool change', { mode }); } catch (err) {}
     if (!this._physicsEdit) return;
     this._physicsEditMode = mode;
-    this.controls?.setMode(mode);
+    const safeMode = mode === 'universal' ? 'translate' : mode;
+    this.controls?.setMode(safeMode);
   }
 
   _onSnap(event) {
@@ -439,7 +640,9 @@ export class TransformGizmo {
   _onWorld(event) {
     const isWorld = event.detail?.isWorld ?? event.detail ?? false;
     this._space = isWorld ? 'world' : 'local';
-    this.controls?.setSpace(this._space);
+    for (const tc of this._tcs) {
+      tc.setSpace(this._space);
+    }
   }
 
   _onPhysicsEditMode(event) {
@@ -456,7 +659,8 @@ export class TransformGizmo {
         if (proxy) {
           this._targetProxy = proxy;
           this._safeAttach(proxy);
-          this.controls.setMode(this._physicsEditMode);
+          const safeMode = this._physicsEditMode === 'universal' ? 'translate' : this._physicsEditMode;
+          this.controls.setMode(safeMode);
           this._pendingPhysicsAttach = false;
           this.controls.enabled = true;
           this.controls.setSpace(this._space);
@@ -473,15 +677,35 @@ export class TransformGizmo {
       if (this._targetProxy) this._removeProxyCenterHandle(this._targetProxy);
       this._targetProxy = null;
       if (this._mode === 'select') {
-        this.controls.detach();
+        this._detachAllControls();
       } else if (this._targetObject) {
-        this.controls.attach(this._targetObject);
+        if (this._mode === 'universal') {
+          this._attachAllControls(this._targetObject);
+        } else {
+          this.controls.attach(this._targetObject);
+        }
       }
     }
   }
 
   _onGizmoSize(event) {
-    if (this.controls) this.controls.size = event.detail.size ?? 1;
+    const detail = event.detail ?? {};
+    const size = detail.size ?? 1;
+    const useSeparateSizes = !!detail.useSeparateSizes;
+    const translateSize = detail.translateSize ?? size;
+    const rotateSize = detail.rotateSize ?? size;
+    const scaleSize = detail.scaleSize ?? size;
+
+    for (const tc of this._tcs) {
+      if (!tc) continue;
+      if (useSeparateSizes) {
+        if (tc === this._tcTranslate) tc.size = translateSize;
+        else if (tc === this._tcRotate) tc.size = rotateSize;
+        else if (tc === this._tcScale) tc.size = scaleSize;
+      } else {
+        tc.size = size;
+      }
+    }
   }
 
   _onPhysicsProxyReady(event) {
@@ -529,14 +753,13 @@ export class TransformGizmo {
   }
 
   _onVpTick(event) {
-    if (!this.controls || !this.engine.camera) return;
+    if ((!this.controls && !this._tcs.length) || !this.engine.camera) return;
     const cam = this._getControlsCamera(this.engine.camera);
     if (cam) {
-      // Keep TransformControls using a camera that matches the editor camera
-      try { this.controls.camera = cam; } catch (err) {}
+      for (const tc of this._tcs) {
+        try { tc.camera = cam; } catch (err) {}
+      }
     }
-    // While in physics edit mode, ensure controls remain attached to proxy so
-    // rotate/scale gizmo visuals follow the collider proxy instead of the object.
     if (this._physicsEdit && this._targetProxy) {
       try {
         if (this.controls.object !== this._targetProxy) {
@@ -544,17 +767,16 @@ export class TransformGizmo {
         }
       } catch (err) {}
     }
-    // Keep universal visuals at a constant screen size and avoid pointer hit tests
-    this._updateGizmoVisualScale();
   }
 
-  // ─── Helpers ─────────────────────────────────────────────────────────────
+  // ΓöÇΓöÇΓöÇ Helpers ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
   _applySnap() {
-    if (!this.controls) return;
-    this.controls.translationSnap = this._snapEnabled ? this._snapValue          : null;
-    this.controls.rotationSnap    = this._snapEnabled ? (Math.PI / 12)           : null; // 15°
-    this.controls.scaleSnap       = this._snapEnabled ? (this._snapValue * 0.1)  : null;
+    for (const tc of this._tcs) {
+      tc.translationSnap = this._snapEnabled ? this._snapValue          : null;
+      tc.rotationSnap    = this._snapEnabled ? (Math.PI / 12)           : null; // 15°
+      tc.scaleSnap       = this._snapEnabled ? (this._snapValue * 0.1)  : null;
+    }
   }
 
   _ensureUniversalGizmoVisuals() {
@@ -696,20 +918,38 @@ export class TransformGizmo {
 
   detach() {
     this._targetObject = null;
-    this.controls?.detach();
-  }
-
-  /** Called by GameRuntime.play() — hides gizmo during play mode. */
-  suspend() { this.detach(); if (this._helper) this._helper.visible = false; }
-  /** Called by GameRuntime.stop() — restores gizmo after play mode. */
-  restore()  {
-    if (this._helper) this._helper.visible = true;
-    if (this.controls && this._mode !== 'select' && this._targetObject) {
-      this.controls.attach(this._targetObject);
+    this._targetProxy = null;
+    if (this._tcs.length) {
+      for (const tc of this._tcs) {
+        try {
+          tc.detach();
+        } catch (err) {}
+      }
+    } else {
+      this.controls?.detach();
     }
   }
 
-  // ─── Disposal ─────────────────────────────────────────────────────────────
+  /** Called by GameRuntime.play() ΓÇö hides gizmo during play mode. */
+  suspend() {
+    this._detachAllControls();
+    this._hide();
+  }
+  /** Called by GameRuntime.stop() ΓÇö restores gizmo after play mode. */
+  restore()  {
+    if (this._targetObject) {
+      if (this._mode === 'universal') {
+        this._attachAllControls(this._targetObject);
+      } else {
+        this.controls?.attach(this._targetObject);
+      }
+      if (this._mode !== 'select') {
+        this._show();
+      }
+    }
+  }
+
+  // ΓöÇΓöÇΓöÇ Disposal ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 
   dispose() {
     window.removeEventListener('cyco-vp-ready',              this._onVpReady);
@@ -726,8 +966,17 @@ export class TransformGizmo {
     window.removeEventListener('cyco-vp-world',              this._onWorld);
     window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
     window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
-    if (this.controls) {
-      this.engine.scene?.remove(this.controls);
+    if (this._tcs.length) {
+      for (const tc of this._tcs) {
+        try {
+          const helper = tc.getHelper();
+          if (helper && helper.parent) helper.parent.remove(helper);
+          tc.dispose();
+        } catch (err) {}
+      }
+      this._tcs = [];
+    } else if (this.controls) {
+      this.engine.scene?.remove(this.controls.getHelper());
       this.controls.dispose();
     }
   }

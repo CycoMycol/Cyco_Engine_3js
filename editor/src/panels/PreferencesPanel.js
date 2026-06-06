@@ -244,39 +244,119 @@ export class PreferencesPanel extends BasePanel {
     hdr.style.cssText = 'margin:0 0 12px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;';
     root.appendChild(hdr);
 
-    // Size slider
-    const sizeRow = document.createElement('div');
-    sizeRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
-    const sizeLabel = document.createElement('span');
-    sizeLabel.textContent = 'Gizmo Size';
-    sizeLabel.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);';
+    const buildSliderRow = (labelText, initialValue, onInput) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+      const lbl = document.createElement('span');
+      lbl.textContent = labelText;
+      lbl.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);';
 
-    const sizeSlider = document.createElement('input');
-    sizeSlider.type = 'range';
-    sizeSlider.min  = '0.5';
-    sizeSlider.max  = '3';
-    sizeSlider.step = '0.1';
-    sizeSlider.value = String(this._prefs.gizmo.size);
+      const slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = '0.3';
+      slider.max = '3';
+      slider.step = '0.05';
+      slider.value = String(initialValue);
+      slider.style.cssText = 'flex:1;';
 
-    const sizeVal = document.createElement('span');
-    sizeVal.textContent = parseFloat(sizeSlider.value).toFixed(1);
-    sizeVal.style.cssText = 'min-width:28px;text-align:right;font-size:11px;color:var(--text-secondary,#aaa);';
+      const valueDisplay = document.createElement('span');
+      valueDisplay.textContent = parseFloat(slider.value).toFixed(2);
+      valueDisplay.style.cssText = 'min-width:36px;text-align:right;font-size:11px;color:var(--text-secondary,#aaa);';
 
-    sizeSlider.addEventListener('input', () => {
-      sizeVal.textContent = parseFloat(sizeSlider.value).toFixed(1);
-      this._prefs.gizmo.size = parseFloat(sizeSlider.value);
-      const tc = window.__cyco?.transformGizmo?.controls;
-      if (tc) tc.size = this._prefs.gizmo.size;
+      slider.addEventListener('input', () => {
+        valueDisplay.textContent = parseFloat(slider.value).toFixed(2);
+        onInput(parseFloat(slider.value));
+      });
+
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
+      wrap.appendChild(slider);
+      wrap.appendChild(valueDisplay);
+
+      row.appendChild(lbl);
+      row.appendChild(wrap);
+      return { row, slider, valueDisplay };
+    };
+
+    const sizeModeRow = document.createElement('div');
+    sizeModeRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
+    const modeLabel = document.createElement('span');
+    modeLabel.textContent = 'Gizmo Size Mode';
+    modeLabel.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);';
+
+    const modeToggle = document.createElement('label');
+    modeToggle.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-secondary,#aaa);';
+    const modeCheckbox = document.createElement('input');
+    modeCheckbox.type = 'checkbox';
+    modeCheckbox.checked = !!this._prefs.gizmo.useSeparateGizmoSizes;
+    const modeText = document.createElement('span');
+    modeText.textContent = modeCheckbox.checked ? 'Separate sizes' : 'One size for all';
+    modeText.style.cssText = 'color:inherit;';
+    modeToggle.appendChild(modeCheckbox);
+    modeToggle.appendChild(modeText);
+
+    sizeModeRow.appendChild(modeLabel);
+    sizeModeRow.appendChild(modeToggle);
+    root.appendChild(sizeModeRow);
+
+    const globalSize = buildSliderRow('Gizmo Size', this._prefs.gizmo.size, (value) => {
+      this._prefs.gizmo.size = value;
+      if (!this._prefs.gizmo.useSeparateGizmoSizes) {
+        this._prefs.gizmo.translateSize = value;
+        this._prefs.gizmo.rotateSize = value;
+        this._prefs.gizmo.scaleSize = value;
+      }
       savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    root.appendChild(globalSize.row);
+
+    const individualSizes = document.createElement('div');
+    individualSizes.style.cssText = 'display:' + (this._prefs.gizmo.useSeparateGizmoSizes ? 'block' : 'none') + ';';
+
+    const translateSize = buildSliderRow('Translate Size', this._prefs.gizmo.translateSize, (value) => {
+      this._prefs.gizmo.translateSize = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    const rotateSize = buildSliderRow('Rotate Size', this._prefs.gizmo.rotateSize, (value) => {
+      this._prefs.gizmo.rotateSize = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    const scaleSize = buildSliderRow('Scale Size', this._prefs.gizmo.scaleSize, (value) => {
+      this._prefs.gizmo.scaleSize = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
     });
 
-    const sliderWrap = document.createElement('div');
-    sliderWrap.style.cssText = 'display:flex;align-items:center;gap:6px;';
-    sliderWrap.appendChild(sizeSlider);
-    sliderWrap.appendChild(sizeVal);
-    sizeRow.appendChild(sizeLabel);
-    sizeRow.appendChild(sliderWrap);
-    root.appendChild(sizeRow);
+    individualSizes.appendChild(translateSize.row);
+    individualSizes.appendChild(rotateSize.row);
+    individualSizes.appendChild(scaleSize.row);
+    root.appendChild(individualSizes);
+
+    const updateSizeMode = () => {
+      const separate = modeCheckbox.checked;
+      this._prefs.gizmo.useSeparateGizmoSizes = separate;
+      modeText.textContent = separate ? 'Separate sizes' : 'One size for all';
+      globalSize.row.style.display = separate ? 'none' : 'flex';
+      individualSizes.style.display = separate ? 'block' : 'none';
+      if (!separate) {
+        this._prefs.gizmo.translateSize = this._prefs.gizmo.size;
+        this._prefs.gizmo.rotateSize = this._prefs.gizmo.size;
+        this._prefs.gizmo.scaleSize = this._prefs.gizmo.size;
+        translateSize.slider.value = String(this._prefs.gizmo.size);
+        rotateSize.slider.value = String(this._prefs.gizmo.size);
+        scaleSize.slider.value = String(this._prefs.gizmo.size);
+        translateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
+        rotateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
+        scaleSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
+      }
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    };
+
+    modeCheckbox.addEventListener('change', updateSizeMode);
 
     // Axis colors
     for (const [axis, key] of [['X', 'axisColorX'], ['Y', 'axisColorY'], ['Z', 'axisColorZ']]) {
@@ -300,6 +380,20 @@ export class PreferencesPanel extends BasePanel {
     }
 
     return root;
+  }
+
+  _dispatchGizmoSize() {
+    const gizmo = this._prefs?.gizmo;
+    if (!gizmo) return;
+    window.dispatchEvent(new CustomEvent('cyco-gizmo-size', {
+      detail: {
+        size: gizmo.size,
+        useSeparateSizes: !!gizmo.useSeparateGizmoSizes,
+        translateSize: gizmo.translateSize,
+        rotateSize: gizmo.rotateSize,
+        scaleSize: gizmo.scaleSize,
+      },
+    }));
   }
 
   // ── Grid tab ─────────────────────────────────────────────────────────────────
