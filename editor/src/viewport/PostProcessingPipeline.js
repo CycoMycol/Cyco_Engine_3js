@@ -220,6 +220,9 @@ export class PostProcessingPipeline {
     /** @type {import('three/webgpu').RenderPipeline|null} */
     this._tslPipeline = null;
 
+    /** Whether the TSL pipeline has been driven by the cyco-vp-tick event. */
+    this._tickHandledByEvent = false;
+
     /** @type {import('./GTAONode.js').GTAONode|null} — TSL ambient occlusion node */
     this._tslAoPass = null;
 
@@ -307,6 +310,12 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-postfx-change',           this._onPostFxChange);
     window.addEventListener('cyco-vp-tool',                 this._onVpTool);
     window.addEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
+
+    // If the viewport was already initialized before this pipeline was
+    // constructed, rebuild immediately so the composer is available.
+    if (this.engine.rendererManager?.renderer && this.engine.scene && this.engine.camera) {
+      requestAnimationFrame(() => this._onVpReady());
+    }
   }
 
   // ─── Build pipelines ──────────────────────────────────────────────────────
@@ -558,7 +567,9 @@ export class PostProcessingPipeline {
         const sceneColorTex = scenePass.getTextureNode();
         this._tslNodes  = { sceneOnly: scenePass };
         sceneColorNode  = sceneColorTex;  // TextureNode — supports .uv() sampling
-        outputNode      = scenePass;      // PassNode — required as graph root
+        // Force alpha=1 on the final scene output so transparent background
+        // pixels do not render as fully transparent and leave the canvas blank.
+        outputNode      = vec4(sceneColorTex.rgb, 1);
       }
 
       // ── Bloom ──────────────────────────────────────────────────────────────
@@ -1057,6 +1068,7 @@ export class PostProcessingPipeline {
   // ─── Event handlers ───────────────────────────────────────────────────────
 
   _onTick() {
+    this._tickHandledByEvent = true;
     // ── Debug instrumentation (reads window.CYCO_DEBUG_RENDER set in ViewportEngine._tick) ──
     const _D  = window.CYCO_DEBUG_RENDER === true;
     const _fr = window._cycoDbgFrame || '?';

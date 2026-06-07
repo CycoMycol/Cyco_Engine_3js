@@ -215,10 +215,9 @@ export class RendererManager {
   _onVpReady() {
     try {
       const saved = localStorage.getItem('cyco:rendererType');
-      // Default to WebGPU when no preference has been saved yet.
-      const preferred = saved ?? 'webgpu';
-      if (preferred !== this.activeType) {
-        window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: preferred } }));
+      if (!saved) return; // keep the default renderer unless user explicitly picked one
+        if (saved !== this.activeType) {
+        window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: saved } }));
       }
     } catch (_) {}
   }

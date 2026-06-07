@@ -138,9 +138,16 @@ export class ViewportEngine {
    */
   async init(container) {
     this._container = container;
-    const { width, height } = container.getBoundingClientRect();
-    const w = Math.max(1, Math.floor(width));
-    const h = Math.max(1, Math.floor(height));
+    let { width, height } = container.getBoundingClientRect();
+    let w = Math.max(1, Math.floor(width));
+    let h = Math.max(1, Math.floor(height));
+
+    if (w <= 1 || h <= 1) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const rect = container.getBoundingClientRect();
+      w = Math.max(1, Math.floor(rect.width));
+      h = Math.max(1, Math.floor(rect.height));
+    }
 
     // Init renderer (async — retries up to 3× if context creation is blocked)
     try {
@@ -1889,7 +1896,18 @@ export class ViewportEngine {
   _onContainerReady(event) {
     const { container } = event.detail;
     if (!container) return;
-    if (this._container === container) return; // same element, nothing to do
+
+    if (this._container && !this._container.isConnected) {
+      this._container = null;
+    }
+
+    if (this._container === container) {
+      if (!this.rendererManager?.renderer && !this._initPending) {
+        this._initPending = true;
+        this.init(container).finally(() => { this._initPending = false; });
+      }
+      return; // same element, nothing else to do
+    }
     if (this._initPending) return; // init already in progress, ignore duplicate event
 
     // Remove placeholder label in the new container

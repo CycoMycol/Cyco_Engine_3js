@@ -87,10 +87,17 @@ export class CenterPanel extends BasePanel {
     vp.appendChild(lbl);
     body.appendChild(vp);
 
-    // Notify ViewportEngine that its container is ready (dispatched after this frame
-    // so the element is attached to the DOM before ViewportEngine.init() runs).
+    // Notify ViewportEngine that its container is ready after it has been attached
+    // to the DOM. Some renderers or panel layouts replace the element across frames.
     requestAnimationFrame(() => {
-      window.dispatchEvent(new CustomEvent('cyco-viewport-container-ready', { detail: { container: vp } }));
+      const dispatchReady = () => {
+        if (!document.body.contains(vp)) {
+          requestAnimationFrame(dispatchReady);
+          return;
+        }
+        window.dispatchEvent(new CustomEvent('cyco-viewport-container-ready', { detail: { container: vp } }));
+      };
+      dispatchReady();
     });
 
     root.appendChild(body);

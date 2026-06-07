@@ -705,14 +705,15 @@ export class TransformGizmo {
       return;
     }
 
-    const size = detail.size ?? 1;
+    const size = Number(detail.size ?? 1) || 1;
     const useSeparateSizes = !!detail.useSeparateSizes;
-    const translateSize = detail.translateSize ?? size;
-    const rotateSize = detail.rotateSize ?? size;
-    const scaleSize = detail.scaleSize ?? size;
+    const translateSize = Number(detail.translateSize ?? size) || size;
+    const rotateSize = Number(detail.rotateSize ?? size) || size;
+    const scaleSize = Number(detail.scaleSize ?? size) || size;
 
     for (const tc of this._tcs) {
       if (!tc) continue;
+
       if (useSeparateSizes) {
         if (tc === this._tcTranslate) tc.setSize(translateSize);
         else if (tc === this._tcRotate) tc.setSize(rotateSize);

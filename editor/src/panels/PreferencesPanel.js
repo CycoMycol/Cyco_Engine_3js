@@ -272,7 +272,7 @@ export class PreferencesPanel extends BasePanel {
     const sizeModeRow = document.createElement('div');
     sizeModeRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;';
     const modeLabel = document.createElement('span');
-    modeLabel.textContent = 'Gizmo Size Mode';
+    modeLabel.textContent = 'Gizmo Thickness Mode';
     modeLabel.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);';
 
     const modeToggle = document.createElement('label');
@@ -281,7 +281,7 @@ export class PreferencesPanel extends BasePanel {
     modeCheckbox.type = 'checkbox';
     modeCheckbox.checked = !!this._prefs.gizmo.useSeparateGizmoSizes;
     const modeText = document.createElement('span');
-    modeText.textContent = modeCheckbox.checked ? 'Separate sizes' : 'One size for all';
+    modeText.textContent = modeCheckbox.checked ? 'Separate thickness' : 'One thickness for all';
     modeText.style.cssText = 'color:inherit;';
     modeToggle.appendChild(modeCheckbox);
     modeToggle.appendChild(modeText);
@@ -290,7 +290,7 @@ export class PreferencesPanel extends BasePanel {
     sizeModeRow.appendChild(modeToggle);
     root.appendChild(sizeModeRow);
 
-    const globalSize = buildSliderRow('Gizmo Size', this._prefs.gizmo.size, (value) => {
+    const globalSize = buildSliderRow('Gizmo Thickness', this._prefs.gizmo.size, (value) => {
       this._prefs.gizmo.size = value;
       if (!this._prefs.gizmo.useSeparateGizmoSizes) {
         this._prefs.gizmo.translateSize = value;
@@ -305,17 +305,17 @@ export class PreferencesPanel extends BasePanel {
     const individualSizes = document.createElement('div');
     individualSizes.style.cssText = 'display:' + (this._prefs.gizmo.useSeparateGizmoSizes ? 'block' : 'none') + ';';
 
-    const translateSize = buildSliderRow('Translate Size', this._prefs.gizmo.translateSize, (value) => {
+    const translateSize = buildSliderRow('Translate Thickness', this._prefs.gizmo.translateSize, (value) => {
       this._prefs.gizmo.translateSize = value;
       savePrefs(this._prefs);
       this._dispatchGizmoSize();
     });
-    const rotateSize = buildSliderRow('Rotate Size', this._prefs.gizmo.rotateSize, (value) => {
+    const rotateSize = buildSliderRow('Rotate Thickness', this._prefs.gizmo.rotateSize, (value) => {
       this._prefs.gizmo.rotateSize = value;
       savePrefs(this._prefs);
       this._dispatchGizmoSize();
     });
-    const scaleSize = buildSliderRow('Scale Size', this._prefs.gizmo.scaleSize, (value) => {
+    const scaleSize = buildSliderRow('Scale Thickness', this._prefs.gizmo.scaleSize, (value) => {
       this._prefs.gizmo.scaleSize = value;
       savePrefs(this._prefs);
       this._dispatchGizmoSize();

@@ -1575,7 +1575,31 @@ class TransformControlsGizmo extends Object3D {
 
 			}
 
-			handle.scale.set( 1, 1, 1 ).multiplyScalar( factor * this.size / 4 );
+			const baseScale = factor / 4;
+			handle.scale.set( 1, 1, 1 ).multiplyScalar( baseScale );
+
+			// Only use size as handle thickness, not overall gizmo reach.
+			if ( this.size !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
+				const s = this.size;
+				const geomType = handle.geometry?.type;
+
+				if ( geomType === 'TorusGeometry' ) {
+					if ( handle.name === 'X' ) handle.scale.x *= s;
+					else if ( handle.name === 'Y' ) handle.scale.y *= s;
+					else if ( handle.name === 'Z' ) handle.scale.z *= s;
+				} else if ( handle.name === 'X' ) {
+					handle.scale.y *= s;
+					handle.scale.z *= s;
+				} else if ( handle.name === 'Y' ) {
+					handle.scale.x *= s;
+					handle.scale.z *= s;
+				} else if ( handle.name === 'Z' ) {
+					handle.scale.x *= s;
+					handle.scale.y *= s;
+				} else {
+					handle.scale.multiplyScalar( s );
+				}
+			}
 
 			// TODO: simplify helpers and consider decoupling from gizmo
 
