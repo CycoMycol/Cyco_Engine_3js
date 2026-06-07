@@ -1,4 +1,5 @@
 ﻿import * as THREE from 'three';
+import { BasePanel } from '../panels/BasePanel.js';
 
 /**
  * ComponentPicker.js — Dockable component picker panel helper.
@@ -252,16 +253,12 @@ export const ComponentPicker = {
       y = Math.min(Math.max(edgeMargin, Math.round(window.innerHeight * 0.14)), window.innerHeight - height - edgeMargin);
     }
 
+    const floating = BasePanel.getSavedFloatingState('component-picker', { x, y, width, height });
     dvApi.addPanel({
       id: 'component-picker',
       component: 'ComponentPickerPanel',
       title: 'Add Component',
-      floating: {
-        x,
-        y,
-        width,
-        height,
-      },
+      floating,
     });
 
     _setupOutsideClickListener('component-picker', _anchor);

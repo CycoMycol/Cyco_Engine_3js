@@ -129,6 +129,17 @@ const objectFactory         = new ObjectFactory(sceneManager, loadingManager);
 const selectionManager      = new SelectionManager(viewportEngine);
 const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager);
 
+const prefs                 = loadPrefs();
+window.dispatchEvent(new CustomEvent('cyco-gizmo-size', {
+  detail: {
+    size: prefs.gizmo.size,
+    useSeparateSizes: !!prefs.gizmo.useSeparateGizmoSizes,
+    translateSize: prefs.gizmo.translateSize,
+    rotateSize: prefs.gizmo.rotateSize,
+    scaleSize: prefs.gizmo.scaleSize,
+  }
+}));
+
 // Rendering modes + post-processing
 const renderModeManager     = new RenderModeManager(viewportEngine);   // eslint-disable-line no-unused-vars
 const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
@@ -158,6 +169,7 @@ if (typeof window !== 'undefined') {
     objectFactory,
     selectionManager,
     transformGizmo,
+    prefs,
     commandManager,
     viewportContextMenu,
     dockviewApi: dockApi,
@@ -188,7 +200,7 @@ function _startAutoSave(intervalMinutes) {
 }
 
 // Start with saved prefs
-_startAutoSave(loadPrefs().general.autoSaveInterval);
+_startAutoSave(prefs.general.autoSaveInterval);
 
 // Restart if preferences change
 window.addEventListener('cyco-preferences-change', ({ detail: { prefs } }) => {

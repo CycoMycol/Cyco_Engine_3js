@@ -7,6 +7,8 @@
  *   PhysicsWorldWindow.open();          // opens or focuses
  */
 
+import { BasePanel } from '../panels/BasePanel.js';
+
 export const PhysicsWorldWindow = {
   open() {
     const dvApi = window.__cyco?.dockviewApi;
@@ -18,16 +20,18 @@ export const PhysicsWorldWindow = {
       return;
     }
 
+    const floating = BasePanel.getSavedFloatingState('physics-world-panel', {
+      x:      Math.round((window.innerWidth  - 420) / 2),
+      y:      Math.round(window.innerHeight  * 0.2),
+      width:  420,
+      height: 380,
+    });
+
     dvApi.addPanel({
       id:        'physics-world-panel',
       component: 'PhysicsWorldPanel',
       title:     'Physics World',
-      floating: {
-        x:      Math.round((window.innerWidth  - 420) / 2),
-        y:      Math.round(window.innerHeight  * 0.2),
-        width:  420,
-        height: 380,
-      },
+      floating,
     });
   },
 };

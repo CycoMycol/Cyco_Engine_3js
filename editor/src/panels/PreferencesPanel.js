@@ -38,22 +38,13 @@ export class PreferencesPanel extends BasePanel {
     if (!this._floating) return;
     const container = this._findFloatingContainer();
     if (!container) return;
-    const { width, height } = this._floatDimensions;
     const groupApi = this._panelApi?.group?.api;
     if (groupApi) {
       try {
         groupApi.setConstraints({ minimumWidth: 400, minimumHeight: 320 });
-        groupApi.setSize({ width, height });
       } catch (_) {}
     }
-    container.style.width  = width  + 'px';
-    container.style.height = height + 'px';
-    const rect = container.getBoundingClientRect();
-    if (rect.right > window.innerWidth) {
-      container.style.right  = 'auto';
-      container.style.bottom = 'auto';
-      container.style.left   = Math.max(0, window.innerWidth - width - 4) + 'px';
-    }
+    super._fixFloatingSize();
   }
 
   // ── Content ──────────────────────────────────────────────────────────────────
@@ -335,25 +326,63 @@ export class PreferencesPanel extends BasePanel {
     individualSizes.appendChild(scaleSize.row);
     root.appendChild(individualSizes);
 
+    if (!this._prefs.gizmo.useSeparateGizmoSizes) {
+      const baseSize = this._prefs.gizmo.size;
+      if (this._prefs.gizmo.translateSize !== baseSize || this._prefs.gizmo.rotateSize !== baseSize || this._prefs.gizmo.scaleSize !== baseSize) {
+        this._prefs.gizmo.translateSize = baseSize;
+        this._prefs.gizmo.rotateSize = baseSize;
+        this._prefs.gizmo.scaleSize = baseSize;
+        savePrefs(this._prefs);
+      }
+    }
+
     const updateSizeMode = () => {
       const separate = modeCheckbox.checked;
+      const currentSize = this._prefs.gizmo.size;
+      const prevUseSeparate = this._prefs.gizmo.useSeparateGizmoSizes;
+      const prevTranslate = this._prefs.gizmo.translateSize;
+      const prevRotate = this._prefs.gizmo.rotateSize;
+      const prevScale = this._prefs.gizmo.scaleSize;
+
       this._prefs.gizmo.useSeparateGizmoSizes = separate;
       modeText.textContent = separate ? 'Separate sizes' : 'One size for all';
       globalSize.row.style.display = separate ? 'none' : 'flex';
       individualSizes.style.display = separate ? 'block' : 'none';
-      if (!separate) {
-        this._prefs.gizmo.translateSize = this._prefs.gizmo.size;
-        this._prefs.gizmo.rotateSize = this._prefs.gizmo.size;
-        this._prefs.gizmo.scaleSize = this._prefs.gizmo.size;
-        translateSize.slider.value = String(this._prefs.gizmo.size);
-        rotateSize.slider.value = String(this._prefs.gizmo.size);
-        scaleSize.slider.value = String(this._prefs.gizmo.size);
-        translateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
-        rotateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
-        scaleSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.size).toFixed(2);
+
+      let sizesChanged = false;
+      if (separate) {
+        if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
+          this._prefs.gizmo.translateSize = currentSize;
+          this._prefs.gizmo.rotateSize = currentSize;
+          this._prefs.gizmo.scaleSize = currentSize;
+          translateSize.slider.value = String(currentSize);
+          rotateSize.slider.value = String(currentSize);
+          scaleSize.slider.value = String(currentSize);
+          translateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          rotateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          sizesChanged = true;
+        }
+      } else {
+        if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
+          this._prefs.gizmo.translateSize = currentSize;
+          this._prefs.gizmo.rotateSize = currentSize;
+          this._prefs.gizmo.scaleSize = currentSize;
+          translateSize.slider.value = String(currentSize);
+          rotateSize.slider.value = String(currentSize);
+          scaleSize.slider.value = String(currentSize);
+          translateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          rotateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          sizesChanged = true;
+        }
       }
+
+      const preferenceChanged = prevUseSeparate !== separate;
       savePrefs(this._prefs);
-      this._dispatchGizmoSize();
+      if (preferenceChanged || sizesChanged) {
+        this._dispatchGizmoSize();
+      }
     };
 
     modeCheckbox.addEventListener('change', updateSizeMode);

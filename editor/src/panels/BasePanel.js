@@ -26,6 +26,10 @@ export class BasePanel {
     this._expectedOrientation = null; // 'vertical' | 'horizontal' | null — hint for onDidLocationChange
     this._dropOverlay = null;         // overlay element shown during floating drag
     this._dropZoneData = null;        // array of zone descriptors
+
+    this._floatingResizeObserver = null;
+    this._floatingSizeSaveTimer = null;
+    this._floatingSizeSaveDebounce = 250;
   }
 
   get element() {
@@ -34,6 +38,7 @@ export class BasePanel {
 
   init(params) {
     this._panelApi = params.api;
+    this._floating = this._panelApi?.group?.api?.location?.type === 'floating';
 
     // Restore orientation hint set by _dockAtVpEdge (fromJSON destroys the old instance,
     // so we stash the hint in LayoutManager._pendingOrient for the new instance to pick up).
@@ -46,6 +51,22 @@ export class BasePanel {
     this._el.innerHTML = '';
     this._el.appendChild(this._buildContent());
     this._addHeaderActions(params.api);
+
+    const originalClose = params.api.close?.bind(params.api);
+    if (typeof originalClose === 'function') {
+      params.api.close = (...args) => {
+        this._flushFloatingState();
+        const result = originalClose(...args);
+        if (!LayoutManager._restoringLayout) {
+          LayoutManager._resyncVisibility?.();
+          LayoutManager._scheduleAutoSave?.();
+          document.dispatchEvent(new CustomEvent('cyco-layout-change'));
+        }
+        return result;
+      };
+    }
+
+    this._deferRestoreFloatingState();
   }
 
   /** Override in subclass to return the panel's content element */
@@ -157,6 +178,180 @@ export class BasePanel {
     return null;
   }
 
+  static get _PANEL_STATE_STORAGE_KEY() {
+    return 'cyco-panel-state';
+  }
+
+  static getSavedFloatingState(panelId, defaultState) {
+    try {
+      const raw = localStorage.getItem(BasePanel._PANEL_STATE_STORAGE_KEY);
+      if (!raw) return { ...defaultState };
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== 'object') return { ...defaultState };
+      const saved = data[panelId];
+      if (!saved || typeof saved !== 'object') return { ...defaultState };
+      return {
+        x:      typeof saved.x === 'number' && Number.isFinite(saved.x) && saved.x >= 0 ? saved.x : defaultState.x,
+        y:      typeof saved.y === 'number' && Number.isFinite(saved.y) && saved.y >= 0 ? saved.y : defaultState.y,
+        width:  typeof saved.width === 'number' && Number.isFinite(saved.width) && saved.width >= 100 ? saved.width : defaultState.width,
+        height: typeof saved.height === 'number' && Number.isFinite(saved.height) && saved.height >= 100 ? saved.height : defaultState.height,
+      };
+    } catch (_) {
+      return { ...defaultState };
+    }
+  }
+
+  _loadSavedPanelState() {
+    try {
+      const raw = localStorage.getItem(BasePanel._PANEL_STATE_STORAGE_KEY);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      const id = this._panelApi?.id;
+      if (!id || typeof data !== 'object' || data === null) return null;
+      const saved = data[id];
+      if (!saved || typeof saved !== 'object') return null;
+      return {
+        x:      typeof saved.x === 'number' && Number.isFinite(saved.x) && saved.x >= 0 ? saved.x : null,
+        y:      typeof saved.y === 'number' && Number.isFinite(saved.y) && saved.y >= 0 ? saved.y : null,
+        width:  typeof saved.width === 'number' && Number.isFinite(saved.width) && saved.width >= 100 ? saved.width : null,
+        height: typeof saved.height === 'number' && Number.isFinite(saved.height) && saved.height >= 100 ? saved.height : null,
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  _savePanelState(state) {
+    if (!this._panelApi?.id) return;
+    const isValidState = Object.entries(state).every(([key, value]) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+      if ((key === 'width' || key === 'height') && value <= 0) return false;
+      if ((key === 'x' || key === 'y') && value < 0) return false;
+      return true;
+    });
+    if (!isValidState) return;
+    try {
+      const raw = localStorage.getItem(BasePanel._PANEL_STATE_STORAGE_KEY);
+      const data = raw ? JSON.parse(raw) : {};
+      if (typeof data !== 'object' || data === null) return;
+      data[this._panelApi.id] = { ...data[this._panelApi.id], ...state };
+      localStorage.setItem(BasePanel._PANEL_STATE_STORAGE_KEY, JSON.stringify(data));
+    } catch (_) {}
+  }
+
+  _scheduleFloatingStateSave(width, height, x, y) {
+    if (!this._panelApi?.id) return;
+    if (this._floatingSizeSaveTimer) {
+      clearTimeout(this._floatingSizeSaveTimer);
+    }
+    this._floatingSizeSaveTimer = setTimeout(() => {
+      this._savePanelState({ width, height, x, y });
+      this._floatingSizeSaveTimer = null;
+    }, this._floatingSizeSaveDebounce);
+  }
+
+  _startFloatingResizeObserver(container) {
+    this._stopFloatingResizeObserver();
+    if (!container || typeof ResizeObserver === 'undefined') return;
+    this._floatingResizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        const rect = entry.contentRect;
+        const width = Math.round(rect.width);
+        const height = Math.round(rect.height);
+        const style = getComputedStyle(container);
+        const x = parseFloat(style.left) || container.getBoundingClientRect().left;
+        const y = parseFloat(style.top)  || container.getBoundingClientRect().top;
+        this._scheduleFloatingStateSave(width, height, x, y);
+      }
+    });
+    this._floatingResizeObserver.observe(container);
+  }
+
+  _stopFloatingResizeObserver() {
+    if (this._floatingResizeObserver) {
+      this._floatingResizeObserver.disconnect();
+      this._floatingResizeObserver = null;
+    }
+    if (this._floatingSizeSaveTimer) {
+      clearTimeout(this._floatingSizeSaveTimer);
+      this._floatingSizeSaveTimer = null;
+    }
+  }
+
+  _saveCurrentFloatingState() {
+    const container = this._findFloatingContainer();
+    if (!container || !this._panelApi?.id) return;
+    const rect = container.getBoundingClientRect();
+    const style = getComputedStyle(container);
+    const width = Math.round(rect.width);
+    const height = Math.round(rect.height);
+    const left = parseFloat(style.left);
+    const top = parseFloat(style.top);
+    const x = Number.isFinite(left) ? left : rect.left;
+    const y = Number.isFinite(top) ? top : rect.top;
+    this._savePanelState({ width, height, x, y });
+  }
+
+  _flushFloatingState() {
+    if (!this._panelApi?.id) return;
+    if (this._floatingSizeSaveTimer) {
+      clearTimeout(this._floatingSizeSaveTimer);
+      this._floatingSizeSaveTimer = null;
+    }
+    this._saveCurrentFloatingState();
+  }
+
+  _applySavedFloatingState(container) {
+    if (!container) return;
+    const saved = this._loadSavedPanelState();
+    if (!saved) return;
+
+    const width = saved.width !== null ? Math.max(100, saved.width) : null;
+    const height = saved.height !== null ? Math.max(100, saved.height) : null;
+    const x = saved.x !== null ? saved.x : null;
+    const y = saved.y !== null ? saved.y : null;
+
+    const groupApi = this._panelApi?.group?.api;
+    if (groupApi && width !== null && height !== null) {
+      try { groupApi.setSize({ width, height }); } catch (_) {}
+    }
+    if (width !== null)  container.style.width  = width  + 'px';
+    if (height !== null) container.style.height = height + 'px';
+    if (x !== null) {
+      container.style.left   = x + 'px';
+      container.style.right  = 'auto';
+    }
+    if (y !== null) {
+      container.style.top    = Math.max(0, y) + 'px';
+      container.style.bottom = 'auto';
+    }
+  }
+
+  _restoreFloatingStateFromStorage() {
+    if (!this._floating) return;
+    const container = this._findFloatingContainer();
+    if (!container) return;
+    this._applySavedFloatingState(container);
+    this._startFloatingResizeObserver(container);
+  }
+
+  _deferRestoreFloatingState() {
+    let attempts = 0;
+    const tryRestore = () => {
+      if (!this._floating && this._findFloatingContainer()) {
+        this._floating = true;
+      }
+      const container = this._findFloatingContainer();
+      if (container) {
+        this._restoreFloatingStateFromStorage();
+      } else if (attempts < 4) {
+        attempts += 1;
+        requestAnimationFrame(tryRestore);
+      }
+    };
+    requestAnimationFrame(tryRestore);
+  }
+
   /**
    * Creates a drag-handle button:
    *  - When DOCKED:   drag → float at cursor position; click → toggle float
@@ -234,6 +429,11 @@ export class BasePanel {
           this._toggleFloat(handleEl);
         } else if (activeZone) {
           this._dockAtZone(activeZone);
+        } else if (didDrag && container) {
+          const rect = container.getBoundingClientRect();
+          const left = parseFloat(container.style.left) || rect.left;
+          const top  = parseFloat(container.style.top)  || rect.top;
+          this._savePanelState({ x: left, y: top });
         }
       };
       document.addEventListener('mousemove', onMove);
@@ -277,6 +477,11 @@ export class BasePanel {
               this._stopDropTracking();
               if (activeZone) {
                 this._dockAtZone(activeZone);
+              } else if (floatContainer) {
+                const rect = floatContainer.getBoundingClientRect();
+                const left = parseFloat(floatContainer.style.left) || rect.left;
+                const top  = parseFloat(floatContainer.style.top)  || rect.top;
+                this._savePanelState({ x: left, y: top });
               }
             };
             document.addEventListener('mousemove', onMoveFloat);
@@ -315,6 +520,10 @@ export class BasePanel {
       });
       setTimeout(() => {
         this._fixFloatingSize();
+        const container = this._findFloatingContainer();
+        if (container) {
+          this._restoreFloatingStateFromStorage();
+        }
         this._cleanupEmptyGroups();
       }, 50);
     } catch (e) {
@@ -366,19 +575,19 @@ export class BasePanel {
     if (!this._floating) return;
     const container = this._findFloatingContainer();
     if (!container) return;
-    const { width, height } = this._floatDimensions;
-    // Lock size via dockview's constraint system first (prevents ResizeObserver override)
+    const saved = this._loadSavedPanelState();
+    const width = saved?.width !== null ? saved.width : this._floatDimensions.width;
+    const height = saved?.height !== null ? saved.height : this._floatDimensions.height;
     const groupApi = this._panelApi?.group?.api;
     if (groupApi) {
       try {
         groupApi.setConstraints({
-          minimumWidth: width, maximumWidth: width,
-          minimumHeight: height, maximumHeight: height,
+          minimumWidth: 100,
+          minimumHeight: 100,
         });
         groupApi.setSize({ width, height });
       } catch (_) {}
     }
-    // Also set directly on the DOM element as a belt-and-suspenders fix
     container.style.width  = width  + 'px';
     container.style.height = height + 'px';
     // If the new width would push the bar off the right edge, repin to left=0
@@ -1408,6 +1617,10 @@ export class BasePanel {
         });
         setTimeout(() => {
           this._fixFloatingSize();
+          const container = this._findFloatingContainer();
+          if (container) {
+            this._restoreFloatingStateFromStorage();
+          }
           this._cleanupEmptyGroups();
         }, 50);
       } catch(e) {
@@ -1419,6 +1632,7 @@ export class BasePanel {
       // Snap back to the original docked position.
       const snapshot = this._floatSnapshot;
       this._floating = false;
+      this._stopFloatingResizeObserver();
       this._floatSnapshot = null;
       if (snapshot) {
         LayoutManager.snapBackFloating(snapshot, this._panelApi?.id);

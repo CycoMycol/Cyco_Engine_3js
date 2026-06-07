@@ -7,6 +7,8 @@
  * Dispatches:  cyco-preferences-change { prefs }
  */
 
+import { BasePanel } from '../panels/BasePanel.js';
+
 const PREFS_KEY = 'cyco-prefs';
 
 // Default keybindings
@@ -89,16 +91,17 @@ const PreferencesWindow = {
       try { existing.api.group.api.setActive?.(); } catch (_) {}
       return;
     }
+    const floating = BasePanel.getSavedFloatingState('preferences-panel', {
+      x:      Math.round((window.innerWidth  - 450) / 2),
+      y:      Math.round(window.innerHeight * 0.15),
+      width:  450,
+      height: 450,
+    });
     dvApi.addPanel({
       id:        'preferences-panel',
       component: 'PreferencesPanel',
       title:     'Preferences',
-      floating: {
-        x:      Math.round((window.innerWidth  - 680) / 2),
-        y:      Math.round(window.innerHeight * 0.15),
-        width:  680,
-        height: 490,
-      },
+      floating,
     });
   },
 };

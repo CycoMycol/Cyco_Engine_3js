@@ -439,11 +439,17 @@ export class CenterPanel extends BasePanel {
       return;
     }
     try {
+      const floating = BasePanel.getSavedFloatingState('camera-view-panel', {
+        x:      Math.round((window.innerWidth - 320) / 2),
+        y:      Math.round(window.innerHeight * 0.18),
+        width:  320,
+        height: 240,
+      });
       api.addPanel({
         id:        'camera-view-panel',
         component: 'CameraViewPanel',
         title:     'Camera View',
-        floating:  { width: 320, height: 240 },
+        floating,
       });
     } catch (e) {
       console.warn('[CenterPanel] Could not open CameraViewPanel:', e);

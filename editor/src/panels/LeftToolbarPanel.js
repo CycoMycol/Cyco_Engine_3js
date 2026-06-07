@@ -137,11 +137,17 @@ export class LeftToolbarPanel extends BasePanel {
         if (existing) {
           existing.api.close();
         } else {
+          const floating = BasePanel.getSavedFloatingState('camera-view', {
+            x: 260,
+            y: 90,
+            width: 340,
+            height: 260,
+          });
           dvApi.addPanel({
             id: 'camera-view',
             component: 'CameraViewPanel',
             title: 'Camera View',
-            floating: { x: 260, y: 90, width: 340, height: 260 },
+            floating,
           });
         }
       }

@@ -70,6 +70,8 @@ export class TransformGizmo {
     this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
     this._onControlChange    = this._onControlChange.bind(this);
     this._onVpTick           = this._onVpTick.bind(this);
+    this._pendingGizmoSize   = null;
+    this._lastGizmoSize      = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
@@ -154,6 +156,13 @@ export class TransformGizmo {
     this._tcTranslate.setSize(1.0);
     this._tcRotate.setSize(0.55);
     this._tcScale.setSize(0.75);
+
+    if (this._lastGizmoSize) {
+      this._onGizmoSize({ detail: this._lastGizmoSize });
+    } else if (this._pendingGizmoSize) {
+      this._onGizmoSize({ detail: this._pendingGizmoSize });
+    }
+    this._pendingGizmoSize = null;
 
     this._applySnap();
 
@@ -690,6 +699,12 @@ export class TransformGizmo {
 
   _onGizmoSize(event) {
     const detail = event.detail ?? {};
+    this._lastGizmoSize = detail;
+    if (!this._tcs.length) {
+      this._pendingGizmoSize = detail;
+      return;
+    }
+
     const size = detail.size ?? 1;
     const useSeparateSizes = !!detail.useSeparateSizes;
     const translateSize = detail.translateSize ?? size;
@@ -699,11 +714,11 @@ export class TransformGizmo {
     for (const tc of this._tcs) {
       if (!tc) continue;
       if (useSeparateSizes) {
-        if (tc === this._tcTranslate) tc.size = translateSize;
-        else if (tc === this._tcRotate) tc.size = rotateSize;
-        else if (tc === this._tcScale) tc.size = scaleSize;
+        if (tc === this._tcTranslate) tc.setSize(translateSize);
+        else if (tc === this._tcRotate) tc.setSize(rotateSize);
+        else if (tc === this._tcScale) tc.setSize(scaleSize);
       } else {
-        tc.size = size;
+        tc.setSize(size);
       }
     }
   }

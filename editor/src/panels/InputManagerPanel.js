@@ -65,16 +65,13 @@ export class InputManagerPanel extends BasePanel {
     if (!this._floating) return;
     const container = this._findFloatingContainer();
     if (!container) return;
-    const { width, height } = this._floatDimensions;
     const groupApi = this._panelApi?.group?.api;
     if (groupApi) {
       try {
         groupApi.setConstraints({ minimumWidth: 320, minimumHeight: 240 });
-        groupApi.setSize({ width, height });
       } catch (_) {}
     }
-    container.style.width  = width  + 'px';
-    container.style.height = height + 'px';
+    super._fixFloatingSize();
   }
 
   _buildContent() {
