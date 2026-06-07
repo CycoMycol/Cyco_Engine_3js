@@ -710,6 +710,10 @@ export class TransformGizmo {
     const translateSize = Number(detail.translateSize ?? size) || size;
     const rotateSize = Number(detail.rotateSize ?? size) || size;
     const scaleSize = Number(detail.scaleSize ?? size) || size;
+    const distance = Number(detail.distance ?? 1) || 1;
+    const translateDistance = Number(detail.translateDistance ?? distance) || distance;
+    const rotateDistance = Number(detail.rotateDistance ?? distance) || distance;
+    const scaleDistance = Number(detail.scaleDistance ?? distance) || distance;
 
     for (const tc of this._tcs) {
       if (!tc) continue;
@@ -720,6 +724,14 @@ export class TransformGizmo {
         else if (tc === this._tcScale) tc.setSize(scaleSize);
       } else {
         tc.setSize(size);
+      }
+
+      if (useSeparateSizes) {
+        if (tc === this._tcTranslate) tc.distance = translateDistance;
+        else if (tc === this._tcRotate) tc.distance = rotateDistance;
+        else if (tc === this._tcScale) tc.distance = scaleDistance;
+      } else {
+        tc.distance = distance;
       }
     }
   }

@@ -302,6 +302,13 @@ export class PreferencesPanel extends BasePanel {
     });
     root.appendChild(globalSize.row);
 
+    const globalDistance = buildSliderRow('Gizmo Distance', this._prefs.gizmo.distance ?? 1, (value) => {
+      this._prefs.gizmo.distance = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    root.appendChild(globalDistance.row);
+
     const individualSizes = document.createElement('div');
     individualSizes.style.cssText = 'display:' + (this._prefs.gizmo.useSeparateGizmoSizes ? 'block' : 'none') + ';';
 
@@ -321,19 +328,44 @@ export class PreferencesPanel extends BasePanel {
       this._dispatchGizmoSize();
     });
 
+    const translateDistance = buildSliderRow('Translate Distance', this._prefs.gizmo.translateDistance ?? this._prefs.gizmo.distance ?? 1, (value) => {
+      this._prefs.gizmo.translateDistance = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    const rotateDistance = buildSliderRow('Rotate Distance', this._prefs.gizmo.rotateDistance ?? this._prefs.gizmo.distance ?? 1, (value) => {
+      this._prefs.gizmo.rotateDistance = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+    const scaleDistance = buildSliderRow('Scale Distance', this._prefs.gizmo.scaleDistance ?? this._prefs.gizmo.distance ?? 1, (value) => {
+      this._prefs.gizmo.scaleDistance = value;
+      savePrefs(this._prefs);
+      this._dispatchGizmoSize();
+    });
+
     individualSizes.appendChild(translateSize.row);
     individualSizes.appendChild(rotateSize.row);
     individualSizes.appendChild(scaleSize.row);
+    individualSizes.appendChild(translateDistance.row);
+    individualSizes.appendChild(rotateDistance.row);
+    individualSizes.appendChild(scaleDistance.row);
     root.appendChild(individualSizes);
 
     if (!this._prefs.gizmo.useSeparateGizmoSizes) {
       const baseSize = this._prefs.gizmo.size;
+      const baseDistance = this._prefs.gizmo.distance;
       if (this._prefs.gizmo.translateSize !== baseSize || this._prefs.gizmo.rotateSize !== baseSize || this._prefs.gizmo.scaleSize !== baseSize) {
         this._prefs.gizmo.translateSize = baseSize;
         this._prefs.gizmo.rotateSize = baseSize;
         this._prefs.gizmo.scaleSize = baseSize;
-        savePrefs(this._prefs);
       }
+      if (this._prefs.gizmo.translateDistance !== baseDistance || this._prefs.gizmo.rotateDistance !== baseDistance || this._prefs.gizmo.scaleDistance !== baseDistance) {
+        this._prefs.gizmo.translateDistance = baseDistance;
+        this._prefs.gizmo.rotateDistance = baseDistance;
+        this._prefs.gizmo.scaleDistance = baseDistance;
+      }
+      savePrefs(this._prefs);
     }
 
     const updateSizeMode = () => {
@@ -347,9 +379,15 @@ export class PreferencesPanel extends BasePanel {
       this._prefs.gizmo.useSeparateGizmoSizes = separate;
       modeText.textContent = separate ? 'Separate sizes' : 'One size for all';
       globalSize.row.style.display = separate ? 'none' : 'flex';
+      globalDistance.row.style.display = separate ? 'none' : 'flex';
       individualSizes.style.display = separate ? 'block' : 'none';
 
       let sizesChanged = false;
+      const currentDistance = this._prefs.gizmo.distance;
+      const prevTranslateDistance = this._prefs.gizmo.translateDistance;
+      const prevRotateDistance = this._prefs.gizmo.rotateDistance;
+      const prevScaleDistance = this._prefs.gizmo.scaleDistance;
+
       if (separate) {
         if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
           this._prefs.gizmo.translateSize = currentSize;
@@ -363,6 +401,18 @@ export class PreferencesPanel extends BasePanel {
           scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
           sizesChanged = true;
         }
+        if (prevTranslateDistance !== currentDistance || prevRotateDistance !== currentDistance || prevScaleDistance !== currentDistance) {
+          this._prefs.gizmo.translateDistance = currentDistance;
+          this._prefs.gizmo.rotateDistance = currentDistance;
+          this._prefs.gizmo.scaleDistance = currentDistance;
+          translateDistance.slider.value = String(currentDistance);
+          rotateDistance.slider.value = String(currentDistance);
+          scaleDistance.slider.value = String(currentDistance);
+          translateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
+          rotateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
+          scaleDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
+          sizesChanged = true;
+        }
       } else {
         if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
           this._prefs.gizmo.translateSize = currentSize;
@@ -374,6 +424,18 @@ export class PreferencesPanel extends BasePanel {
           translateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
           rotateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
           scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
+          sizesChanged = true;
+        }
+        if (prevTranslateDistance !== currentDistance || prevRotateDistance !== currentDistance || prevScaleDistance !== currentDistance) {
+          this._prefs.gizmo.translateDistance = currentDistance;
+          this._prefs.gizmo.rotateDistance = currentDistance;
+          this._prefs.gizmo.scaleDistance = currentDistance;
+          translateDistance.slider.value = String(currentDistance);
+          rotateDistance.slider.value = String(currentDistance);
+          scaleDistance.slider.value = String(currentDistance);
+          translateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
+          rotateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
+          scaleDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
           sizesChanged = true;
         }
       }
@@ -417,10 +479,14 @@ export class PreferencesPanel extends BasePanel {
     window.dispatchEvent(new CustomEvent('cyco-gizmo-size', {
       detail: {
         size: gizmo.size,
+        distance: gizmo.distance ?? 1,
         useSeparateSizes: !!gizmo.useSeparateGizmoSizes,
         translateSize: gizmo.translateSize,
         rotateSize: gizmo.rotateSize,
         scaleSize: gizmo.scaleSize,
+        translateDistance: gizmo.translateDistance ?? gizmo.distance ?? 1,
+        rotateDistance: gizmo.rotateDistance ?? gizmo.distance ?? 1,
+        scaleDistance: gizmo.scaleDistance ?? gizmo.distance ?? 1,
       },
     }));
   }

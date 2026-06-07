@@ -215,6 +215,15 @@ class TransformControls extends Controls {
 		defineProperty( 'size', 1 );
 
 		/**
+		 * The relative handle distance from the pivot point.
+		 *
+		 * @name TransformControls#distance
+		 * @type {number}
+		 * @default 1
+		 */
+		defineProperty( 'distance', 1 );
+
+		/**
 		 * Whether dragging is currently performed or not.
 		 *
 		 * @name TransformControls#dragging
@@ -905,6 +914,17 @@ class TransformControls extends Controls {
 	}
 
 	/**
+	 * Sets the handle distance of the helper UI.
+	 *
+	 * @param {number} distance - The distance to set.
+	 */
+	setDistance( distance ) {
+
+		this.distance = distance;
+
+	}
+
+	/**
 	 * Sets the coordinate space in which transformations are applied.
 	 *
 	 * @param {'world'|'local'} space - The space to set.
@@ -1575,31 +1595,53 @@ class TransformControlsGizmo extends Object3D {
 
 			}
 
-			const baseScale = factor / 4;
-			handle.scale.set( 1, 1, 1 ).multiplyScalar( baseScale );
+		const baseScale = factor / 4;
+		handle.scale.set( 1, 1, 1 ).multiplyScalar( baseScale );
 
-			// Only use size as handle thickness, not overall gizmo reach.
-			if ( this.size !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
-				const s = this.size;
-				const geomType = handle.geometry?.type;
-
-				if ( geomType === 'TorusGeometry' ) {
-					if ( handle.name === 'X' ) handle.scale.x *= s;
-					else if ( handle.name === 'Y' ) handle.scale.y *= s;
-					else if ( handle.name === 'Z' ) handle.scale.z *= s;
-				} else if ( handle.name === 'X' ) {
-					handle.scale.y *= s;
-					handle.scale.z *= s;
-				} else if ( handle.name === 'Y' ) {
-					handle.scale.x *= s;
-					handle.scale.z *= s;
-				} else if ( handle.name === 'Z' ) {
-					handle.scale.x *= s;
-					handle.scale.y *= s;
-				} else {
-					handle.scale.multiplyScalar( s );
-				}
+		const distance = this.distance !== undefined ? this.distance : 1;
+		if ( distance !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
+			if ( handle.name === 'X' ) {
+				handle.scale.x *= distance;
+			} else if ( handle.name === 'Y' ) {
+				handle.scale.y *= distance;
+			} else if ( handle.name === 'Z' ) {
+				handle.scale.z *= distance;
+			} else if ( handle.name === 'XY' ) {
+				handle.scale.x *= distance;
+				handle.scale.y *= distance;
+			} else if ( handle.name === 'YZ' ) {
+				handle.scale.y *= distance;
+				handle.scale.z *= distance;
+			} else if ( handle.name === 'XZ' ) {
+				handle.scale.x *= distance;
+				handle.scale.z *= distance;
+			} else {
+				handle.scale.multiplyScalar( distance );
 			}
+		}
+
+		// Only use size as handle thickness, not overall gizmo reach.
+		if ( this.size !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
+			const s = this.size;
+			const geomType = handle.geometry?.type;
+
+			if ( geomType === 'TorusGeometry' ) {
+				if ( handle.name === 'X' ) handle.scale.x *= s;
+				else if ( handle.name === 'Y' ) handle.scale.y *= s;
+				else if ( handle.name === 'Z' ) handle.scale.z *= s;
+			} else if ( handle.name === 'X' ) {
+				handle.scale.y *= s;
+				handle.scale.z *= s;
+			} else if ( handle.name === 'Y' ) {
+				handle.scale.x *= s;
+				handle.scale.z *= s;
+			} else if ( handle.name === 'Z' ) {
+				handle.scale.x *= s;
+				handle.scale.y *= s;
+			} else {
+				handle.scale.multiplyScalar( s );
+			}
+		}
 
 			// TODO: simplify helpers and consider decoupling from gizmo
 
