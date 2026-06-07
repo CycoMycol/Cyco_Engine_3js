@@ -46,6 +46,10 @@ export class TransformGizmo {
     this._mode        = 'select'; // default: pointer/select, no gizmo shown
     this._space       = 'world';
     this._physicsEdit = false;
+    /** Cached controls camera — only rebuilt when the editor camera changes. */
+    this._controlsCameraDirty = true;
+    /** Whether the current TC set was built with universal-mode patches applied. */
+    this._builtForUniversal = false;
     this._physicsEditMode = 'translate';
     this._pendingPhysicsAttach = false;
     this._isDragging = false;
@@ -72,6 +76,9 @@ export class TransformGizmo {
     this._onVpTick           = this._onVpTick.bind(this);
     this._pendingGizmoSize   = null;
     this._lastGizmoSize      = null;
+    this._lastMouseNDC       = { x: 0, y: 0, valid: false };
+    this._universalPickWinner = null;
+    this._universalLoses     = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
@@ -88,7 +95,6 @@ export class TransformGizmo {
     window.addEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.addEventListener('cyco-physics-edit-focus', this._onPhysicsFocus?.bind(this));
     window.addEventListener('cyco-rvp-snap',          this._onSnap);
-    window.addEventListener('cyco-rvp-world',         this._onWorld);
     window.addEventListener('cyco-vp-world',          this._onWorld);
     window.addEventListener('cyco-gizmo-size',        this._onGizmoSize);
     window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
@@ -101,9 +107,21 @@ export class TransformGizmo {
 
     if (!this._controlsCamera || this._controlsCamera.type !== camera.type) {
       this._controlsCamera = camera.clone();
+      this._controlsCameraDirty = true;
     }
 
+    // Only sync when the camera has actually moved (dirty flag from editor-cam-changed)
     const proxy = this._controlsCamera;
+    if (!this._controlsCameraDirty) {
+      // Still update position/quaternion each frame for orbit controls — these change continuously
+      proxy.position.copy(camera.position);
+      proxy.quaternion.copy(camera.quaternion);
+      proxy.rotation.copy(camera.rotation);
+      proxy.updateMatrixWorld();
+      return proxy;
+    }
+    this._controlsCameraDirty = false;
+
     proxy.position.copy(camera.position);
     proxy.quaternion.copy(camera.quaternion);
     proxy.rotation.copy(camera.rotation);
@@ -174,7 +192,12 @@ export class TransformGizmo {
       scene.add(helper);
     }
 
-    this._patchGizmosForUniversal();
+    // Only strip handles when actually building for universal mode —
+    // for individual translate/rotate/scale modes the handles must stay intact.
+    this._builtForUniversal = (this._mode === 'universal');
+    if (this._builtForUniversal) {
+      this._patchGizmosForUniversal();
+    }
     this._setupUniversalIntercept(renderer.domElement);
     this._setupGlobalFailsafe();
 
@@ -219,13 +242,14 @@ export class TransformGizmo {
     tc.addEventListener('mouseDown', () => {
       const obj = tc.object;
       if (!obj) return;
-      this._snapPos = obj.position.clone();
-      this._snapRot = obj.rotation.clone();
-      this._snapScl = obj.scale.clone();
       this._isDragging = true;
       this._scaleInterceptPending = false;
-      for (const other of this._tcs) {
-        if (other !== tc) other.enabled = false;
+      // In universal mode the intercept already picked a winner and
+      // disabled the losers — don't re-disable here or it fights.
+      if (this._mode !== 'universal') {
+        for (const other of this._tcs) {
+          if (other !== tc) other.enabled = false;
+        }
       }
       const orbitControls = this.engine.controls;
       if (orbitControls) orbitControls.enabled = false;
@@ -320,14 +344,12 @@ export class TransformGizmo {
     };
 
     const isPlaneOrXYZ = c => ['XYZ','XY','YZ','XZ'].includes(c.name);
-    const isShaft = c => c.geometry?.type === 'CylinderGeometry'
-                      && c.geometry?.parameters?.radiusTop > 0;
 
     const tGizmo  = this._tcTranslate._gizmo.gizmo['translate'];
     const tPicker = this._tcTranslate._gizmo.picker['translate'];
     removeFrom(tGizmo,  isPlaneOrXYZ);
-    removeFrom(tPicker, isPlaneOrXYZ);
-    removeFrom(tGizmo,  isShaft);
+    // Remove planes AND XYZ from picker — scale's XYZ is the center handle
+    removeFrom(tPicker, c => ['XY','YZ','XZ','XYZ'].includes(c.name));
 
     const sGizmo  = this._tcScale._gizmo.gizmo['scale'];
     const sPicker = this._tcScale._gizmo.picker['scale'];
@@ -339,6 +361,64 @@ export class TransformGizmo {
     const rPicker = this._tcRotate._gizmo.picker['rotate'];
     removeFrom(rGizmo,  c => c.name === 'E' || c.name === 'XYZE');
     removeFrom(rPicker, c => c.name === 'E' || c.name === 'XYZE');
+
+    // ── Enlarge picker hit areas for universal mode ──────────────────────
+    // Tag all picker children so TransformControls.updateMatrixWorld
+    // knows not to hide them when an axis faces the camera.
+    this._tagPickers();
+
+    this._enlargePickers();
+  }
+
+  /** Tag all picker children so TransformControls never hides them. */
+  _tagPickers() {
+    const tag = (tc, mode) => {
+      const group = tc._gizmo?.picker?.[mode];
+      if (!group) return;
+      for (const child of group.children) child._isPicker = true;
+    };
+    tag(this._tcTranslate, 'translate');
+    tag(this._tcRotate,    'rotate');
+    tag(this._tcScale,     'scale');
+  }
+
+  /** Replace axis-cone pickers with elongated boxes that are equally
+   *  clickable from ANY camera angle, even when the axis points at the camera. */
+  _enlargePickers() {
+    // Use the module-level THREE import (window.THREE is not set in ES-module context)
+    const scaleAroundCenter = (geom, s) => {
+      geom.computeBoundingBox();
+      const c = new THREE.Vector3();
+      geom.boundingBox.getCenter(c);
+      const m = new THREE.Matrix4()
+        .makeTranslation(-c.x, -c.y, -c.z)
+        .multiply(new THREE.Matrix4().makeScale(s, s, s))
+        .multiply(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z));
+      geom.applyMatrix4(m);
+      geom.computeBoundingSphere();
+      geom.computeBoundingBox();
+    };
+
+    // Replace the tiny cone pickers with elongated boxes.  The original
+    // CylinderGeometry cones are only 0.2 units wide and hard to hit
+    // when viewed end-on.  New boxes are 1.2 units long and 0.25 wide.
+    const _replacePickerGeos = (tc, mode) => {
+      const pickerGroup = tc._gizmo?.picker?.[mode];
+      if (!pickerGroup) return;
+      for (const child of pickerGroup.children) {
+        if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
+          // Elongate the existing baked geometry along its longest axis
+          // so the hit area is thick enough from any angle.
+          scaleAroundCenter(child.geometry, 1.8);
+        }
+        if (child.name === 'XYZ') {
+          scaleAroundCenter(child.geometry, 3.0);
+        }
+      }
+    };
+
+    _replacePickerGeos(this._tcTranslate, 'translate');
+    _replacePickerGeos(this._tcScale,     'scale');
   }
 
   _setupUniversalIntercept(canvas) {
@@ -355,68 +435,92 @@ export class TransformGizmo {
       return mouse;
     };
 
-    const pickWinner = (ndcMouse) => {
-      raycaster.setFromCamera(ndcMouse, this.engine.camera);
-      if (raycaster.intersectObject(this._tcRotate._gizmo.picker['rotate'], true).length > 0)
-        return 'rotate';
-      if (raycaster.intersectObject(this._tcScale._gizmo.picker['scale'], true).length > 0)
-        return 'scale';
-      return 'translate';
+    // Pick the SPECIFIC handle (not just type) that is closest to the
+    // cursor across ALL three TC pickers.  Return { type, axisName } so
+    // we can clear only non-matching axes.
+    this._universalPickWinner = (ndcMouse) => {
+      const cam = this._tcTranslate?.camera || this.engine.camera;
+      raycaster.setFromCamera(ndcMouse, cam);
+
+      const hits = [];
+      const add = (type, group) => {
+        const arr = raycaster.intersectObject(group, true);
+        if (arr.length > 0) hits.push({ type, axis: arr[0].object.name, dist: arr[0].distance });
+      };
+      add('translate', this._tcTranslate._gizmo.picker['translate']);
+      add('rotate',    this._tcRotate._gizmo.picker['rotate']);
+      add('scale',     this._tcScale._gizmo.picker['scale']);
+
+      if (hits.length === 0) return null;
+
+      // Special case: when scale hits XYZ (center cube), it should always
+      // win over translate/rotate that pass through the same point, because
+      // the center cube is the user's intended target for uniform scaling.
+      const scaleXYZ = hits.find(h => h.type === 'scale' && h.axis === 'XYZ');
+      if (scaleXYZ) return scaleXYZ;
+
+      hits.sort((a, b) => a.dist - b.dist);
+      return hits[0]; // { type, axis, dist }
     };
 
-    const losersFor = (winner) => {
-      if (winner === 'rotate')    return [this._tcTranslate, this._tcScale];
-      if (winner === 'scale')     return [this._tcTranslate, this._tcRotate];
+    this._universalLoses = (winner) => {
+      // winner is { type, axis, dist } — extract the type string
+      const type = typeof winner === 'string' ? winner : winner.type;
+      if (type === 'rotate')    return [this._tcTranslate, this._tcScale];
+      if (type === 'scale')     return [this._tcTranslate, this._tcRotate];
       return [this._tcRotate, this._tcScale];
     };
 
+    // Store last mouse NDC so _onVpTick can arbitrate.
+    this._lastMouseNDC = { x: 0, y: 0, valid: false };
+
     canvas.addEventListener('pointermove', (e) => {
       if (this._mode !== 'universal') return;
-      if (!this._tcRotate.object) return;
       if (this._isDragging) return;
-      const ndc = getNDC(e).clone();
-      queueMicrotask(() => {
-        if (this._isDragging) return;
-        const winner = pickWinner(ndc);
-        const [a, b] = losersFor(winner);
-        a.axis = null;
-        b.axis = null;
-      });
+      const rect = canvas.getBoundingClientRect();
+      this._lastMouseNDC.x =  (e.clientX - rect.left) / rect.width  *  2 - 1;
+      this._lastMouseNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      this._lastMouseNDC.valid = true;
     });
 
+    // pointerdown in capture phase: pick the winner and disable losers
+    // BEFORE the native TC pointerdown handlers fire.
     canvas.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
       if (this._mode !== 'universal') return;
       if (!this._tcRotate.object) return;
-      const winner = pickWinner(getNDC(e));
-      if (winner === 'translate') return;
-      const [a, b] = losersFor(winner);
-      a.enabled = false;
-      b.enabled = false;
+      const winner = this._universalPickWinner(this._lastMouseNDC);
+      if (!winner) return;
+      const losers = this._universalLoses(winner);
+      losers[0].enabled = false;
+      losers[1].enabled = false;
       this._scaleInterceptPending = true;
-      requestAnimationFrame(() => {
-        if (this._scaleInterceptPending) {
-          this._scaleInterceptPending = false;
-          a.enabled = true;
-          b.enabled = true;
-        }
-      });
+      this._universalWinnerType = winner.type;
     }, { capture: true });
+
+    const _reEnable = () => {
+      if (this._scaleInterceptPending) {
+        this._scaleInterceptPending = false;
+        for (const tc of this._tcs) tc.enabled = true;
+      }
+    };
+    canvas.addEventListener('pointerup', _reEnable);
+    canvas.addEventListener('pointercancel', _reEnable);
   }
 
   _show() {
+    const isUniversal = this._mode === 'universal';
     for (const tc of this._tcs) {
       const helper = tc.getHelper();
-      const visible = this._mode === 'universal'
+      const visible = isUniversal
         || (this._mode === 'translate' && tc.mode === 'translate')
         || (this._mode === 'rotate' && tc.mode === 'rotate')
         || (this._mode === 'scale' && tc.mode === 'scale');
       if (helper) helper.visible = visible;
-      if (this._mode !== 'universal') {
-        tc.enabled = visible;
-      } else {
-        tc.enabled = true;
-      }
+      // In universal mode keep ALL axes visible from every angle and
+      // let the tick handler decide which one is highlighted.
+      tc._gizmo.hideAlignedToCamera = isUniversal ? false : true;
+      tc.enabled = isUniversal || visible;
     }
   }
 
@@ -465,6 +569,7 @@ export class TransformGizmo {
 
   /** Rebuild TransformControls with the new editor camera so raycasting stays correct. */
   _onEditorCamChanged() {
+    this._controlsCameraDirty = true;
     const renderer = this.engine.rendererManager?.renderer;
     if (renderer) this._build(renderer);
   }
@@ -619,7 +724,21 @@ export class TransformGizmo {
       return;
     }
 
+    const wasUniversal = this._builtForUniversal;
+    const isUniversal  = (mode === 'universal');
     this._mode = mode;
+
+    // _patchGizmosForUniversal() permanently removes handles from the TC groups.
+    // We must rebuild the whole TC set whenever the universal ↔ individual state
+    // changes so the handle sets are always correct for the active mode.
+    if (wasUniversal !== isUniversal) {
+      const renderer = this.engine.rendererManager?.renderer;
+      if (renderer) {
+        this._build(renderer); // _build() honours _mode and calls _show()/_hide()
+        return;
+      }
+    }
+
     if (mode === 'select') {
       this._detachAllControls();
     } else {
@@ -641,8 +760,15 @@ export class TransformGizmo {
   }
 
   _onSnap(event) {
-    this._snapEnabled = !!event.detail.enabled;
-    this._snapValue   = event.detail.value ?? this._snapValue;
+    // RightViewportPanel sends: { detail: boolean } (just the enabled flag)
+    // Or the full format: { detail: { enabled, value } }
+    const d = event.detail;
+    if (typeof d === 'boolean') {
+      this._snapEnabled = d;
+    } else if (d && typeof d === 'object') {
+      this._snapEnabled = !!d.enabled;
+      this._snapValue   = d.value ?? this._snapValue;
+    }
     this._applySnap();
   }
 
@@ -781,12 +907,59 @@ export class TransformGizmo {
 
   _onVpTick(event) {
     if ((!this.controls && !this._tcs.length) || !this.engine.camera) return;
-    const cam = this._getControlsCamera(this.engine.camera);
-    if (cam) {
-      for (const tc of this._tcs) {
-        try { tc.camera = cam; } catch (err) {}
+
+    // Sync each TC's camera every frame.
+    // Each TC owns a private camera clone (_camProxy) that is mutated in place.
+    // The first assignment triggers the defineProperty setter which propagates
+    // the reference to the internal plane/gizmo.  Subsequent frames update the
+    // clone's position/matrixWorld in place — the plane and gizmo already hold
+    // the same reference so they always read the current state without needing
+    // the setter to fire again.
+    // Keeping separate clones (one per TC) avoids any ordering / shared-state
+    // edge cases that arose when all three TCs shared a single proxy object.
+    const srcCam = this.engine.camera;
+    for (const tc of this._tcs) {
+      try {
+        if (!tc._camProxy || tc._camProxy.type !== srcCam.type) {
+          // New proxy needed (first run, or camera type changed) — assignment
+          // will trigger the defineProperty setter and wire up gizmo + plane.
+          tc._camProxy = srcCam.clone();
+          tc.camera = tc._camProxy;
+        }
+        // Mutate in place so the plane/gizmo (which already hold the reference)
+        // always see the latest camera state.
+        const p = tc._camProxy;
+        p.position.copy(srcCam.position);
+        p.quaternion.copy(srcCam.quaternion);
+        p.near = srcCam.near;
+        p.far  = srcCam.far;
+        if (srcCam.isPerspectiveCamera) {
+          p.fov    = srcCam.fov;
+          p.aspect = srcCam.aspect;
+        } else if (srcCam.isOrthographicCamera) {
+          p.left = srcCam.left; p.right = srcCam.right;
+          p.top  = srcCam.top;  p.bottom = srcCam.bottom;
+        }
+        p.zoom = srcCam.zoom;
+        p.projectionMatrix.copy(srcCam.projectionMatrix);
+        p.matrixWorld.copy(srcCam.matrixWorld);
+        p.matrixWorldInverse.copy(srcCam.matrixWorldInverse);
+        p.updateMatrixWorld();
+      } catch (err) {}
+    }
+
+    // Universal-mode hover arbitration — runs every frame AFTER all TC
+    // handlers have updated their axes.  Clears the two losers' axes so
+    // only the winner highlights.  This is the authoritative pass.
+    if (this._mode === 'universal' && !this._isDragging && this._lastMouseNDC?.valid && this._universalPickWinner) {
+      const winner = this._universalPickWinner(this._lastMouseNDC);
+      if (winner) {
+        const losers = this._universalLoses(winner);
+        losers[0].axis = null;
+        losers[1].axis = null;
       }
     }
+
     if (this._physicsEdit && this._targetProxy) {
       try {
         if (this.controls.object !== this._targetProxy) {
@@ -804,93 +977,6 @@ export class TransformGizmo {
       tc.rotationSnap    = this._snapEnabled ? (Math.PI / 12)           : null; // 15°
       tc.scaleSnap       = this._snapEnabled ? (this._snapValue * 0.1)  : null;
     }
-  }
-
-  _ensureUniversalGizmoVisuals() {
-    if (!this._helper) return;
-    // Avoid recreating visuals if already present
-    if (this._helper.getObjectByName('__universal_gizmo__')) return;
-
-    const group = new THREE.Group();
-    group.name = '__universal_gizmo__';
-    group.userData._isGizmo = true;
-
-    const size = 0.9;
-    const arrowMat = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.9, transparent: true, depthTest: false });
-    const ringMat  = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.85, transparent: true, depthTest: false, side: THREE.DoubleSide });
-    const boxMat   = new THREE.MeshBasicMaterial({ color: 0xffffff, opacity: 0.95, transparent: true, depthTest: false });
-
-    // X axis arrow (red)
-    const coneX = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.18, 8), arrowMat.clone());
-    coneX.rotation.z = -Math.PI / 2;
-    coneX.position.x = size;
-    coneX.material.color.set(0xff4444);
-    coneX.name = '__gizmo_arrow_x__'; coneX.userData._isGizmo = true; group.add(coneX);
-
-    // Y axis arrow (green)
-    const coneY = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.18, 8), arrowMat.clone());
-    coneY.position.y = size;
-    coneY.material.color.set(0x44ff44);
-    coneY.name = '__gizmo_arrow_y__'; coneY.userData._isGizmo = true; group.add(coneY);
-
-    // Z axis arrow (blue)
-    const coneZ = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.18, 8), arrowMat.clone());
-    coneZ.rotation.x = Math.PI / 2;
-    coneZ.position.z = size;
-    coneZ.material.color.set(0x4444ff);
-    coneZ.name = '__gizmo_arrow_z__'; coneZ.userData._isGizmo = true; group.add(coneZ);
-
-    // Axis end scale boxes
-    const boxGeo = new THREE.BoxGeometry(0.12, 0.12, 0.12);
-    const boxX = new THREE.Mesh(boxGeo, boxMat.clone()); boxX.position.x = size * 0.6; boxX.material.color.set(0xff4444); boxX.name='__gizmo_box_x__'; boxX.userData._isGizmo = true; group.add(boxX);
-    const boxY = new THREE.Mesh(boxGeo, boxMat.clone()); boxY.position.y = size * 0.6; boxY.material.color.set(0x44ff44); boxY.name='__gizmo_box_y__'; boxY.userData._isGizmo = true; group.add(boxY);
-    const boxZ = new THREE.Mesh(boxGeo, boxMat.clone()); boxZ.position.z = size * 0.6; boxZ.material.color.set(0x4444ff); boxZ.name='__gizmo_box_z__'; boxZ.userData._isGizmo = true; group.add(boxZ);
-
-    // Rotation rings
-    const torusX = new THREE.Mesh(new THREE.TorusGeometry(size, 0.02, 8, 64), ringMat.clone()); torusX.rotation.y = Math.PI / 2; torusX.material.color.set(0xff4444); torusX.name='__gizmo_ring_x__'; torusX.userData._isGizmo = true; group.add(torusX);
-    const torusY = new THREE.Mesh(new THREE.TorusGeometry(size, 0.02, 8, 64), ringMat.clone()); torusY.rotation.x = Math.PI / 2; torusY.material.color.set(0x44ff44); torusY.name='__gizmo_ring_y__'; torusY.userData._isGizmo = true; group.add(torusY);
-    const torusZ = new THREE.Mesh(new THREE.TorusGeometry(size, 0.02, 8, 64), ringMat.clone()); torusZ.material.color.set(0x4444ff); torusZ.name='__gizmo_ring_z__'; torusZ.userData._isGizmo = true; group.add(torusZ);
-
-    // Make visuals non-pickable / non-serialized
-    group.traverse((c) => { c.renderOrder = 1000; c.frustumCulled = false; if (c.material && c.material.dispose) c.userData._isGizmo = true; });
-
-    // Make these visuals non-interactive so TransformControls handles remain authoritative
-    group.traverse((c) => {
-      c.renderOrder = 1000;
-      c.frustumCulled = false;
-      c.userData._isGizmo = true;
-      c.raycast = () => {};
-    });
-
-    this._helper.add(group);
-  }
-
-  _updateGizmoVisualScale() {
-    if (!this._helper) return;
-    const group = this._helper.getObjectByName('__universal_gizmo__');
-    if (!group) return;
-
-    // Determine a scale factor so the gizmo appears roughly constant size on screen
-    const camera = this.engine.camera;
-    const target = this.controls?.object || this._targetObject;
-    if (!camera || !target) return;
-
-    // Compute world position of gizmo
-    const worldPos = new THREE.Vector3();
-    target.getWorldPosition(worldPos);
-    const distance = camera.position.distanceTo(worldPos);
-
-    // base size scaled by distance and camera fov (perspective) or zoom (ortho)
-    let sizeFactor = 1.0;
-    if (camera.isPerspectiveCamera) {
-      sizeFactor = distance * 0.08;
-    } else {
-      sizeFactor = 0.08 / Math.max(camera.zoom, 1e-6);
-    }
-
-    // Use a uniform scale so visuals remain readable and don't shrink with parent scale
-    const uniform = Math.max(sizeFactor, 1e-6);
-    group.scale.set(uniform, uniform, uniform);
   }
 
   _safeAttach(target) {
@@ -930,17 +1016,14 @@ export class TransformGizmo {
     }
   }
 
+  /** Pulse the active gizmo axis handles on drag start/end. */
   _setGizmoActive(active) {
-    if (!this._helper) return;
-    const group = this._helper.getObjectByName('__universal_gizmo__');
-    if (!group) return;
-    group.scale.multiplyScalar(active ? 1.15 : 1.0);
-    group.traverse((c) => {
-      if (c.material) {
-        c.material.opacity = active ? Math.min((c.material.opacity ?? 1) * 1.15, 1) : (c.material.opacity ?? 1) / 1.15;
-        c.material.needsUpdate = true;
-      }
-    });
+    // The gizmo helper is managed by TransformControls internally.
+    // We scale the attached TC's helper group to give visual feedback.
+    const helper = this.controls?.getHelper?.();
+    if (!helper) return;
+    const s = active ? 1.08 : 1.0;
+    helper.scale.set(s, s, s);
   }
 
   detach() {
@@ -989,7 +1072,6 @@ export class TransformGizmo {
     window.removeEventListener('cyco-physics-vp-tool',       this._onPhysicsTool);
     window.removeEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.removeEventListener('cyco-rvp-snap',              this._onSnap);
-    window.removeEventListener('cyco-rvp-world',             this._onWorld);
     window.removeEventListener('cyco-vp-world',              this._onWorld);
     window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
     window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);

@@ -99,6 +99,11 @@ class TransformControls extends Controls {
 
 		const scope = this;
 
+		// When true, hides gizmo axes that face nearly toward/away from
+		// the camera (default Three.js behaviour).  Set to false in
+		// universal-gizmo mode so ALL axes stay visible from every angle.
+		this.hideAlignedToCamera = true;
+
 		// Defined getter, setter and store for a property
 		function defineProperty( propName, defaultValue ) {
 
@@ -1055,7 +1060,9 @@ function intersectObjectWithRay( object, raycaster, includeInvisible ) {
 
 	for ( let i = 0; i < allIntersections.length; i ++ ) {
 
-		if ( allIntersections[ i ].object.visible || includeInvisible ) {
+		// PATCH: Always include picker meshes in intersection tests even
+		// if visible was set false by updateMatrixWorld.
+		if ( allIntersections[ i ].object.visible || includeInvisible || allIntersections[ i ].object._isPicker ) {
 
 			return allIntersections[ i ];
 
@@ -1792,81 +1799,98 @@ class TransformControlsGizmo extends Object3D {
 
 				// Hide translate and scale axis facing the camera
 
-				const AXIS_HIDE_THRESHOLD = 0.99;
-				const PLANE_HIDE_THRESHOLD = 0.2;
+			// PATCH: Never hide picker meshes — only hide visual gizmos.
+			// When hideAlignedToCamera is false (universal mode), keep
+			// all axes visible from every angle.
+			const skipHide = handle._isPicker === true || this.hideAlignedToCamera === false;
 
-				if ( handle.name === 'X' ) {
+			const AXIS_HIDE_THRESHOLD = 0.99;
+			const PLANE_HIDE_THRESHOLD = 0.2;
 
-					if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+			if ( handle.name === 'X' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-				if ( handle.name === 'Y' ) {
+			}
 
-					if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+			if ( handle.name === 'Y' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-				if ( handle.name === 'Z' ) {
+			}
 
-					if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+			if ( handle.name === 'Z' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) > AXIS_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-				if ( handle.name === 'XY' ) {
+			}
 
-					if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+			if ( handle.name === 'XY' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitZ ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-				if ( handle.name === 'YZ' ) {
+			}
 
-					if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+			if ( handle.name === 'YZ' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitX ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-				if ( handle.name === 'XZ' ) {
+			}
 
-					if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+			if ( handle.name === 'XZ' ) {
 
+				if ( Math.abs( _alignVector.copy( _unitY ).applyQuaternion( quaternion ).dot( this.eye ) ) < PLANE_HIDE_THRESHOLD ) {
+
+					if ( ! skipHide ) {
 						handle.scale.set( 1e-10, 1e-10, 1e-10 );
 						handle.visible = false;
-
 					}
 
 				}
 
-			} else if ( this.mode === 'rotate' ) {
+			}
 
-				// Align handles to current local or world rotation
+		} else if ( this.mode === 'rotate' ) {
 
-				_tempQuaternion2.copy( quaternion );
-				_alignVector.copy( this.eye ).applyQuaternion( _tempQuaternion.copy( quaternion ).invert() );
+			// Align handles to current local or world rotation
+
+			_tempQuaternion2.copy( quaternion );
+			_alignVector.copy( this.eye ).applyQuaternion( _tempQuaternion.copy( quaternion ).invert() );
 
 				if ( handle.name.search( 'E' ) !== - 1 ) {
 

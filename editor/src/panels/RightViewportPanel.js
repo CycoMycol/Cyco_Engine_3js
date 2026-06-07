@@ -87,15 +87,14 @@ export class RightViewportPanel extends BasePanel {
       this._worldBtn.innerHTML = _toolIcon(this._worldSpace ? 'world' : 'local');
       this._worldBtn.classList.toggle('active', !this._worldSpace);
       const detail = { isWorld: this._worldSpace };
-      document.dispatchEvent(new CustomEvent('cyco-rvp-world', { detail }));
-      document.dispatchEvent(new CustomEvent('cyco-vp-world', { detail }));
+      window.dispatchEvent(new CustomEvent('cyco-vp-world', { detail }));
     });
     bar.appendChild(this._worldBtn);
 
     this._snapBtn = _toolBtn(_toolIcon('snap'), 'Toggle Grid Snapping', () => {
       this._snapEnabled = !this._snapEnabled;
       this._snapBtn.classList.toggle('active', this._snapEnabled);
-      document.dispatchEvent(new CustomEvent('cyco-rvp-snap', { detail: this._snapEnabled }));
+      window.dispatchEvent(new CustomEvent('cyco-rvp-snap', { detail: this._snapEnabled }));
     });
     bar.appendChild(this._snapBtn);
 
