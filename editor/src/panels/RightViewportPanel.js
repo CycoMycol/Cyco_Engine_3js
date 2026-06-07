@@ -111,7 +111,7 @@ export class RightViewportPanel extends BasePanel {
     bar.appendChild(_toolSep());
 
     bar.appendChild(_toolBtn(_toolIcon('focus'), 'Focus Selection  F', () => {
-      document.dispatchEvent(new CustomEvent('cyco-rvp-focus'));
+      window.dispatchEvent(new CustomEvent('cyco-rvp-focus', { detail: {} }));
     }));
 
     const spacer = document.createElement('div');

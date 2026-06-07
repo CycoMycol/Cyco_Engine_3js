@@ -1755,18 +1755,64 @@ export class ViewportEngine {
   // ─── Focus animation ──────────────────────────────────────────────────────
 
   _onFocus(event) {
-    const { object } = event.detail;
+    let { object } = event.detail ?? {};
+
+    // When invoked from the toolbar button no object is passed —
+    // fall back to the first selected object from the SelectionManager.
+    if (!object) {
+      const selSet = window.__cyco?.selectionManager?.selected;
+      if (selSet && selSet.size > 0) {
+        object = selSet.values().next().value;
+      }
+    }
     if (!object) return;
 
-    const worldPos = new THREE.Vector3();
-    object.getWorldPosition(worldPos);
+    // Compute the object's world bounding sphere so we can frame it.
+    const box = new THREE.Box3().setFromObject(object);
+    const sphere = new THREE.Sphere();
+    box.getBoundingSphere(sphere);
+
+    // The orbit target should sit at the object center.
+    const targetPos = sphere.center.clone();
+
+    // Calculate camera distance to frame the bounding sphere inside the
+    // viewport's vertical FOV, with a bit of padding so the object isn't
+    // flush against the edges.
+    const padding = 1.8;
+    let idealDist;
+    if (this.camera.isPerspectiveCamera) {
+      const fovRad = THREE.MathUtils.degToRad(this.camera.fov);
+      idealDist = (sphere.radius * padding) / Math.tan(fovRad / 2);
+    } else {
+      // Orthographic — just zoom in proportionally to the sphere size.
+      idealDist = this.camera.position.distanceTo(targetPos);
+      const viewHalf = (this.camera.top - this.camera.bottom) / 2 || 5;
+      idealDist = (sphere.radius * padding / viewHalf) * idealDist;
+    }
+    idealDist = Math.max(idealDist, 0.5);
+
+    // Camera should move to the object along the current view direction,
+    // stopping at the ideal distance from the target.
+    const dir = this.camera.position.clone().sub(targetPos).normalize();
+    if (dir.lengthSq() < 1e-6) {
+      // Camera is exactly at target — pick a default direction.
+      dir.set(0, 0.5, 1).normalize();
+    }
+    const cameraEnd = targetPos.clone().add(dir.multiplyScalar(idealDist));
 
     this._focusAnim = {
-      targetPos:  worldPos.clone(),
-      startPos:   this.controls.target.clone(),
-      duration:   0.3, // seconds
-      elapsed:    0,
+      targetStart:  this.controls.target.clone(),
+      targetEnd:    targetPos,
+      cameraStart:  this.camera.position.clone(),
+      cameraEnd:    cameraEnd,
+      duration:     0.4, // seconds
+      elapsed:      0,
     };
+
+    // Temporarily disable OrbitControls so its damping doesn't fight
+    // the camera repositioning during the animation.
+    this._focusAnimPrevControlsEnabled = this.controls.enabled;
+    this.controls.enabled = false;
   }
 
   _tickFocusAnim(delta) {
@@ -1775,9 +1821,20 @@ export class ViewportEngine {
     const t = Math.min(a.elapsed / a.duration, 1);
     const eased = t * t * (3 - 2 * t); // smoothstep
 
-    this.controls.target.lerpVectors(a.startPos, a.targetPos, eased);
+    this.controls.target.lerpVectors(a.targetStart, a.targetEnd, eased);
+    this.camera.position.lerpVectors(a.cameraStart, a.cameraEnd, eased);
+    this.camera.lookAt(this.controls.target);
 
-    if (t >= 1) this._focusAnim = NO_FOCUS;
+    if (t >= 1) {
+      this._focusAnim = NO_FOCUS;
+      // Restore OrbitControls enabled state.
+      if (this._focusAnimPrevControlsEnabled !== undefined) {
+        this.controls.enabled = this._focusAnimPrevControlsEnabled;
+        this._focusAnimPrevControlsEnabled = undefined;
+      } else {
+        this.controls.enabled = true;
+      }
+    }
   }
 
   // ─── Camera snap ─────────────────────────────────────────────────────────
