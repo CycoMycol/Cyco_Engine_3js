@@ -1256,7 +1256,7 @@ class TransformControlsGizmo extends Object3D {
 
 		function CircleGeometry( radius, arc ) {
 
-			const geometry = new TorusGeometry( radius, 0.0075, 3, 64, arc * Math.PI * 2 );
+			const geometry = new TorusGeometry( radius, 0.015, 6, 64, arc * Math.PI * 2 );
 			geometry.rotateY( Math.PI / 2 );
 			geometry.rotateX( Math.PI / 2 );
 			return geometry;
@@ -1506,6 +1506,21 @@ class TransformControlsGizmo extends Object3D {
 
 					object.updateMatrix();
 
+					// For torus meshes, store original params + axis rotation BEFORE
+					// the geometry clone (clone loses TorusGeometry type & parameters)
+					if ( object.geometry.type === 'TorusGeometry' ) {
+						const p = object.geometry.parameters;
+						object._torusBase = {
+							radius:        p.radius,
+							tube:          p.tube,
+							radialSegments: p.radialSegments,
+							arc:           p.arc,
+							axisEulerX:    object.rotation.x,
+							axisEulerY:    object.rotation.y,
+							axisEulerZ:    object.rotation.z
+						};
+					}
+
 					const tempGeometry = object.geometry.clone();
 					tempGeometry.applyMatrix4( object.matrix );
 					object.geometry = tempGeometry;
@@ -1600,35 +1615,49 @@ class TransformControlsGizmo extends Object3D {
 
 		const distance = this.distance !== undefined ? this.distance : 1;
 		if ( distance !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
-			if ( handle.name === 'X' ) {
-				handle.scale.x *= distance;
-			} else if ( handle.name === 'Y' ) {
-				handle.scale.y *= distance;
-			} else if ( handle.name === 'Z' ) {
-				handle.scale.z *= distance;
-			} else if ( handle.name === 'XY' ) {
-				handle.scale.x *= distance;
-				handle.scale.y *= distance;
-			} else if ( handle.name === 'YZ' ) {
-				handle.scale.y *= distance;
-				handle.scale.z *= distance;
-			} else if ( handle.name === 'XZ' ) {
-				handle.scale.x *= distance;
-				handle.scale.z *= distance;
-			} else {
-				handle.scale.multiplyScalar( distance );
-			}
+			handle.scale.multiplyScalar( distance );
 		}
 
 		// Only use size as handle thickness, not overall gizmo reach.
 		if ( this.size !== 1 && handle.isMesh && handle.tag !== 'helper' ) {
 			const s = this.size;
-			const geomType = handle.geometry?.type;
 
-			if ( geomType === 'TorusGeometry' ) {
-				if ( handle.name === 'X' ) handle.scale.x *= s;
-				else if ( handle.name === 'Y' ) handle.scale.y *= s;
-				else if ( handle.name === 'Z' ) handle.scale.z *= s;
+			if ( handle._torusBase ) {
+				// Rotation torus rings: rebuild geometry with thicker tube.
+				// Mesh scaling would move the ring outward — only distance should do that.
+				// We rebuild with a new TorusGeometry (thicker tube), then apply
+				// the CircleGeometry bake + axis rotation to place it correctly.
+				if ( handle._torusAxisMatrix === undefined ) {
+					const tb = handle._torusBase;
+					// CircleGeometry base: rotateY(PI/2) then rotateX(PI/2)
+					const circleBase = new Matrix4()
+						.makeRotationX( Math.PI / 2 )
+						.multiply( new Matrix4().makeRotationY( Math.PI / 2 ) );
+					// Axis rotation from setupGizmo definition
+					const axisRot = new Matrix4().makeRotationFromEuler(
+						new Euler( tb.axisEulerX, tb.axisEulerY, tb.axisEulerZ )
+					);
+					handle._torusAxisMatrix = new Matrix4()
+						.multiplyMatrices( axisRot, circleBase );
+				}
+
+				const tb   = handle._torusBase;
+				const newTube = tb.tube * s;
+				const curTube = tb.tube * ( handle._lastTorusTubeScale || 1 );
+
+				if ( Math.abs( newTube - curTube ) > 1e-6 ) {
+					const newGeom = new TorusGeometry(
+						tb.radius,
+						newTube,
+						tb.radialSegments,
+						64,
+						tb.arc
+					);
+					newGeom.applyMatrix4( handle._torusAxisMatrix );
+					handle.geometry.dispose();
+					handle.geometry = newGeom;
+					handle._lastTorusTubeScale = s;
+				}
 			} else if ( handle.name === 'X' ) {
 				handle.scale.y *= s;
 				handle.scale.z *= s;

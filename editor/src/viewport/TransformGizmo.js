@@ -715,23 +715,22 @@ export class TransformGizmo {
     const rotateDistance = Number(detail.rotateDistance ?? distance) || distance;
     const scaleDistance = Number(detail.scaleDistance ?? distance) || distance;
 
+    // In "One Size For All" mode, the global slider scales each individual
+    // proportionally, preserving the ratios set in Separate mode.
+    // Each TC gets its own individual values — no mode check needed here.
+
     for (const tc of this._tcs) {
       if (!tc) continue;
 
-      if (useSeparateSizes) {
-        if (tc === this._tcTranslate) tc.setSize(translateSize);
-        else if (tc === this._tcRotate) tc.setSize(rotateSize);
-        else if (tc === this._tcScale) tc.setSize(scaleSize);
-      } else {
-        tc.setSize(size);
-      }
-
-      if (useSeparateSizes) {
-        if (tc === this._tcTranslate) tc.distance = translateDistance;
-        else if (tc === this._tcRotate) tc.distance = rotateDistance;
-        else if (tc === this._tcScale) tc.distance = scaleDistance;
-      } else {
-        tc.distance = distance;
+      if (tc === this._tcTranslate) {
+        tc.setSize(translateSize);
+        tc.distance = translateDistance;
+      } else if (tc === this._tcRotate) {
+        tc.setSize(rotateSize);
+        tc.distance = rotateDistance;
+      } else if (tc === this._tcScale) {
+        tc.setSize(scaleSize);
+        tc.distance = scaleDistance;
       }
     }
   }

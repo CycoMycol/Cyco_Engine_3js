@@ -133,10 +133,14 @@ const prefs                 = loadPrefs();
 window.dispatchEvent(new CustomEvent('cyco-gizmo-size', {
   detail: {
     size: prefs.gizmo.size,
+    distance: prefs.gizmo.distance ?? 1,
     useSeparateSizes: !!prefs.gizmo.useSeparateGizmoSizes,
     translateSize: prefs.gizmo.translateSize,
     rotateSize: prefs.gizmo.rotateSize,
     scaleSize: prefs.gizmo.scaleSize,
+    translateDistance: prefs.gizmo.translateDistance ?? prefs.gizmo.distance ?? 1,
+    rotateDistance: prefs.gizmo.rotateDistance ?? prefs.gizmo.distance ?? 1,
+    scaleDistance: prefs.gizmo.scaleDistance ?? prefs.gizmo.distance ?? 1,
   }
 }));
 

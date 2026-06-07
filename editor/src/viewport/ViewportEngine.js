@@ -1688,7 +1688,7 @@ export class ViewportEngine {
     // Default render — PostProcessingPipeline overrides this via cyco-vp-tick
     // by calling composer.render() instead. If no pipeline is active, render directly.
     if (!this._pipelineActive) {
-      console.warn(
+      console.debug(
         `[CYCO:ANOMALY] Frame #${this._dbgFrame} — _pipelineActive=false, rendering direct to canvas (fallback)!`
       );
       renderer.render(this.scene, this.camera);

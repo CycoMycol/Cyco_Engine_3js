@@ -286,7 +286,7 @@ export class MaterialBrowser {
 
   _applyPreviewStyle(el, preset) {
     const preview = preset.preview ?? '#888888';
-    if (preview.startsWith('linear-gradient') || preview.startsWith('radial-gradient')) {
+    if (preview.startsWith('linear-gradient') || preview.startsWith('radial-gradient') || preview.startsWith('repeating-linear-gradient') || preview.startsWith('repeating-radial-gradient')) {
       el.style.background = preview;
     } else {
       // Draw a fake radial "sphere" shading on solid colors

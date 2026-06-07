@@ -245,10 +245,10 @@ export class PreferencesPanel extends BasePanel {
       const slider = document.createElement('input');
       slider.type = 'range';
       slider.min = '0.3';
-      slider.max = '3';
+      slider.max = '10';
       slider.step = '0.05';
       slider.value = String(initialValue);
-      slider.style.cssText = 'flex:1;';
+      slider.style.cssText = 'flex:1;accent-color:#ff8c00;';
 
       const valueDisplay = document.createElement('span');
       valueDisplay.textContent = parseFloat(slider.value).toFixed(2);
@@ -275,35 +275,50 @@ export class PreferencesPanel extends BasePanel {
     modeLabel.textContent = 'Gizmo Thickness Mode';
     modeLabel.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);';
 
-    const modeToggle = document.createElement('label');
-    modeToggle.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;color:var(--text-secondary,#aaa);';
-    const modeCheckbox = document.createElement('input');
-    modeCheckbox.type = 'checkbox';
-    modeCheckbox.checked = !!this._prefs.gizmo.useSeparateGizmoSizes;
-    const modeText = document.createElement('span');
-    modeText.textContent = modeCheckbox.checked ? 'Separate thickness' : 'One thickness for all';
-    modeText.style.cssText = 'color:inherit;';
-    modeToggle.appendChild(modeCheckbox);
-    modeToggle.appendChild(modeText);
+    const modeToggle = document.createElement('button');
+    const isSeparate = !!this._prefs.gizmo.useSeparateGizmoSizes;
+    modeToggle.textContent = isSeparate ? 'Separate Sizes' : 'One Size for All';
+    modeToggle.style.cssText = `display:inline-flex;align-items:center;justify-content:center;min-width:120px;padding:4px 10px;font-size:11px;font-weight:600;border:1px solid var(--border-color,#333);border-radius:4px;cursor:pointer;color:#fff;background:${isSeparate ? 'var(--accent,#ff8c00)' : 'var(--bg-panel,#383838)'};`;
+    const modeCheckbox = { checked: isSeparate };
+    const modeText = modeToggle;
 
     sizeModeRow.appendChild(modeLabel);
     sizeModeRow.appendChild(modeToggle);
     root.appendChild(sizeModeRow);
 
     const globalSize = buildSliderRow('Gizmo Thickness', this._prefs.gizmo.size, (value) => {
+      // Scale all individuals proportionally — preserves relative ratios
+      const oldValue = Number(this._prefs.gizmo.size) || 1;
+      const ratio = value / oldValue;
       this._prefs.gizmo.size = value;
-      if (!this._prefs.gizmo.useSeparateGizmoSizes) {
-        this._prefs.gizmo.translateSize = value;
-        this._prefs.gizmo.rotateSize = value;
-        this._prefs.gizmo.scaleSize = value;
-      }
+      this._prefs.gizmo.translateSize *= ratio;
+      this._prefs.gizmo.rotateSize   *= ratio;
+      this._prefs.gizmo.scaleSize    *= ratio;
+      translateSize.slider.value = String(this._prefs.gizmo.translateSize);
+      rotateSize.slider.value   = String(this._prefs.gizmo.rotateSize);
+      scaleSize.slider.value    = String(this._prefs.gizmo.scaleSize);
+      translateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.translateSize).toFixed(2);
+      rotateSize.valueDisplay.textContent   = parseFloat(this._prefs.gizmo.rotateSize).toFixed(2);
+      scaleSize.valueDisplay.textContent    = parseFloat(this._prefs.gizmo.scaleSize).toFixed(2);
       savePrefs(this._prefs);
       this._dispatchGizmoSize();
     });
     root.appendChild(globalSize.row);
 
     const globalDistance = buildSliderRow('Gizmo Distance', this._prefs.gizmo.distance ?? 1, (value) => {
+      // Scale all individuals proportionally — preserves relative ratios
+      const oldValue = Number(this._prefs.gizmo.distance) || 1;
+      const ratio = value / oldValue;
       this._prefs.gizmo.distance = value;
+      this._prefs.gizmo.translateDistance *= ratio;
+      this._prefs.gizmo.rotateDistance   *= ratio;
+      this._prefs.gizmo.scaleDistance    *= ratio;
+      translateDistance.slider.value = String(this._prefs.gizmo.translateDistance);
+      rotateDistance.slider.value   = String(this._prefs.gizmo.rotateDistance);
+      scaleDistance.slider.value    = String(this._prefs.gizmo.scaleDistance);
+      translateDistance.valueDisplay.textContent = parseFloat(this._prefs.gizmo.translateDistance).toFixed(2);
+      rotateDistance.valueDisplay.textContent   = parseFloat(this._prefs.gizmo.rotateDistance).toFixed(2);
+      scaleDistance.valueDisplay.textContent    = parseFloat(this._prefs.gizmo.scaleDistance).toFixed(2);
       savePrefs(this._prefs);
       this._dispatchGizmoSize();
     });
@@ -352,102 +367,58 @@ export class PreferencesPanel extends BasePanel {
     individualSizes.appendChild(scaleDistance.row);
     root.appendChild(individualSizes);
 
-    if (!this._prefs.gizmo.useSeparateGizmoSizes) {
-      const baseSize = this._prefs.gizmo.size;
-      const baseDistance = this._prefs.gizmo.distance;
-      if (this._prefs.gizmo.translateSize !== baseSize || this._prefs.gizmo.rotateSize !== baseSize || this._prefs.gizmo.scaleSize !== baseSize) {
-        this._prefs.gizmo.translateSize = baseSize;
-        this._prefs.gizmo.rotateSize = baseSize;
-        this._prefs.gizmo.scaleSize = baseSize;
-      }
-      if (this._prefs.gizmo.translateDistance !== baseDistance || this._prefs.gizmo.rotateDistance !== baseDistance || this._prefs.gizmo.scaleDistance !== baseDistance) {
-        this._prefs.gizmo.translateDistance = baseDistance;
-        this._prefs.gizmo.rotateDistance = baseDistance;
-        this._prefs.gizmo.scaleDistance = baseDistance;
-      }
-      savePrefs(this._prefs);
-    }
+    // Ensure individual distance defaults exist without overwriting
+    if (this._prefs.gizmo.translateDistance == null) this._prefs.gizmo.translateDistance = this._prefs.gizmo.distance ?? 1;
+    if (this._prefs.gizmo.rotateDistance == null) this._prefs.gizmo.rotateDistance = this._prefs.gizmo.distance ?? 1;
+    if (this._prefs.gizmo.scaleDistance == null) this._prefs.gizmo.scaleDistance = this._prefs.gizmo.distance ?? 1;
 
     const updateSizeMode = () => {
       const separate = modeCheckbox.checked;
-      const currentSize = this._prefs.gizmo.size;
-      const prevUseSeparate = this._prefs.gizmo.useSeparateGizmoSizes;
-      const prevTranslate = this._prefs.gizmo.translateSize;
-      const prevRotate = this._prefs.gizmo.rotateSize;
-      const prevScale = this._prefs.gizmo.scaleSize;
 
       this._prefs.gizmo.useSeparateGizmoSizes = separate;
-      modeText.textContent = separate ? 'Separate sizes' : 'One size for all';
+      modeToggle.textContent = separate ? 'Separate Sizes' : 'One Size for All';
+      modeToggle.style.background = separate ? 'var(--accent,#ff8c00)' : 'var(--bg-panel,#383838)';
       globalSize.row.style.display = separate ? 'none' : 'flex';
       globalDistance.row.style.display = separate ? 'none' : 'flex';
       individualSizes.style.display = separate ? 'block' : 'none';
 
-      let sizesChanged = false;
-      const currentDistance = this._prefs.gizmo.distance;
-      const prevTranslateDistance = this._prefs.gizmo.translateDistance;
-      const prevRotateDistance = this._prefs.gizmo.rotateDistance;
-      const prevScaleDistance = this._prefs.gizmo.scaleDistance;
-
+      // NEVER modify any values. Only sync slider UI to reflect current prefs.
       if (separate) {
-        if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
-          this._prefs.gizmo.translateSize = currentSize;
-          this._prefs.gizmo.rotateSize = currentSize;
-          this._prefs.gizmo.scaleSize = currentSize;
-          translateSize.slider.value = String(currentSize);
-          rotateSize.slider.value = String(currentSize);
-          scaleSize.slider.value = String(currentSize);
-          translateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          rotateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          sizesChanged = true;
-        }
-        if (prevTranslateDistance !== currentDistance || prevRotateDistance !== currentDistance || prevScaleDistance !== currentDistance) {
-          this._prefs.gizmo.translateDistance = currentDistance;
-          this._prefs.gizmo.rotateDistance = currentDistance;
-          this._prefs.gizmo.scaleDistance = currentDistance;
-          translateDistance.slider.value = String(currentDistance);
-          rotateDistance.slider.value = String(currentDistance);
-          scaleDistance.slider.value = String(currentDistance);
-          translateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          rotateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          scaleDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          sizesChanged = true;
-        }
+        // Entering separate mode: show individual sliders at their current values
+        translateSize.slider.value = String(this._prefs.gizmo.translateSize);
+        rotateSize.slider.value = String(this._prefs.gizmo.rotateSize);
+        scaleSize.slider.value = String(this._prefs.gizmo.scaleSize);
+        translateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.translateSize).toFixed(2);
+        rotateSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.rotateSize).toFixed(2);
+        scaleSize.valueDisplay.textContent = parseFloat(this._prefs.gizmo.scaleSize).toFixed(2);
+        translateDistance.slider.value = String(this._prefs.gizmo.translateDistance ?? this._prefs.gizmo.distance ?? 1);
+        rotateDistance.slider.value = String(this._prefs.gizmo.rotateDistance ?? this._prefs.gizmo.distance ?? 1);
+        scaleDistance.slider.value = String(this._prefs.gizmo.scaleDistance ?? this._prefs.gizmo.distance ?? 1);
+        translateDistance.valueDisplay.textContent = parseFloat(this._prefs.gizmo.translateDistance ?? this._prefs.gizmo.distance ?? 1).toFixed(2);
+        rotateDistance.valueDisplay.textContent = parseFloat(this._prefs.gizmo.rotateDistance ?? this._prefs.gizmo.distance ?? 1).toFixed(2);
+        scaleDistance.valueDisplay.textContent = parseFloat(this._prefs.gizmo.scaleDistance ?? this._prefs.gizmo.distance ?? 1).toFixed(2);
       } else {
-        if (prevTranslate !== currentSize || prevRotate !== currentSize || prevScale !== currentSize) {
-          this._prefs.gizmo.translateSize = currentSize;
-          this._prefs.gizmo.rotateSize = currentSize;
-          this._prefs.gizmo.scaleSize = currentSize;
-          translateSize.slider.value = String(currentSize);
-          rotateSize.slider.value = String(currentSize);
-          scaleSize.slider.value = String(currentSize);
-          translateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          rotateSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          scaleSize.valueDisplay.textContent = parseFloat(currentSize).toFixed(2);
-          sizesChanged = true;
-        }
-        if (prevTranslateDistance !== currentDistance || prevRotateDistance !== currentDistance || prevScaleDistance !== currentDistance) {
-          this._prefs.gizmo.translateDistance = currentDistance;
-          this._prefs.gizmo.rotateDistance = currentDistance;
-          this._prefs.gizmo.scaleDistance = currentDistance;
-          translateDistance.slider.value = String(currentDistance);
-          rotateDistance.slider.value = String(currentDistance);
-          scaleDistance.slider.value = String(currentDistance);
-          translateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          rotateDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          scaleDistance.valueDisplay.textContent = parseFloat(currentDistance).toFixed(2);
-          sizesChanged = true;
-        }
+        // Entering unified mode: sync global prefs FROM the translate individual.
+        // The ratio between each individual and translate is preserved by the
+        // proportional scaling in the global slider callbacks.
+        const s = this._prefs.gizmo.translateSize;
+        const d = this._prefs.gizmo.translateDistance ?? this._prefs.gizmo.distance ?? 1;
+        this._prefs.gizmo.size = s;
+        this._prefs.gizmo.distance = d;
+        globalSize.slider.value = String(s);
+        globalSize.valueDisplay.textContent = parseFloat(s).toFixed(2);
+        globalDistance.slider.value = String(d);
+        globalDistance.valueDisplay.textContent = parseFloat(d).toFixed(2);
       }
 
-      const preferenceChanged = prevUseSeparate !== separate;
       savePrefs(this._prefs);
-      if (preferenceChanged || sizesChanged) {
-        this._dispatchGizmoSize();
-      }
+      this._dispatchGizmoSize();
     };
 
-    modeCheckbox.addEventListener('change', updateSizeMode);
+    modeToggle.addEventListener('click', () => {
+      modeCheckbox.checked = !modeCheckbox.checked;
+      updateSizeMode();
+    });
 
     // Axis colors
     for (const [axis, key] of [['X', 'axisColorX'], ['Y', 'axisColorY'], ['Z', 'axisColorZ']]) {
