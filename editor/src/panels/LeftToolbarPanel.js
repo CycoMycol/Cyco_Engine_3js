@@ -409,10 +409,10 @@ function _toolIcon(id) {
 function _toolTip(id) {
   switch (id) {
     case 'select':    return 'Select  Q';
-    case 'translate': return 'Translate  W';
+    case 'translate': return 'Move  W';
     case 'rotate':    return 'Rotate  E';
     case 'scale':     return 'Scale  R';
-    case 'universal': return 'Universal Gizmo  Q';
+    case 'universal': return 'Box Tool  B';
     case 'editCollider': return 'Edit Collider';
     default:          return '';
   }
