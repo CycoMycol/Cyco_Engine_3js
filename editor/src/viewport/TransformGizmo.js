@@ -223,25 +223,25 @@ export class TransformGizmo {
     );
     outline.name = 'BoxGizmoOutline';
     outline.renderOrder = 1000;
-    outline.userData._isGizmo = true;
+    outline.userData = { _isGizmo: true, handleRole: 'translate' };
     this._boxGroup.add(outline);
 
     const volumeMaterial = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: 0.0,
-      visible: false,
       depthTest: false,
     });
     const volume = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), volumeMaterial);
     volume.name = 'BoxGizmoVolume';
     volume.userData = { _isGizmo: true, handleRole: 'translate' };
     volume.renderOrder = 1001;
-    volume.visible = false;
+    volume.visible = true;
     this._boxGroup.add(volume);
     this._boxVolume = volume;
 
-    const faceGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.2, 24);
-    const edgeGeometry = new THREE.CylinderGeometry(0.25, 0.25, 1, 16);
+    const faceShaftGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
+    const faceTipGeometry = new THREE.SphereGeometry(1, 16, 12);
+    const edgeGeometry = new THREE.CylinderGeometry(0.3, 0.3, 1, 16);
     const cornerGeometry = new THREE.BoxGeometry(1, 1, 1);
 
     const faceAxes = [
@@ -263,16 +263,20 @@ export class TransformGizmo {
     ];
 
     faceAxes.forEach((config, index) => {
-      const material = new THREE.MeshBasicMaterial({
+      const faceGroup = new THREE.Group();
+      const faceMaterial = new THREE.MeshBasicMaterial({
         color: config.color,
-        transparent: true,
-        opacity: 0.95,
         depthTest: false,
-        depthWrite: false,
       });
-      const face = new THREE.Mesh(faceGeometry, material);
-      face.name = `BoxGizmoFace${index}`;
-      face.userData = {
+      const shaft = new THREE.Mesh(faceShaftGeometry, faceMaterial);
+      const tip = new THREE.Mesh(faceTipGeometry, faceMaterial);
+      shaft.name = 'AxisShaft';
+      tip.name = 'AxisTip';
+      shaft.position.y = 0.5;
+      tip.position.y = 1.0;
+      faceGroup.add(shaft, tip);
+      faceGroup.name = `BoxGizmoFace${index}`;
+      faceGroup.userData = {
         _isGizmo: true,
         handleRole: 'scaleAxis',
         handleAxis: config.axis,
@@ -280,10 +284,10 @@ export class TransformGizmo {
         baseColor: config.color,
         hoverColor: 0xffff00,
       };
-      face.renderOrder = 1001;
-      face.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...config.dir));
-      this._boxGroup.add(face);
-      this._boxHandles.push(face);
+      faceGroup.renderOrder = 1001;
+      faceGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...config.dir));
+      this._boxGroup.add(faceGroup);
+      this._boxHandles.push(faceGroup);
     });
 
     edgePairs.forEach((pair, index) => {
@@ -295,10 +299,7 @@ export class TransformGizmo {
       const color = axis === 'X' ? 0xff3b30 : axis === 'Y' ? 0x34c759 : 0x0a84ff;
       const material = new THREE.MeshBasicMaterial({
         color,
-        transparent: true,
-        opacity: 0.95,
         depthTest: false,
-        depthWrite: false,
       });
       const edge = new THREE.Mesh(edgeGeometry, material);
       edge.name = `BoxGizmoEdge${index}`;
@@ -321,10 +322,7 @@ export class TransformGizmo {
     corners.forEach((position, index) => {
       const material = new THREE.MeshBasicMaterial({
         color: 0xe8eeff,
-        transparent: true,
-        opacity: 0.95,
         depthTest: false,
-        depthWrite: false,
       });
       const corner = new THREE.Mesh(cornerGeometry, material);
       corner.name = `BoxGizmoCorner${index}`;
@@ -332,7 +330,7 @@ export class TransformGizmo {
         _isGizmo: true,
         handleRole: 'scaleUniform',
         handleAxis: 'XYZ',
-        handleDir: new THREE.Vector3().fromArray(position).normalize(),
+        handleDir: new THREE.Vector3().fromArray(position).multiplyScalar(2),
         baseColor: 0xe8eeff,
         hoverColor: 0xffff00,
       };
@@ -411,30 +409,50 @@ export class TransformGizmo {
 
     if (this._boxVolume) {
       this._boxVolume.scale.copy(size);
-      this._boxVolume.position.set(0, 0, 0);
+      this._boxVolume.position.copy(center);
     }
 
-    const faceRadius = Math.min(size.x, size.y, size.z) * 0.12;
-    const edgeRadius = Math.min(size.x, size.y, size.z) * 0.06;
-    const edgeLength = Math.max(size.x, size.y, size.z) * 0.65;
-    const cornerScale = Math.min(size.x, size.y, size.z) * 0.08;
-    const faceDepth = Math.min(size.x, size.y, size.z) * 0.12;
+    const renderer = this.engine.rendererManager?.renderer;
+    const camera = this.engine.camera;
+    const baseSize = Math.min(size.x, size.y, size.z);
+    const defaultFaceRadius = baseSize * 0.11;
+    const minWorldFaceRadius = Math.max(0.12, defaultFaceRadius * 0.75);
+    const maxWorldFaceRadius = Math.max(defaultFaceRadius, 0.35);
+    const screenFaceRadius = renderer && camera
+      ? 2 * camera.position.distanceTo(this._boxGroup.position) * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 40 / renderer.domElement.clientHeight
+      : minWorldFaceRadius;
+    const faceRadius = Math.min(maxWorldFaceRadius, Math.max(minWorldFaceRadius, screenFaceRadius));
+    const edgeRadius = Math.max(faceRadius * 0.95, 0.14);
+    const cornerScale = Math.max(faceRadius * 1.25, 0.14);
+    const faceDepth = Math.max(baseSize * 0.28, faceRadius * 3.0, 0.35);
 
     this._boxHandles.forEach((handle) => {
       const role = handle.userData.handleRole;
       const dir = handle.userData.handleDir?.clone();
       if (role === 'scaleAxis' && dir) {
-        handle.position.copy(dir).multiply(size).multiplyScalar(0.5);
+        const offset = dir.clone().multiply(size).multiplyScalar(0.5);
+        handle.position.copy(center).add(offset);
         handle.position.addScaledVector(dir, faceDepth * 0.5);
         handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-        handle.scale.set(faceRadius * 1.6, faceDepth, faceRadius * 1.6);
+        const shaft = handle.getObjectByName('AxisShaft');
+        const tip = handle.getObjectByName('AxisTip');
+        if (shaft) {
+          shaft.scale.set(faceRadius * 0.35, faceDepth, faceRadius * 0.35);
+        }
+        if (tip) {
+          const tipRadius = faceRadius * 1.15;
+          tip.scale.set(tipRadius, tipRadius, tipRadius);
+          tip.position.y = 0.5 + faceDepth * 0.5 + tipRadius * 0.9;
+        }
       } else if (role === 'rotate' && dir) {
         const localPosition = handle.userData.localPosition?.clone() ?? new THREE.Vector3();
-        handle.position.copy(localPosition).multiply(size);
+        handle.position.copy(center).add(localPosition.multiply(size));
         handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-        handle.scale.set(edgeRadius, edgeLength, edgeRadius);
+        const axisSize = Math.abs(dir.x) > 0.9 ? size.x : Math.abs(dir.y) > 0.9 ? size.y : size.z;
+        handle.scale.set(edgeRadius, axisSize * 0.9, edgeRadius);
       } else if (role === 'scaleUniform' && dir) {
-        handle.position.copy(dir).multiply(size).multiplyScalar(0.5);
+        const offset = dir.clone().multiply(size).multiplyScalar(0.5);
+        handle.position.copy(center).add(offset);
         handle.position.addScaledVector(dir, cornerScale * 0.5);
         handle.quaternion.identity();
         handle.scale.setScalar(cornerScale);
@@ -499,6 +517,26 @@ export class TransformGizmo {
     }
 
     this._clearHoveredHandle();
+    if (hit.object.userData.handleRole !== 'translate') {
+      this._setHoveredHandle(hit.object);
+    }
+    const startPosition = this._targetObject ? this._targetObject.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
+    const renderer = this.engine.rendererManager?.renderer;
+    const camera = this.engine.camera;
+    let startPointer = null;
+    let dragPlane = null;
+    let startPlanePoint = null;
+    if (renderer && camera) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      startPointer = new THREE.Vector2(x, y);
+      const normal = camera.getWorldDirection(new THREE.Vector3()).clone().negate();
+      dragPlane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal, startPosition);
+      this._raycaster.setFromCamera(startPointer, camera);
+      const planePoint = new THREE.Vector3();
+      startPlanePoint = this._raycaster.ray.intersectPlane(dragPlane, planePoint) ? planePoint : null;
+    }
     this._matrixBefore = this._targetObject?.matrix.clone();
     this._interaction = {
       pointerId: event.pointerId,
@@ -508,7 +546,10 @@ export class TransformGizmo {
       faceNormal: hit.face ? hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize() : null,
       startX: event.clientX,
       startY: event.clientY,
-      startPosition: this._targetObject ? this._targetObject.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(),
+      startPointer,
+      dragPlane,
+      startPlanePoint,
+      startPosition,
       startQuaternion: this._targetObject ? this._targetObject.quaternion.clone() : new THREE.Quaternion(),
       startScale: this._targetObject ? this._targetObject.scale.clone() : new THREE.Vector3(1, 1, 1),
     };
@@ -535,7 +576,11 @@ export class TransformGizmo {
         this._setHoveredHandle(hit.object);
       }
       if (this.engine.rendererManager?.renderer?.domElement) {
-        this.engine.rendererManager.renderer.domElement.style.cursor = hit.object.userData.handleRole === 'translate' ? 'move' : 'default';
+        let cursor = 'default';
+        if (hit.object.userData.handleRole === 'translate') cursor = 'move';
+        else if (hit.object.userData.handleRole === 'rotate') cursor = this._getRotateCursor(hit.object);
+        else if (hit.object.userData.handleRole === 'scaleAxis' || hit.object.userData.handleRole === 'scaleUniform') cursor = 'nwse-resize';
+        this.engine.rendererManager.renderer.domElement.style.cursor = cursor;
       }
       return;
     }
@@ -585,15 +630,65 @@ export class TransformGizmo {
     this._pointer.set(x, y);
     this._raycaster.setFromCamera(this._pointer, camera);
     const hits = this._raycaster.intersectObjects(this._boxGroup.children, true);
-    return hits.length > 0 ? hits[0] : null;
+    let translateHit = null;
+    for (const hit of hits) {
+      const resolved = this._resolveGizmoHandle(hit.object);
+      if (!resolved) continue;
+      if (resolved.userData.handleRole !== 'translate') {
+        hit.object = resolved;
+        return hit;
+      }
+      translateHit = hit;
+    }
+    if (translateHit) {
+      translateHit.object = this._resolveGizmoHandle(translateHit.object);
+      return translateHit;
+    }
+
+    if (this._boxVolume) {
+      const volumeBox = new THREE.Box3().setFromObject(this._boxVolume);
+      const intersectPoint = new THREE.Vector3();
+      if (this._raycaster.ray.intersectBox(volumeBox, intersectPoint)) {
+        return {
+          object: this._boxVolume,
+          point: intersectPoint.clone(),
+          distance: intersectPoint.distanceTo(this._raycaster.ray.origin),
+        };
+      }
+    }
+    return null;
+  }
+
+  _resolveGizmoHandle(object) {
+    let obj = object;
+    while (obj && !obj.userData?.handleRole) {
+      obj = obj.parent;
+    }
+    return obj;
+  }
+
+  _getRotateCursor(handle) {
+    const axis = handle?.userData?.handleAxis;
+    if (!axis) return 'default';
+    if (axis === 'Y') return 'ew-resize';
+    return 'ns-resize';
   }
 
   _setHoveredHandle(handle) {
     if (this._hoveredHandle === handle) return;
     this._clearHoveredHandle();
-    if (!handle || !handle.material) return;
+    if (!handle) return;
     this._hoveredHandle = handle;
-    handle.material.color.set(handle.userData.hoverColor || 0xffff00);
+    if (handle.material && handle.userData?.baseColor) {
+      handle.material.color.set(handle.userData.hoverColor || 0xffff00);
+    }
+    if (handle.children) {
+      handle.children.forEach((child) => {
+        if (child.material && handle.userData?.baseColor) {
+          child.material.color.set(handle.userData.hoverColor || 0xffff00);
+        }
+      });
+    }
   }
 
   _clearHoveredHandle() {
@@ -601,6 +696,13 @@ export class TransformGizmo {
     const handle = this._hoveredHandle;
     if (handle.material && handle.userData?.baseColor) {
       handle.material.color.set(handle.userData.baseColor);
+    }
+    if (handle.children) {
+      handle.children.forEach((child) => {
+        if (child.material && handle.userData?.baseColor) {
+          child.material.color.set(handle.userData.baseColor);
+        }
+      });
     }
     this._hoveredHandle = null;
   }
@@ -623,21 +725,44 @@ export class TransformGizmo {
 
   _updateTranslate(dx, dy) {
     const camera = this.engine.camera;
-    if (!camera) return;
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward).normalize();
-    const up = new THREE.Vector3().copy(camera.up).normalize();
-    const right = new THREE.Vector3().crossVectors(forward, up).normalize();
-    const move = new THREE.Vector3();
-    const faceNormal = this._interaction.faceNormal;
-    if (faceNormal && Math.abs(faceNormal.y) > 0.75) {
+    const renderer = this.engine.rendererManager?.renderer;
+    if (!camera || !renderer) return;
+    let worldPosition = this._interaction.startPosition.clone();
+    if (this._interaction.dragPlane && this._interaction.startPlanePoint) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      const x = ((this._interaction.startX - rect.left) / rect.width) * 2 - 1;
+      const y = -((this._interaction.startY - rect.top) / rect.height) * 2 + 1;
+      this._pointer.set(x, y);
+      this._raycaster.setFromCamera(this._pointer, camera);
+      const currentNdc = new THREE.Vector2(
+        ((this._interaction.startX + dx - rect.left) / rect.width) * 2 - 1,
+        -((this._interaction.startY + dy - rect.top) / rect.height) * 2 + 1
+      );
+      this._raycaster.setFromCamera(currentNdc, camera);
+      const currentPoint = new THREE.Vector3();
+      if (this._raycaster.ray.intersectPlane(this._interaction.dragPlane, currentPoint)) {
+        const delta = currentPoint.clone().sub(this._interaction.startPlanePoint);
+        worldPosition.add(delta);
+      } else {
+        const forward = new THREE.Vector3();
+        camera.getWorldDirection(forward).normalize();
+        const up = new THREE.Vector3().copy(camera.up).normalize();
+        const right = new THREE.Vector3().crossVectors(forward, up).normalize();
+        const move = new THREE.Vector3();
+        move.addScaledVector(right, dx * 0.0025);
+        move.addScaledVector(up, -dy * 0.0025);
+        worldPosition.add(move);
+      }
+    } else {
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward).normalize();
+      const up = new THREE.Vector3().copy(camera.up).normalize();
+      const right = new THREE.Vector3().crossVectors(forward, up).normalize();
+      const move = new THREE.Vector3();
       move.addScaledVector(right, dx * 0.0025);
       move.addScaledVector(up, -dy * 0.0025);
-    } else {
-      move.addScaledVector(right, dx * 0.0025);
-      move.addScaledVector(forward, dy * 0.0025);
+      worldPosition.add(move);
     }
-    const worldPosition = this._interaction.startPosition.clone().add(move);
     if (this._targetObject.parent) {
       this._targetObject.parent.worldToLocal(worldPosition);
     }
@@ -646,14 +771,15 @@ export class TransformGizmo {
 
   _updateRotate(dx, dy) {
     const axis = this._interaction.axisDir || new THREE.Vector3(0, 1, 0);
-    const direction = (Math.abs(dx) > Math.abs(dy) ? dx : -dy) * 0.005;
+    const direction = (Math.abs(dx) > Math.abs(dy) ? dx : dy) * 0.005;
     const rotation = new THREE.Quaternion().setFromAxisAngle(axis, direction);
     this._targetObject.quaternion.copy(this._interaction.startQuaternion).premultiply(rotation);
   }
 
   _updateScaleAxis(dx, dy) {
     const axis = this._interaction.axis;
-    const factor = Math.max(0.05, 1 + (Math.abs(dx) > Math.abs(dy) ? -dx : dy) * 0.0025);
+    const delta = Math.abs(dx) > Math.abs(dy) ? dx : -dy;
+    const factor = Math.max(0.05, 1 + delta * 0.0025);
     const scale = this._interaction.startScale.clone();
     if (axis === 'X') scale.x *= factor;
     if (axis === 'Y') scale.y *= factor;
@@ -662,7 +788,8 @@ export class TransformGizmo {
   }
 
   _updateScaleUniform(dx, dy) {
-    const factor = Math.max(0.05, 1 + (Math.abs(dx) > Math.abs(dy) ? -dx : dy) * 0.0025);
+    const delta = Math.abs(dx) > Math.abs(dy) ? dx : -dy;
+    const factor = Math.max(0.05, 1 + delta * 0.0025);
     this._targetObject.scale.copy(this._interaction.startScale).multiplyScalar(factor);
   }
 
