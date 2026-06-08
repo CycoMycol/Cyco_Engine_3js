@@ -72,13 +72,16 @@ export class TransformGizmo {
     this._onWorld            = this._onWorld.bind(this);
     this._onGizmoSize        = this._onGizmoSize.bind(this);
     this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
+    this._onPhysicsFocus     = this._onPhysicsFocus.bind(this);
+    this._onHierarchyRemove  = this._onHierarchyRemove.bind(this);
     this._onControlChange    = this._onControlChange.bind(this);
     this._onVpTick           = this._onVpTick.bind(this);
     this._pendingGizmoSize   = null;
     this._lastGizmoSize      = null;
     this._lastMouseNDC       = { x: 0, y: 0, valid: false };
-    this._universalPickWinner = null;
-    this._universalLoses     = null;
+    this._universalWinnerType = null;
+    this._canvasListeners   = null;
+    this._failsafeListeners = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
@@ -86,14 +89,11 @@ export class TransformGizmo {
     window.addEventListener('cyco-vp-tick',               this._onVpTick);
     window.addEventListener('cyco-select-node',           this._onSelectNode);
     window.addEventListener('cyco-deselect-all',          this._onDeselectAll);
-    window.addEventListener('cyco-hierarchy-remove',  (e) => {
-      const { objectId } = e.detail ?? {};
-      if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
-    });
+    window.addEventListener('cyco-hierarchy-remove',  this._onHierarchyRemove);
     window.addEventListener('cyco-vp-tool',           this._onTool);
     window.addEventListener('cyco-physics-vp-tool',   this._onPhysicsTool);
     window.addEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
-    window.addEventListener('cyco-physics-edit-focus', this._onPhysicsFocus?.bind(this));
+    window.addEventListener('cyco-physics-edit-focus', this._onPhysicsFocus);
     window.addEventListener('cyco-rvp-snap',          this._onSnap);
     window.addEventListener('cyco-vp-world',          this._onWorld);
     window.addEventListener('cyco-gizmo-size',        this._onGizmoSize);
@@ -164,6 +164,9 @@ export class TransformGizmo {
 
     const controlCamera = this._getControlsCamera(camera);
     if (!controlCamera) return;
+
+    this._disposeCanvasListeners();
+    this._disposeFailsafeListeners();
 
     this._tcTranslate = this._createControl('translate', controlCamera.clone(), renderer.domElement);
     this._tcRotate    = this._createControl('rotate',    controlCamera.clone(), renderer.domElement);
@@ -316,7 +319,17 @@ export class TransformGizmo {
     }
   }
 
+  _disposeFailsafeListeners() {
+    if (this._failsafeListeners) {
+      for (const { target, event, handler, opts } of this._failsafeListeners) {
+        target.removeEventListener(event, handler, opts);
+      }
+      this._failsafeListeners = null;
+    }
+  }
+
   _setupGlobalFailsafe() {
+    this._disposeFailsafeListeners();
     const cleanup = () => {
       this._isDragging = false;
       this._scaleInterceptPending = false;
@@ -333,9 +346,14 @@ export class TransformGizmo {
       if (orbitControls) orbitControls.enabled = true;
     };
 
-    window.addEventListener('pointerup', () => requestAnimationFrame(cleanup));
-    window.addEventListener('pointercancel', () => requestAnimationFrame(cleanup));
-    window.addEventListener('blur', cleanup);
+    this._failsafeListeners = [
+      { target: window, event: 'pointerup',       handler: () => requestAnimationFrame(cleanup) },
+      { target: window, event: 'pointercancel',   handler: () => requestAnimationFrame(cleanup) },
+      { target: window, event: 'blur',            handler: cleanup },
+    ];
+    for (const { target, event, handler } of this._failsafeListeners) {
+      target.addEventListener(event, handler);
+    }
   }
 
   _patchGizmosForUniversal() {
@@ -343,13 +361,16 @@ export class TransformGizmo {
       group.children.filter(predicate).forEach(c => group.remove(c));
     };
 
-    const isPlaneOrXYZ = c => ['XYZ','XY','YZ','XZ'].includes(c.name);
-
+    // Translate TC: remove XYZ octahedron + XY/YZ/XZ plane handles + shaft cylinders.
+    // Scale TC's white XYZ cube becomes the center uniform-scale handle.
     const tGizmo  = this._tcTranslate._gizmo.gizmo['translate'];
     const tPicker = this._tcTranslate._gizmo.picker['translate'];
+    const isPlaneOrXYZ = c => ['XYZ','XY','YZ','XZ'].includes(c.name);
+    const isShaft = c => c.geometry?.type === 'CylinderGeometry'
+                      && c.geometry?.parameters?.radiusTop > 0;
     removeFrom(tGizmo,  isPlaneOrXYZ);
-    // Remove planes AND XYZ from picker — scale's XYZ is the center handle
-    removeFrom(tPicker, c => ['XY','YZ','XZ','XYZ'].includes(c.name));
+    removeFrom(tPicker, isPlaneOrXYZ);
+    removeFrom(tGizmo,  isShaft);
 
     const sGizmo  = this._tcScale._gizmo.gizmo['scale'];
     const sPicker = this._tcScale._gizmo.picker['scale'];
@@ -361,129 +382,22 @@ export class TransformGizmo {
     const rPicker = this._tcRotate._gizmo.picker['rotate'];
     removeFrom(rGizmo,  c => c.name === 'E' || c.name === 'XYZE');
     removeFrom(rPicker, c => c.name === 'E' || c.name === 'XYZE');
-
-    // ── Reposition scale picker cones further out to avoid overlap ──────
-    // Translate picker cones are at ±0.3 on each axis. Move scale cones
-    // to ±0.45 so the two sets don't conflict during raycasting.
-    this._repositionPickerCones(sPicker, 0.5);
-
-    // ── Enlarge picker hit areas for universal mode ──────────────────────
-    // Tag all picker children so TransformControls.updateMatrixWorld
-    // knows not to hide them when an axis faces the camera.
-    this._tagPickers();
-
-    this._enlargePickers();
   }
 
-  /** Move the X/Y/Z axis-cone pickers to a further-out offset so they don't
-   *  overlap with the translate picker cones at the default 0.3 offset. */
-  _repositionPickerCones(pickerGroup, offset) {
-    if (!pickerGroup) return;
-    for (const child of pickerGroup.children) {
-      if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
-        // The original cones were baked at 0.3 offset along their axis.
-        // Compute the geometry centroid and translate further to 'offset'.
-        child.geometry.computeBoundingBox();
-        const bb = child.geometry.boundingBox;
-        const cx = (bb.max.x + bb.min.x) / 2;
-        const cy = (bb.max.y + bb.min.y) / 2;
-        const cz = (bb.max.z + bb.min.z) / 2;
-        const ax = Math.abs(cx), ay = Math.abs(cy), az = Math.abs(cz);
-        const push = offset - 0.3;
-        let dx = 0, dy = 0, dz = 0;
-        if (ax > ay && ax > az) dx = cx > 0 ? push : -push;
-        else if (ay > ax && ay > az) dy = cy > 0 ? push : -push;
-        else dz = cz > 0 ? push : -push;
-        child.geometry.translate(dx, dy, dz);
-        child.geometry.computeBoundingSphere();
-        child.geometry.computeBoundingBox();
-      }
+  _disposeCanvasListeners() {
+    if (this._canvasListeners && this._canvasListeners._canvas) {
+      const { _canvas: c, pointermove, pointerdown } = this._canvasListeners;
+      if (pointermove) c.removeEventListener('pointermove', pointermove);
+      if (pointerdown) c.removeEventListener('pointerdown', pointerdown, { capture: true });
     }
+    this._canvasListeners = null;
   }
-
-  /** Tag all picker children so TransformControls never hides them. */
-  _tagPickers() {
-    const tag = (tc, mode) => {
-      const group = tc._gizmo?.picker?.[mode];
-      if (!group) return;
-      for (const child of group.children) child._isPicker = true;
-    };
-    tag(this._tcTranslate, 'translate');
-    tag(this._tcRotate,    'rotate');
-    tag(this._tcScale,     'scale');
-  }
-
-  /** Replace axis-cone pickers with elongated boxes that are equally
-   *  clickable from ANY camera angle, even when the axis points at the camera. */
-  _enlargePickers() {
-    // Use the module-level THREE import (window.THREE is not set in ES-module context)
-    const scaleAroundCenter = (geom, s) => {
-      geom.computeBoundingBox();
-      const c = new THREE.Vector3();
-      geom.boundingBox.getCenter(c);
-      const m = new THREE.Matrix4()
-        .makeTranslation(-c.x, -c.y, -c.z)
-        .multiply(new THREE.Matrix4().makeScale(s, s, s))
-        .multiply(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z));
-      geom.applyMatrix4(m);
-      geom.computeBoundingSphere();
-      geom.computeBoundingBox();
-    };
-
-    // Replace the tiny cone pickers with elongated boxes.  The original
-    // CylinderGeometry cones are only 0.2 units wide and hard to hit
-    // when viewed end-on.  New boxes are 1.2 units long and 0.25 wide.
-    const _replacePickerGeos = (tc, mode) => {
-      const pickerGroup = tc._gizmo?.picker?.[mode];
-      if (!pickerGroup) return;
-      for (const child of pickerGroup.children) {
-        if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
-          // Elongate the existing baked geometry along its longest axis
-          // so the hit area is thick enough from any angle.
-          scaleAroundCenter(child.geometry, 1.8);
-        }
-        if (child.name === 'XYZ') {
-          scaleAroundCenter(child.geometry, 3.0);
-        }
-      }
-    };
-
-    _replacePickerGeos(this._tcTranslate, 'translate');
-    _replacePickerGeos(this._tcScale,     'scale');
-    _enlargeRotatePickers(this._tcRotate);
-  }
-
-  /** Enlarge rotate picker torus tubes so they're easier to hover. */
-  _enlargeRotatePickers = (tc) => {
-    const pickerGroup = tc._gizmo?.picker?.['rotate'];
-    if (!pickerGroup) return;
-    for (const child of pickerGroup.children) {
-      if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
-        // Bake a thicker torus into the child's baked geometry.
-        // The original torus has tube=0.1 which is very thin; scale up.
-        const scaleAroundCenter = (geom, s) => {
-          geom.computeBoundingBox();
-          const c = new THREE.Vector3();
-          geom.boundingBox.getCenter(c);
-          const m = new THREE.Matrix4()
-            .makeTranslation(-c.x, -c.y, -c.z)
-            .multiply(new THREE.Matrix4().makeScale(s, s, s))
-            .multiply(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z));
-          geom.applyMatrix4(m);
-          geom.computeBoundingSphere();
-        };
-        scaleAroundCenter(child.geometry, 2.0);
-      }
-      if (child.name === 'XYZE') {
-        scaleAroundCenter(child.geometry, 1.5);
-      }
-    }
-  };
 
   _setupUniversalIntercept(canvas) {
     if (!canvas || !this._tcRotate || !this._tcScale) return;
+    this._disposeCanvasListeners();
     const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    const mouse     = new THREE.Vector2();
 
     const getNDC = (e) => {
       const rect = canvas.getBoundingClientRect();
@@ -494,106 +408,90 @@ export class TransformGizmo {
       return mouse;
     };
 
-    // Pick the SPECIFIC handle (not just type) that is closest to the
-    // cursor across ALL three TC pickers.  Return { type, axisName } so
-    // we can clear only non-matching axes.
+    // Pick the winner across all three TCs by raycasting priority:
+    // rotate > scale > translate (translate is the fallback).
     this._universalPickWinner = (ndcMouse) => {
       const cam = this._tcTranslate?.camera || this.engine.camera;
       raycaster.setFromCamera(ndcMouse, cam);
-
-      const hits = [];
-      const add = (type, group) => {
-        const arr = raycaster.intersectObject(group, true);
-        if (arr.length > 0) hits.push({ type, axis: arr[0].object.name, dist: arr[0].distance });
-      };
-      add('translate', this._tcTranslate._gizmo.picker['translate']);
-      add('rotate',    this._tcRotate._gizmo.picker['rotate']);
-      add('scale',     this._tcScale._gizmo.picker['scale']);
-
-      if (hits.length === 0) return null;
-
-      // Special case: when scale hits XYZ (center cube), it should always
-      // win over translate/rotate that pass through the same point, because
-      // the center cube is the user's intended target for uniform scaling.
-      const scaleXYZ = hits.find(h => h.type === 'scale' && h.axis === 'XYZ');
-      if (scaleXYZ) return scaleXYZ;
-
-      hits.sort((a, b) => a.dist - b.dist);
-      return hits[0]; // { type, axis, dist }
+      if (raycaster.intersectObject(this._tcRotate._gizmo.picker['rotate'], true).length > 0)
+        return 'rotate';
+      if (raycaster.intersectObject(this._tcScale._gizmo.picker['scale'], true).length > 0)
+        return 'scale';
+      if (raycaster.intersectObject(this._tcTranslate._gizmo.picker['translate'], true).length > 0)
+        return 'translate';
+      return null;
     };
 
     this._universalLoses = (winner) => {
-      // winner is { type, axis, dist } — extract the type string
-      const type = typeof winner === 'string' ? winner : winner.type;
-      if (type === 'rotate')    return [this._tcTranslate, this._tcScale];
-      if (type === 'scale')     return [this._tcTranslate, this._tcRotate];
-      return [this._tcRotate, this._tcScale];
+      if (winner === 'rotate')    return [this._tcTranslate, this._tcScale];
+      if (winner === 'scale')     return [this._tcTranslate, this._tcRotate];
+      /* translate */             return [this._tcRotate,    this._tcScale];
     };
 
-    /** Decide which TC owns the hover highlight in universal mode.
-     *  Picks the closest handle across all three TCs, clears the losers'
-     *  axes, and explictly sets the winner's axis so the highlight renders. */
-    this._arbitrateUniversalHover = () => {
-      if (!this._lastMouseNDC?.valid) return;
-      const winner = this._universalPickWinner(this._lastMouseNDC);
-      if (!winner) {
-        // No hit — clear ALL axes so nothing highlights
-        for (const tc of this._tcs) tc.axis = null;
-        return;
-      }
-      const losers = this._universalLoses(winner);
-      losers[0].axis = null;
-      losers[1].axis = null;
-
-      // CRITICAL: Set the winner's axis explicitly, because the winner TC's
-      // pointerHover may have missed the picker hit (e.g. thin rotate torus
-      // at a grazing angle, or its pointermove event fired before ours).
-      let tc;
-      if (winner.type === 'translate') tc = this._tcTranslate;
-      else if (winner.type === 'rotate') tc = this._tcRotate;
-      else if (winner.type === 'scale') tc = this._tcScale;
-      if (tc) tc.axis = winner.axis;
-    };
-
-    // Store last mouse NDC so _onVpTick can arbitrate.
-    this._lastMouseNDC = { x: 0, y: 0, valid: false };
-
-    canvas.addEventListener('pointermove', (e) => {
+    // ── Hover (pointermove) ──────────────────────────────────
+    // Strategy: let all three TCs run their own pointerhover freely.
+    // Then, in a queueMicrotask (fires after ALL bubble handlers in this
+    // task have completed), pick the priority winner and zero out the
+    // losers' axis.  gizmo.axis = null via defineProperty => no highlight.
+    // No enable/disable needed — cleaner and race-condition free.
+    const onPointermove = (e) => {
       if (this._mode !== 'universal') return;
+      if (!this._tcRotate.object) return;
       if (this._isDragging) return;
-      const rect = canvas.getBoundingClientRect();
-      this._lastMouseNDC.x =  (e.clientX - rect.left) / rect.width  *  2 - 1;
-      this._lastMouseNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      this._lastMouseNDC.valid = true;
 
-      // Run arbitration immediately on pointermove so highlights update
-      // at the source rather than relying on the next frame's tick.
-      this._arbitrateUniversalHover();
-    });
+      // Snapshot NDC into a fresh vector — shared `mouse` must not be
+      // read inside the microtask (another event could have modified it).
+      const ndc = getNDC(e).clone();
 
-    // pointerdown in capture phase: pick the winner and disable losers
-    // BEFORE the native TC pointerdown handlers fire.
-    canvas.addEventListener('pointerdown', (e) => {
+      queueMicrotask(() => {
+        if (this._isDragging) return;
+        const winner  = this._universalPickWinner(ndc);
+        if (!winner) return;
+        const [a, b]  = this._universalLoses(winner);
+        a.axis = null;   // propagates → gizmo.axis = null
+        b.axis = null;
+        console.log(`[Gizmo] hover winner=${winner}`);
+      });
+    };
+
+    // ── Click (pointerdown) ──────────────────────────────────
+    // Use priority (rotate > scale > translate) to pick winner.
+    // Only disable losers for rotate/scale — translate handles naturally.
+    const onPointerdown = (e) => {
       if (e.button !== 0) return;
       if (this._mode !== 'universal') return;
       if (!this._tcRotate.object) return;
-      const winner = this._universalPickWinner(this._lastMouseNDC);
-      if (!winner) return;
-      const losers = this._universalLoses(winner);
-      losers[0].enabled = false;
-      losers[1].enabled = false;
-      this._scaleInterceptPending = true;
-      this._universalWinnerType = winner.type;
-    }, { capture: true });
 
-    const _reEnable = () => {
-      if (this._scaleInterceptPending) {
-        this._scaleInterceptPending = false;
-        for (const tc of this._tcs) tc.enabled = true;
-      }
+      const winner = this._universalPickWinner(getNDC(e));
+      console.log(`[Gizmo] click winner=${winner}`);
+      if (winner === 'translate') return; // translate handles naturally
+
+      const [a, b] = this._universalLoses(winner);
+      a.enabled = false;
+      b.enabled = false;
+      this._scaleInterceptPending = true;
+      this._universalWinnerType = winner;
+
+      // Guard: restore if winning TC's mouseDown didn't fire
+      requestAnimationFrame(() => {
+        if (this._scaleInterceptPending) {
+          this._scaleInterceptPending = false;
+          a.enabled = true;
+          b.enabled = true;
+        }
+      });
     };
-    canvas.addEventListener('pointerup', _reEnable);
-    canvas.addEventListener('pointercancel', _reEnable);
+
+    canvas.addEventListener('pointermove', onPointermove);
+    canvas.addEventListener('pointerdown', onPointerdown, { capture: true });
+
+    this._canvasListeners = {
+      _canvas: canvas,
+      pointermove: onPointermove,
+      pointerdown: onPointerdown,
+      pointerup: null,
+      pointercancel: null,
+    };
   }
 
   _show() {
@@ -605,10 +503,13 @@ export class TransformGizmo {
         || (this._mode === 'rotate' && tc.mode === 'rotate')
         || (this._mode === 'scale' && tc.mode === 'scale');
       if (helper) helper.visible = visible;
-      // In universal mode keep ALL axes visible from every angle and
-      // let the tick handler decide which one is highlighted.
-      tc._gizmo.hideAlignedToCamera = isUniversal ? false : true;
-      tc.enabled = isUniversal || visible;
+      // In single-tool modes disable inactive TCs so they don't intercept.
+      // In universal mode keep ALL TCs enabled for priority-based arbitration.
+      if (isUniversal) {
+        tc.enabled = true;
+      } else {
+        tc.enabled = visible;
+      }
     }
   }
 
@@ -796,6 +697,11 @@ export class TransformGizmo {
   _onDeselectAll() {
     this.detach();
     this._hide();
+  }
+
+  _onHierarchyRemove(e) {
+    const { objectId } = e.detail ?? {};
+    if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
   }
 
   _onTool(event) {
@@ -1036,12 +942,8 @@ export class TransformGizmo {
       } catch (err) {}
     }
 
-    // Universal-mode hover arbitration — runs every frame AFTER all TC
-    // handlers have updated their axes.  Uses the same logic as the
-    // pointermove handler to keep highlights consistent frame-to-frame.
-    if (this._mode === 'universal' && !this._isDragging && this._arbitrateUniversalHover) {
-      this._arbitrateUniversalHover();
-    }
+    // Universal-mode hover arbitration is handled via queueMicrotask in
+    // _setupUniversalIntercept — no tick-based arbitration needed.
 
     if (this._physicsEdit && this._targetProxy) {
       try {
@@ -1151,6 +1053,7 @@ export class TransformGizmo {
     window.removeEventListener('cyco-vp-tick',               this._onVpTick);
     window.removeEventListener('cyco-select-node',           this._onSelectNode);
     window.removeEventListener('cyco-deselect-all',          this._onDeselectAll);
+    window.removeEventListener('cyco-hierarchy-remove',      this._onHierarchyRemove);
     window.removeEventListener('cyco-vp-tool',               this._onTool);
     window.removeEventListener('cyco-physics-vp-tool',       this._onPhysicsTool);
     window.removeEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
@@ -1158,6 +1061,9 @@ export class TransformGizmo {
     window.removeEventListener('cyco-vp-world',              this._onWorld);
     window.removeEventListener('cyco-gizmo-size',            this._onGizmoSize);
     window.removeEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
+    window.removeEventListener('cyco-physics-edit-focus', this._onPhysicsFocus);
+    this._disposeCanvasListeners();
+    this._disposeFailsafeListeners();
     if (this._tcs.length) {
       for (const tc of this._tcs) {
         try {
