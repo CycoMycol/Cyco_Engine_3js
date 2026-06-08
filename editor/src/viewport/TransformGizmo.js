@@ -12,17 +12,19 @@ export class TransformGizmo {
     this._isDragging   = false;
     this._matrixBefore = null;
 
-    // Single TransformControls — mode switches via setMode()
-    this._tc     = null;  // the one active TC
-    this._gizmo  = null;  // the TC's helper group in scene
-    this._controls = null; // alias for backward compat
+    this._tc      = null;
+    this._gizmo   = null;
+    this._controls = null;
 
-    // Box tool (bounding box with corner-scale handles)
-    this._boxGroup  = null;
-    this._boxEdges  = null;
-    this._boxPickers = [];
-    this._boxActive = false;
-    this._boxListeners = null;
+    this._boxGroup      = null;
+    this._boxHandles    = [];
+    this._boxVolume     = null;
+    this._boxActive     = false;
+    this._hoveredHandle = null;
+    this._interaction   = null;
+
+    this._raycaster = new THREE.Raycaster();
+    this._pointer   = new THREE.Vector2();
 
     this._onVpReady          = this._onVpReady.bind(this);
     this._onRendererChanged  = this._onRendererChanged.bind(this);
@@ -33,7 +35,10 @@ export class TransformGizmo {
     this._onWorld            = this._onWorld.bind(this);
     this._onSnap             = this._onSnap.bind(this);
     this._onHierarchyRemove  = this._onHierarchyRemove.bind(this);
-    this._rcHandler = null;
+    this._onGizmoPointerDown = this._onGizmoPointerDown.bind(this);
+    this._onGizmoPointerMove = this._onGizmoPointerMove.bind(this);
+    this._onGizmoPointerUp   = this._onGizmoPointerUp.bind(this);
+    this._rcHandler          = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
@@ -49,8 +54,6 @@ export class TransformGizmo {
   get controls() { return this._controls; }
   set controls(v) { this._controls = v; }
 
-  // === Build ===
-
   _build() {
     const renderer = this.engine.rendererManager?.renderer;
     const camera   = this.engine.camera;
@@ -59,21 +62,19 @@ export class TransformGizmo {
 
     this._teardown();
 
-    // Single TransformControls — exactly like the Three.js example
     const tc = new TransformControls(camera, renderer.domElement);
     tc.setSpace(this._space);
 
-    // Prevent TransformControls from blocking right-click context menu.
-    // TC's pointerdown handler calls setPointerCapture on ALL clicks,
-    // which can swallow the contextmenu event. Release capture on right-click.
     this._rcHandler = (e) => {
       if (e.button !== 0) {
         try { renderer.domElement.releasePointerCapture(e.pointerId); } catch (_) {}
       }
     };
     renderer.domElement.addEventListener('pointerdown', this._rcHandler, { capture: true });
+    renderer.domElement.addEventListener('pointerdown', this._onGizmoPointerDown, { capture: true });
+    document.addEventListener('pointermove', this._onGizmoPointerMove, { capture: true });
+    document.addEventListener('pointerup',   this._onGizmoPointerUp,   { capture: true });
 
-    // Disable orbit while dragging (official example pattern)
     tc.addEventListener('dragging-changed', (event) => {
       const orbit = this.engine.controls;
       if (orbit) orbit.enabled = !event.value;
@@ -81,7 +82,6 @@ export class TransformGizmo {
       this._isDragging = !!event.value;
     });
 
-    // Record matrix before drag for undo/redo
     tc.addEventListener('mouseDown', () => {
       this._isDragging = true;
       const orbit = this.engine.controls;
@@ -118,25 +118,12 @@ export class TransformGizmo {
     scene.add(gizmo);
     this._gizmo = gizmo;
 
-    // Build box tool (hidden by default)
-    this._boxGroup = new THREE.Group();
-    this._boxGroup.name = '__cyco_box_gizmo__';
-    this._boxGroup.userData._isGizmo = true;
-    this._boxGroup.visible = false;
-    scene.add(this._boxGroup);
-    this._buildBoxHandles();
-
-    // Apply initial mode
+    this._buildBoxGizmo();
     this._applyMode();
-
-    // Re-attach if we have a target
     if (this._targetObject) this._attachTo(this._targetObject);
   }
 
   _teardown() {
-    this._removeBoxListeners();
-
-    // Remove right-click capture release handler
     if (this._rcHandler) {
       const renderer = this.engine.rendererManager?.renderer;
       if (renderer?.domElement) {
@@ -144,6 +131,13 @@ export class TransformGizmo {
       }
       this._rcHandler = null;
     }
+
+    const renderer = this.engine.rendererManager?.renderer;
+    if (renderer?.domElement) {
+      renderer.domElement.removeEventListener('pointerdown', this._onGizmoPointerDown, { capture: true });
+    }
+    document.removeEventListener('pointermove', this._onGizmoPointerMove, { capture: true });
+    document.removeEventListener('pointerup',   this._onGizmoPointerUp,   { capture: true });
 
     if (this._tc) {
       const h = this._tc.getHelper();
@@ -153,28 +147,32 @@ export class TransformGizmo {
     }
     this._gizmo = null;
     this.controls = null;
+
     if (this._boxGroup) {
+      this._boxGroup.traverse((child) => {
+        if (child.geometry) child.geometry.dispose();
+        if (child.material) child.material.dispose();
+      });
       if (this._boxGroup.parent) this._boxGroup.parent.remove(this._boxGroup);
       this._boxGroup = null;
+      this._boxHandles = [];
+      this._boxVolume = null;
+      this._hoveredHandle = null;
+      this._interaction = null;
     }
   }
-
-  // === Mode switching ===
 
   _applyMode() {
     if (!this._tc) return;
     if (this._mode === 'universal') {
-      // Box mode: hide TC gizmo, show box
       this._gizmo.visible = false;
       this._tc.enabled = false;
       this._showBox();
     } else if (this._mode === 'select') {
-      // Select mode: hide everything
       this._gizmo.visible = false;
       this._tc.enabled = false;
       this._hideBox();
     } else {
-      // translate / rotate / scale: show TC, hide box
       this._tc.setMode(this._mode);
       this._gizmo.visible = true;
       this._tc.enabled = true;
@@ -182,12 +180,11 @@ export class TransformGizmo {
     }
   }
 
-  // === Attach / Detach ===
-
   _attachTo(obj) {
     this._targetObject = obj;
     if (this._mode === 'universal') {
-      this._updateBox();
+      this._showBox();
+      this._updateBoxGizmo();
     } else if (this._tc) {
       this._tc.attach(obj);
       this._applyMode();
@@ -202,135 +199,248 @@ export class TransformGizmo {
 
   detach() { this._detachAll(); }
 
-  // === Box tool (bounding box with uniform-scale corners) ===
+  _buildBoxGizmo() {
+    if (this._boxGroup) return;
+    const scene = this.engine.scene;
+    if (!scene) return;
 
-  _buildBoxHandles() {
-    const g = this._boxGroup;
-    const edgesGeo = new THREE.EdgesGeometry(new THREE.BoxGeometry(1,1,1));
-    this._boxEdges = new THREE.LineSegments(edgesGeo, new THREE.LineBasicMaterial({ color: 0xff8800 }));
-    this._boxEdges.raycast = () => {};
-    g.add(this._boxEdges);
+    this._boxGroup = new THREE.Group();
+    this._boxGroup.name = '__cyco_box_gizmo__';
+    this._boxGroup.userData._isGizmo = true;
+    this._boxGroup.visible = false;
+    scene.add(this._boxGroup);
 
-    const hGeo = new THREE.SphereGeometry(0.08, 8, 6);
-    const hMat = new THREE.MeshBasicMaterial({ color: 0xff8800 });
-    this._boxPickers = [];
-    const corners = [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]];
-    for (const [cx,cy,cz] of corners) {
-      const m = new THREE.Mesh(hGeo.clone(), hMat.clone());
-      m.position.set(cx,cy,cz);
-      m.scale.setScalar(0.08);
-      m.userData._boxCorner = {cx,cy,cz};
-      m.userData._isGizmo = true;
-      m.raycast = () => {};
-      g.add(m);
-      this._boxPickers.push(m);
-    }
-  }
+    const outlineMaterial = new THREE.LineBasicMaterial({
+      color: 0xe8eeff,
+      transparent: true,
+      opacity: 0.85,
+      depthTest: false,
+      depthWrite: false,
+    });
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
+      outlineMaterial
+    );
+    outline.name = 'BoxGizmoOutline';
+    outline.renderOrder = 1000;
+    outline.userData._isGizmo = true;
+    this._boxGroup.add(outline);
 
-  _updateBox() {
-    const obj = this._targetObject;
-    if (!obj || !this._boxEdges) return;
-    const box = new THREE.Box3().setFromObject(obj);
-    if (box.isEmpty()) return;
-    const size = new THREE.Vector3(); box.getSize(size);
-    const center = new THREE.Vector3(); box.getCenter(center);
-    this._boxEdges.geometry.dispose();
-    this._boxEdges.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z));
-    this._boxEdges.position.copy(center);
-    const hx = size.x/2, hy = size.y/2, hz = size.z/2;
-    for (const p of this._boxPickers) {
-      const {cx,cy,cz} = p.userData._boxCorner;
-      p.position.set(center.x+cx*hx, center.y+cy*hy, center.z+cz*hz);
-      p.scale.setScalar(Math.max(0.08, Math.min(size.x,size.y,size.z)*0.03));
-    }
+    const volumeMaterial = new THREE.MeshBasicMaterial({
+      transparent: true,
+      opacity: 0.0,
+      visible: false,
+      depthTest: false,
+    });
+    const volume = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), volumeMaterial);
+    volume.name = 'BoxGizmoVolume';
+    volume.userData = { _isGizmo: true, handleRole: 'translate' };
+    volume.renderOrder = 1001;
+    volume.visible = false;
+    this._boxGroup.add(volume);
+    this._boxVolume = volume;
+
+    const faceGeometry = new THREE.CylinderGeometry(0.5, 0.5, 0.2, 24);
+    const edgeGeometry = new THREE.CylinderGeometry(0.25, 0.25, 1, 16);
+    const cornerGeometry = new THREE.BoxGeometry(1, 1, 1);
+
+    const faceAxes = [
+      { dir: [1, 0, 0], axis: 'X', color: 0xff3b30 },
+      { dir: [-1, 0, 0], axis: 'X', color: 0xff3b30 },
+      { dir: [0, 1, 0], axis: 'Y', color: 0x34c759 },
+      { dir: [0, -1, 0], axis: 'Y', color: 0x34c759 },
+      { dir: [0, 0, 1], axis: 'Z', color: 0x0a84ff },
+      { dir: [0, 0, -1], axis: 'Z', color: 0x0a84ff },
+    ];
+
+    const corners = [
+      [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5],
+      [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5],
+    ];
+
+    const edgePairs = [
+      [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7],
+    ];
+
+    faceAxes.forEach((config, index) => {
+      const material = new THREE.MeshBasicMaterial({
+        color: config.color,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const face = new THREE.Mesh(faceGeometry, material);
+      face.name = `BoxGizmoFace${index}`;
+      face.userData = {
+        _isGizmo: true,
+        handleRole: 'scaleAxis',
+        handleAxis: config.axis,
+        handleDir: new THREE.Vector3(...config.dir),
+        baseColor: config.color,
+        hoverColor: 0xffff00,
+      };
+      face.renderOrder = 1001;
+      face.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), new THREE.Vector3(...config.dir));
+      this._boxGroup.add(face);
+      this._boxHandles.push(face);
+    });
+
+    edgePairs.forEach((pair, index) => {
+      const a = new THREE.Vector3().fromArray(corners[pair[0]]);
+      const b = new THREE.Vector3().fromArray(corners[pair[1]]);
+      const midpoint = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+      const direction = new THREE.Vector3().subVectors(b, a).normalize();
+      const axis = Math.abs(direction.x) > 0.9 ? 'X' : Math.abs(direction.y) > 0.9 ? 'Y' : 'Z';
+      const color = axis === 'X' ? 0xff3b30 : axis === 'Y' ? 0x34c759 : 0x0a84ff;
+      const material = new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const edge = new THREE.Mesh(edgeGeometry, material);
+      edge.name = `BoxGizmoEdge${index}`;
+      edge.userData = {
+        _isGizmo: true,
+        handleRole: 'rotate',
+        handleAxis: axis,
+        handleDir: direction.clone(),
+        localPosition: midpoint.clone(),
+        baseColor: color,
+        hoverColor: 0xffff00,
+      };
+      edge.renderOrder = 1001;
+      edge.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+      edge.position.copy(midpoint);
+      this._boxGroup.add(edge);
+      this._boxHandles.push(edge);
+    });
+
+    corners.forEach((position, index) => {
+      const material = new THREE.MeshBasicMaterial({
+        color: 0xe8eeff,
+        transparent: true,
+        opacity: 0.95,
+        depthTest: false,
+        depthWrite: false,
+      });
+      const corner = new THREE.Mesh(cornerGeometry, material);
+      corner.name = `BoxGizmoCorner${index}`;
+      corner.userData = {
+        _isGizmo: true,
+        handleRole: 'scaleUniform',
+        handleAxis: 'XYZ',
+        handleDir: new THREE.Vector3().fromArray(position).normalize(),
+        baseColor: 0xe8eeff,
+        hoverColor: 0xffff00,
+      };
+      corner.renderOrder = 1001;
+      corner.position.fromArray(position);
+      this._boxGroup.add(corner);
+      this._boxHandles.push(corner);
+    });
   }
 
   _showBox() {
-    if (this._boxGroup) this._boxGroup.visible = true;
-    this._boxActive = true;
-    this._updateBox();
-    this._addBoxListeners();
+    if (!this._boxGroup) this._buildBoxGizmo();
+    if (this._boxGroup) {
+      this._boxGroup.visible = true;
+      this._boxActive = true;
+      this._updateBoxGizmo();
+    }
   }
 
   _hideBox() {
-    if (this._boxGroup) this._boxGroup.visible = false;
+    if (this._boxGroup) {
+      this._boxGroup.visible = false;
+      this._clearHoveredHandle();
+    }
     this._boxActive = false;
-    this._removeBoxListeners();
   }
 
-  _addBoxListeners() {
-    if (this._boxListeners) return;
-    const renderer = this.engine.rendererManager?.renderer;
-    if (!renderer?.domElement) return;
-    const canvas = renderer.domElement;
-    const down = (e) => this._onBoxPointerDown(e);
-    canvas.addEventListener('pointerdown', down);
-    this._boxListeners = { canvas, down };
+  _updateBoxGizmo() {
+    if (!this._boxActive || !this._targetObject || !this._boxGroup) return;
+
+    const target = this._targetObject;
+    const outline = this._boxGroup.getObjectByName('BoxGizmoOutline');
+    if (!outline) return;
+
+    const center = new THREE.Vector3();
+    const size = new THREE.Vector3(1, 1, 1);
+    const worldPosition = new THREE.Vector3();
+    const worldQuaternion = new THREE.Quaternion();
+    const worldScale = new THREE.Vector3(1, 1, 1);
+
+    const isMesh = target.isMesh && target.geometry;
+    if (isMesh) {
+      const geometry = target.geometry;
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      if (geometry.boundingBox) {
+        geometry.boundingBox.getCenter(center);
+        geometry.boundingBox.getSize(size);
+        target.getWorldScale(worldScale);
+        size.multiply(worldScale);
+        center.multiply(worldScale);
+        target.getWorldPosition(worldPosition);
+        target.getWorldQuaternion(worldQuaternion);
+        this._boxGroup.position.copy(worldPosition);
+        this._boxGroup.quaternion.copy(worldQuaternion);
+        this._boxGroup.scale.set(1, 1, 1);
+        outline.position.copy(center);
+      }
+    }
+
+    if (!isMesh || size.x === 0 || size.y === 0 || size.z === 0) {
+      const worldBox = new THREE.Box3().setFromObject(target);
+      if (!worldBox.isEmpty()) {
+        worldBox.getCenter(center);
+        worldBox.getSize(size);
+      }
+      this._boxGroup.position.copy(center);
+      this._boxGroup.quaternion.copy(target.getWorldQuaternion(new THREE.Quaternion()));
+      this._boxGroup.scale.set(1, 1, 1);
+      size.set(Math.max(0.1, size.x), Math.max(0.1, size.y), Math.max(0.1, size.z));
+      center.set(0, 0, 0);
+    }
+
+    size.set(Math.max(0.1, size.x), Math.max(0.1, size.y), Math.max(0.1, size.z));
+    outline.geometry.dispose();
+    outline.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z));
+
+    if (this._boxVolume) {
+      this._boxVolume.scale.copy(size);
+      this._boxVolume.position.set(0, 0, 0);
+    }
+
+    const faceRadius = Math.min(size.x, size.y, size.z) * 0.12;
+    const edgeRadius = Math.min(size.x, size.y, size.z) * 0.06;
+    const edgeLength = Math.max(size.x, size.y, size.z) * 0.65;
+    const cornerScale = Math.min(size.x, size.y, size.z) * 0.08;
+    const faceDepth = Math.min(size.x, size.y, size.z) * 0.12;
+
+    this._boxHandles.forEach((handle) => {
+      const role = handle.userData.handleRole;
+      const dir = handle.userData.handleDir?.clone();
+      if (role === 'scaleAxis' && dir) {
+        handle.position.copy(dir).multiply(size).multiplyScalar(0.5);
+        handle.position.addScaledVector(dir, faceDepth * 0.5);
+        handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        handle.scale.set(faceRadius * 1.6, faceDepth, faceRadius * 1.6);
+      } else if (role === 'rotate' && dir) {
+        const localPosition = handle.userData.localPosition?.clone() ?? new THREE.Vector3();
+        handle.position.copy(localPosition).multiply(size);
+        handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+        handle.scale.set(edgeRadius, edgeLength, edgeRadius);
+      } else if (role === 'scaleUniform' && dir) {
+        handle.position.copy(dir).multiply(size).multiplyScalar(0.5);
+        handle.position.addScaledVector(dir, cornerScale * 0.5);
+        handle.quaternion.identity();
+        handle.scale.setScalar(cornerScale);
+      }
+    });
   }
-
-  _removeBoxListeners() {
-    if (!this._boxListeners) return;
-    this._boxListeners.canvas.removeEventListener('pointerdown', this._boxListeners.down);
-    this._boxListeners = null;
-  }
-
-  _onBoxPointerDown(e) {
-    if (this._mode !== 'universal' || !this._targetObject) return;
-    if (e.button !== 0) return; // only left-click for box handles
-    const renderer = this.engine.rendererManager?.renderer;
-    const camera   = this.engine.camera;
-    if (!renderer || !camera) return;
-    const rect = renderer.domElement.getBoundingClientRect();
-    const ndc = new THREE.Vector2(((e.clientX-rect.left)/rect.width)*2-1, -((e.clientY-rect.top)/rect.height)*2+1);
-    const ray = new THREE.Raycaster().setFromCamera(ndc, camera);
-    const hits = ray.intersectObjects(this._boxPickers, false);
-    if (!hits.length) return;
-    const corner = hits[0].object.userData._boxCorner;
-    if (!corner) return;
-    // Only prevent default/stop propagation for left-click on a handle
-    // Right-click must pass through so contextmenu can fire.
-    e.preventDefault();
-    e.stopPropagation();
-
-    const obj = this._targetObject;
-    const box = new THREE.Box3().setFromObject(obj);
-    const origSize = new THREE.Vector3(); box.getSize(origSize);
-    const origScale = obj.scale.clone();
-    const center = new THREE.Vector3(); box.getCenter(center);
-
-    this._isDragging = true;
-    const orbit = this.engine.controls;
-    if (orbit) orbit.enabled = false;
-
-    const onMove = (ev) => {
-      const r2 = renderer.domElement.getBoundingClientRect();
-      const n2 = new THREE.Vector2(((ev.clientX-r2.left)/r2.width)*2-1, -((ev.clientY-r2.top)/r2.height)*2+1);
-      const ray2 = new THREE.Raycaster().setFromCamera(n2, camera);
-      const cw = new THREE.Vector3(center.x+corner.cx*origSize.x/2, center.y+corner.cy*origSize.y/2, center.z+corner.cz*origSize.z/2);
-      const camDir = new THREE.Vector3(); camera.getWorldDirection(camDir);
-      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir, cw);
-      const tgt = new THREE.Vector3(); ray2.ray.intersectPlane(plane, tgt);
-      if (!tgt) return;
-      const origDist = center.distanceTo(cw);
-      const newDist  = center.distanceTo(tgt);
-      if (origDist < 0.001) return;
-      const factor = Math.max(0.01, newDist / origDist);
-      obj.scale.copy(origScale).multiplyScalar(factor);
-      obj.updateMatrixWorld(true);
-      this._updateBox();
-      window.dispatchEvent(new CustomEvent('cyco-object-transform-changed', { detail: { object: obj } }));
-    };
-    const onUp = () => {
-      this._isDragging = false;
-      if (orbit) orbit.enabled = true;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp, { once: true });
-  }
-
-  // === Event handlers ===
 
   _onVpReady() { this._build(); }
   _onRendererChanged() { this._build(); }
@@ -374,7 +484,187 @@ export class TransformGizmo {
     this._tc.scaleSnap       = enabled ? value * 0.1 : null;
   }
 
-  // === Lifecycle ===
+  _onGizmoPointerDown(event) {
+    if (event.button !== 0 || this._mode !== 'universal' || !this._boxActive || !this._boxGroup) return;
+    const hit = this._pickGizmoHit(event);
+    if (!hit) return;
+
+    event.stopPropagation();
+    event.preventDefault();
+    window.__cyco = window.__cyco || {};
+    window.__cyco._suppressSelectionManagerClick = true;
+
+    if (this._targetObject && !this.selectionManager.selected.has(this._targetObject)) {
+      this.selectionManager.selectObject(this._targetObject);
+    }
+
+    this._clearHoveredHandle();
+    this._matrixBefore = this._targetObject?.matrix.clone();
+    this._interaction = {
+      pointerId: event.pointerId,
+      type: hit.object.userData.handleRole || 'translate',
+      axis: hit.object.userData.handleAxis || null,
+      axisDir: hit.object.userData.handleDir ? hit.object.userData.handleDir.clone() : null,
+      faceNormal: hit.face ? hit.face.normal.clone().applyNormalMatrix(new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)).normalize() : null,
+      startX: event.clientX,
+      startY: event.clientY,
+      startPosition: this._targetObject ? this._targetObject.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3(),
+      startQuaternion: this._targetObject ? this._targetObject.quaternion.clone() : new THREE.Quaternion(),
+      startScale: this._targetObject ? this._targetObject.scale.clone() : new THREE.Vector3(1, 1, 1),
+    };
+
+    if (event.target?.setPointerCapture) {
+      try { event.target.setPointerCapture(event.pointerId); } catch (_) {}
+    }
+
+    this._isDragging = true;
+  }
+
+  _onGizmoPointerMove(event) {
+    if (!this._boxActive || !this._boxGroup) return;
+    if (this._interaction && this._interaction.pointerId === event.pointerId) {
+      event.stopPropagation();
+      event.preventDefault();
+      this._updateInteraction(event);
+      return;
+    }
+
+    const hit = this._pickGizmoHit(event);
+    if (hit && hit.object.userData._isGizmo) {
+      if (hit.object.userData.handleRole !== 'translate') {
+        this._setHoveredHandle(hit.object);
+      }
+      if (this.engine.rendererManager?.renderer?.domElement) {
+        this.engine.rendererManager.renderer.domElement.style.cursor = hit.object.userData.handleRole === 'translate' ? 'move' : 'default';
+      }
+      return;
+    }
+
+    this._clearHoveredHandle();
+    if (this.engine.rendererManager?.renderer?.domElement) {
+      this.engine.rendererManager.renderer.domElement.style.cursor = 'default';
+    }
+  }
+
+  _onGizmoPointerUp(event) {
+    if (!this._interaction || this._interaction.pointerId !== event.pointerId) return;
+    event.stopPropagation();
+    event.preventDefault();
+    if (event.target?.releasePointerCapture) {
+      try { event.target.releasePointerCapture(event.pointerId); } catch (_) {}
+    }
+
+    const obj = this._targetObject;
+    const before = this._matrixBefore;
+    const after = obj ? obj.matrix.clone() : null;
+    if (obj && before && after && !before.equals(after)) {
+      window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+        detail: {
+          name: `${this._interaction.type.charAt(0).toUpperCase() + this._interaction.type.slice(1)} ${obj.name}`,
+          do()   { obj.matrix.copy(after); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+          undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+        }
+      }));
+    }
+
+    this._matrixBefore = null;
+    this._interaction = null;
+    this._isDragging = false;
+    if (window.__cyco) { try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {} }
+    this._updateBoxGizmo();
+    this._clearHoveredHandle();
+  }
+
+  _pickGizmoHit(event) {
+    const renderer = this.engine.rendererManager?.renderer;
+    const camera = this.engine.camera;
+    if (!renderer || !camera || !this._boxGroup) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    this._pointer.set(x, y);
+    this._raycaster.setFromCamera(this._pointer, camera);
+    const hits = this._raycaster.intersectObjects(this._boxGroup.children, true);
+    return hits.length > 0 ? hits[0] : null;
+  }
+
+  _setHoveredHandle(handle) {
+    if (this._hoveredHandle === handle) return;
+    this._clearHoveredHandle();
+    if (!handle || !handle.material) return;
+    this._hoveredHandle = handle;
+    handle.material.color.set(handle.userData.hoverColor || 0xffff00);
+  }
+
+  _clearHoveredHandle() {
+    if (!this._hoveredHandle) return;
+    const handle = this._hoveredHandle;
+    if (handle.material && handle.userData?.baseColor) {
+      handle.material.color.set(handle.userData.baseColor);
+    }
+    this._hoveredHandle = null;
+  }
+
+  _updateInteraction(event) {
+    if (!this._interaction || !this._targetObject) return;
+    const dx = event.clientX - this._interaction.startX;
+    const dy = event.clientY - this._interaction.startY;
+    if (this._interaction.type === 'translate') {
+      this._updateTranslate(dx, dy);
+    } else if (this._interaction.type === 'rotate') {
+      this._updateRotate(dx, dy);
+    } else if (this._interaction.type === 'scaleAxis') {
+      this._updateScaleAxis(dx, dy);
+    } else if (this._interaction.type === 'scaleUniform') {
+      this._updateScaleUniform(dx, dy);
+    }
+    this._updateBoxGizmo();
+  }
+
+  _updateTranslate(dx, dy) {
+    const camera = this.engine.camera;
+    if (!camera) return;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward).normalize();
+    const up = new THREE.Vector3().copy(camera.up).normalize();
+    const right = new THREE.Vector3().crossVectors(forward, up).normalize();
+    const move = new THREE.Vector3();
+    const faceNormal = this._interaction.faceNormal;
+    if (faceNormal && Math.abs(faceNormal.y) > 0.75) {
+      move.addScaledVector(right, dx * 0.0025);
+      move.addScaledVector(up, -dy * 0.0025);
+    } else {
+      move.addScaledVector(right, dx * 0.0025);
+      move.addScaledVector(forward, dy * 0.0025);
+    }
+    const worldPosition = this._interaction.startPosition.clone().add(move);
+    if (this._targetObject.parent) {
+      this._targetObject.parent.worldToLocal(worldPosition);
+    }
+    this._targetObject.position.copy(worldPosition);
+  }
+
+  _updateRotate(dx, dy) {
+    const axis = this._interaction.axisDir || new THREE.Vector3(0, 1, 0);
+    const direction = (Math.abs(dx) > Math.abs(dy) ? dx : -dy) * 0.005;
+    const rotation = new THREE.Quaternion().setFromAxisAngle(axis, direction);
+    this._targetObject.quaternion.copy(this._interaction.startQuaternion).premultiply(rotation);
+  }
+
+  _updateScaleAxis(dx, dy) {
+    const axis = this._interaction.axis;
+    const factor = Math.max(0.05, 1 + (Math.abs(dx) > Math.abs(dy) ? -dx : dy) * 0.0025);
+    const scale = this._interaction.startScale.clone();
+    if (axis === 'X') scale.x *= factor;
+    if (axis === 'Y') scale.y *= factor;
+    if (axis === 'Z') scale.z *= factor;
+    this._targetObject.scale.copy(scale);
+  }
+
+  _updateScaleUniform(dx, dy) {
+    const factor = Math.max(0.05, 1 + (Math.abs(dx) > Math.abs(dy) ? -dx : dy) * 0.0025);
+    this._targetObject.scale.copy(this._interaction.startScale).multiplyScalar(factor);
+  }
 
   suspend() { this.detach(); }
   restore() { if (this._targetObject && this._mode !== 'select') this._attachTo(this._targetObject); }

@@ -128,12 +128,12 @@ const objectFactory         = new ObjectFactory(sceneManager, loadingManager);
 
 // Selection + interaction
 const selectionManager      = new SelectionManager(viewportEngine);
-const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager); // eslint-disable-line no-unused-vars
-const viewportStats         = new ViewportStats(viewportEngine); // eslint-disable-line no-unused-vars
-const viewportContextMenu   = new ViewportContextMenu(); // eslint-disable-line no-unused-vars
-const commandManager        = new CommandManager(); // eslint-disable-line no-unused-vars
-const renderModeManager     = new RenderModeManager(viewportEngine); // eslint-disable-line no-unused-vars
-const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
+const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager);
+const viewportStats         = new ViewportStats(viewportEngine);
+const viewportContextMenu   = new ViewportContextMenu();
+const commandManager        = new CommandManager();
+const renderModeManager     = new RenderModeManager(viewportEngine);
+const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine);
 
 // Post-processing + runtime
 const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
