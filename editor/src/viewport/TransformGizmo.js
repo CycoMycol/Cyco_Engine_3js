@@ -362,12 +362,43 @@ export class TransformGizmo {
     removeFrom(rGizmo,  c => c.name === 'E' || c.name === 'XYZE');
     removeFrom(rPicker, c => c.name === 'E' || c.name === 'XYZE');
 
+    // ── Reposition scale picker cones further out to avoid overlap ──────
+    // Translate picker cones are at ±0.3 on each axis. Move scale cones
+    // to ±0.45 so the two sets don't conflict during raycasting.
+    this._repositionPickerCones(sPicker, 0.5);
+
     // ── Enlarge picker hit areas for universal mode ──────────────────────
     // Tag all picker children so TransformControls.updateMatrixWorld
     // knows not to hide them when an axis faces the camera.
     this._tagPickers();
 
     this._enlargePickers();
+  }
+
+  /** Move the X/Y/Z axis-cone pickers to a further-out offset so they don't
+   *  overlap with the translate picker cones at the default 0.3 offset. */
+  _repositionPickerCones(pickerGroup, offset) {
+    if (!pickerGroup) return;
+    for (const child of pickerGroup.children) {
+      if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
+        // The original cones were baked at 0.3 offset along their axis.
+        // Compute the geometry centroid and translate further to 'offset'.
+        child.geometry.computeBoundingBox();
+        const bb = child.geometry.boundingBox;
+        const cx = (bb.max.x + bb.min.x) / 2;
+        const cy = (bb.max.y + bb.min.y) / 2;
+        const cz = (bb.max.z + bb.min.z) / 2;
+        const ax = Math.abs(cx), ay = Math.abs(cy), az = Math.abs(cz);
+        const push = offset - 0.3;
+        let dx = 0, dy = 0, dz = 0;
+        if (ax > ay && ax > az) dx = cx > 0 ? push : -push;
+        else if (ay > ax && ay > az) dy = cy > 0 ? push : -push;
+        else dz = cz > 0 ? push : -push;
+        child.geometry.translate(dx, dy, dz);
+        child.geometry.computeBoundingSphere();
+        child.geometry.computeBoundingBox();
+      }
+    }
   }
 
   /** Tag all picker children so TransformControls never hides them. */
@@ -419,7 +450,35 @@ export class TransformGizmo {
 
     _replacePickerGeos(this._tcTranslate, 'translate');
     _replacePickerGeos(this._tcScale,     'scale');
+    _enlargeRotatePickers(this._tcRotate);
   }
+
+  /** Enlarge rotate picker torus tubes so they're easier to hover. */
+  _enlargeRotatePickers = (tc) => {
+    const pickerGroup = tc._gizmo?.picker?.['rotate'];
+    if (!pickerGroup) return;
+    for (const child of pickerGroup.children) {
+      if (child.name === 'X' || child.name === 'Y' || child.name === 'Z') {
+        // Bake a thicker torus into the child's baked geometry.
+        // The original torus has tube=0.1 which is very thin; scale up.
+        const scaleAroundCenter = (geom, s) => {
+          geom.computeBoundingBox();
+          const c = new THREE.Vector3();
+          geom.boundingBox.getCenter(c);
+          const m = new THREE.Matrix4()
+            .makeTranslation(-c.x, -c.y, -c.z)
+            .multiply(new THREE.Matrix4().makeScale(s, s, s))
+            .multiply(new THREE.Matrix4().makeTranslation(c.x, c.y, c.z));
+          geom.applyMatrix4(m);
+          geom.computeBoundingSphere();
+        };
+        scaleAroundCenter(child.geometry, 2.0);
+      }
+      if (child.name === 'XYZE') {
+        scaleAroundCenter(child.geometry, 1.5);
+      }
+    }
+  };
 
   _setupUniversalIntercept(canvas) {
     if (!canvas || !this._tcRotate || !this._tcScale) return;
@@ -471,6 +530,31 @@ export class TransformGizmo {
       return [this._tcRotate, this._tcScale];
     };
 
+    /** Decide which TC owns the hover highlight in universal mode.
+     *  Picks the closest handle across all three TCs, clears the losers'
+     *  axes, and explictly sets the winner's axis so the highlight renders. */
+    this._arbitrateUniversalHover = () => {
+      if (!this._lastMouseNDC?.valid) return;
+      const winner = this._universalPickWinner(this._lastMouseNDC);
+      if (!winner) {
+        // No hit — clear ALL axes so nothing highlights
+        for (const tc of this._tcs) tc.axis = null;
+        return;
+      }
+      const losers = this._universalLoses(winner);
+      losers[0].axis = null;
+      losers[1].axis = null;
+
+      // CRITICAL: Set the winner's axis explicitly, because the winner TC's
+      // pointerHover may have missed the picker hit (e.g. thin rotate torus
+      // at a grazing angle, or its pointermove event fired before ours).
+      let tc;
+      if (winner.type === 'translate') tc = this._tcTranslate;
+      else if (winner.type === 'rotate') tc = this._tcRotate;
+      else if (winner.type === 'scale') tc = this._tcScale;
+      if (tc) tc.axis = winner.axis;
+    };
+
     // Store last mouse NDC so _onVpTick can arbitrate.
     this._lastMouseNDC = { x: 0, y: 0, valid: false };
 
@@ -481,6 +565,10 @@ export class TransformGizmo {
       this._lastMouseNDC.x =  (e.clientX - rect.left) / rect.width  *  2 - 1;
       this._lastMouseNDC.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       this._lastMouseNDC.valid = true;
+
+      // Run arbitration immediately on pointermove so highlights update
+      // at the source rather than relying on the next frame's tick.
+      this._arbitrateUniversalHover();
     });
 
     // pointerdown in capture phase: pick the winner and disable losers
@@ -949,15 +1037,10 @@ export class TransformGizmo {
     }
 
     // Universal-mode hover arbitration — runs every frame AFTER all TC
-    // handlers have updated their axes.  Clears the two losers' axes so
-    // only the winner highlights.  This is the authoritative pass.
-    if (this._mode === 'universal' && !this._isDragging && this._lastMouseNDC?.valid && this._universalPickWinner) {
-      const winner = this._universalPickWinner(this._lastMouseNDC);
-      if (winner) {
-        const losers = this._universalLoses(winner);
-        losers[0].axis = null;
-        losers[1].axis = null;
-      }
+    // handlers have updated their axes.  Uses the same logic as the
+    // pointermove handler to keep highlights consistent frame-to-frame.
+    if (this._mode === 'universal' && !this._isDragging && this._arbitrateUniversalHover) {
+      this._arbitrateUniversalHover();
     }
 
     if (this._physicsEdit && this._targetProxy) {
