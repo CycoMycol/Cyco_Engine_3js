@@ -12,7 +12,7 @@
  */
 
 import { BasePanel } from './BasePanel.js';
-import { loadPrefs, savePrefs, DEFAULT_PREFS, DEFAULT_KEYS } from '../ui/PreferencesWindow.js';
+import { loadPrefs, savePrefs, saveDefaultPrefs, DEFAULT_PREFS, DEFAULT_KEYS } from '../ui/PreferencesWindow.js';
 import { GridProperties } from '../properties/GridProperties.js';
 import { select } from '../properties/propUtils.js';
 
@@ -89,7 +89,10 @@ export class PreferencesPanel extends BasePanel {
 
     // ── Footer ────────────────────────────────────────────────────────────────
     const footer = document.createElement('div');
-    footer.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border-color,#333);flex-shrink:0;';
+    footer.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--border-color,#333);flex-shrink:0;';
+
+    const leftGroup = document.createElement('div');
+    leftGroup.style.cssText = 'display:flex;gap:8px;';
 
     const resetBtn = document.createElement('button');
     resetBtn.textContent = 'Reset All';
@@ -102,15 +105,31 @@ export class PreferencesPanel extends BasePanel {
       }
     });
 
+    const makeDefaultBtn = document.createElement('button');
+    makeDefaultBtn.textContent = 'Make Default';
+    makeDefaultBtn.style.cssText = 'background:none;border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    makeDefaultBtn.addEventListener('click', () => {
+      savePrefs(this._prefs);
+      saveDefaultPrefs(this._prefs);
+      alert('Current preferences have been saved as your default settings.');
+    });
+
+    leftGroup.appendChild(resetBtn);
+    leftGroup.appendChild(makeDefaultBtn);
+
+    const rightGroup = document.createElement('div');
+    rightGroup.style.cssText = 'display:flex;gap:8px;';
+
     const doneBtn = document.createElement('button');
-    doneBtn.textContent = 'Done';
+    doneBtn.textContent = 'Do It';
     doneBtn.style.cssText = 'background:var(--accent-color,#4488ff);border:none;color:#fff;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
     doneBtn.addEventListener('click', () => {
       try { this._panelApi.close(); } catch (_) {}
     });
 
-    footer.appendChild(resetBtn);
-    footer.appendChild(doneBtn);
+    rightGroup.appendChild(doneBtn);
+    footer.appendChild(leftGroup);
+    footer.appendChild(rightGroup);
     root.appendChild(footer);
 
     // Show first tab

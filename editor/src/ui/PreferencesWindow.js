@@ -10,6 +10,7 @@
 import { BasePanel } from '../panels/BasePanel.js';
 
 const PREFS_KEY = 'cyco-prefs';
+const PREFS_DEFAULT_KEY = 'cyco-prefs-defaults';
 
 // Default keybindings
 export const DEFAULT_KEYS = {
@@ -48,6 +49,9 @@ export const DEFAULT_PREFS = {
     shadowMapType: 'PCFSoftShadowMap',
     pixelRatio: '1',
   },
+  viewport: {
+    backgroundColor: '#1a1a1a',
+  },
   general: {
     autoSaveInterval: 'off',
     showWelcomeScreen: true,
@@ -56,19 +60,35 @@ export const DEFAULT_PREFS = {
 
 // â”€â”€ Prefs data access â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-export function loadPrefs() {
+export function loadDefaultPrefs() {
   try {
-    const raw = localStorage.getItem(PREFS_KEY);
-    if (!raw) return JSON.parse(JSON.stringify(DEFAULT_PREFS));
-    return deepMerge(JSON.parse(JSON.stringify(DEFAULT_PREFS)), JSON.parse(raw));
+    const raw = localStorage.getItem(PREFS_DEFAULT_KEY);
+    const base = JSON.parse(JSON.stringify(DEFAULT_PREFS));
+    if (!raw) return base;
+    return deepMerge(base, JSON.parse(raw));
   } catch {
     return JSON.parse(JSON.stringify(DEFAULT_PREFS));
+  }
+}
+
+export function loadPrefs() {
+  try {
+    const defaultPrefs = loadDefaultPrefs();
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return defaultPrefs;
+    return deepMerge(defaultPrefs, JSON.parse(raw));
+  } catch {
+    return loadDefaultPrefs();
   }
 }
 
 export function savePrefs(prefs) {
   localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
   window.dispatchEvent(new CustomEvent('cyco-preferences-change', { detail: { prefs } }));
+}
+
+export function saveDefaultPrefs(prefs) {
+  localStorage.setItem(PREFS_DEFAULT_KEY, JSON.stringify(prefs));
 }
 
 function deepMerge(target, source) {

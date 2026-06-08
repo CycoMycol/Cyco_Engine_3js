@@ -29,6 +29,9 @@ import { VolumetricClouds } from './VolumetricClouds.js';
 import { GradientSky }     from './GradientSky.js';
 import { PhysicalSkyTSL }  from './PhysicalSkyTSL.js';
 import { ContactShadows }  from './ContactShadows.js';
+import { loadPrefs }        from '../ui/PreferencesWindow.js';
+
+const BACKGROUND_COLOR_KEY = 'cyco-viewport-background-color';
 
 /** Sentinel value: no active focus animation. */
 const NO_FOCUS = null;
@@ -38,6 +41,19 @@ function _shortFilename(url) {
   if (!url) return '…';
   try { return decodeURIComponent(url.split('/').pop().split('?')[0]) || url; }
   catch { return url; }
+}
+
+function _isValidHexColor(value) {
+  return typeof value === 'string' && /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value);
+}
+
+function _loadDefaultBackgroundColor() {
+  const raw = localStorage.getItem(BACKGROUND_COLOR_KEY);
+  if (_isValidHexColor(raw)) return raw;
+  const prefs = loadPrefs();
+  const fallback = prefs?.viewport?.backgroundColor;
+  if (_isValidHexColor(fallback)) return fallback;
+  return '#1a1a1a';
 }
 
 export class ViewportEngine {
@@ -627,7 +643,9 @@ export class ViewportEngine {
     }
 
     if (type === 'solid') {
-      this.scene.background = new THREE.Color(color ?? '#1a1a1a');
+      const solidColor = color ?? '#1a1a1a';
+      this.scene.background = new THREE.Color(solidColor);
+      try { localStorage.setItem(BACKGROUND_COLOR_KEY, solidColor); } catch (_) {}
     } else if (type === 'gradient') {
       this._bgGradTex = this._makeGradientTexture(colorStops);
       this.scene.background = this._bgGradTex;
@@ -990,13 +1008,13 @@ export class ViewportEngine {
 
   _buildScene(w, h) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x1a1a1a);
+    this.scene.background = new THREE.Color(_loadDefaultBackgroundColor());
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
 
-    // Default camera — Unreal Engine conventions: 1 unit = 1 cm
-    // FOV 90°, near 10 cm, far 1 000 000 cm (10 km) for editor visibility
+    // Default camera — front-facing by default with Unreal Engine conventions:
+    // 1 unit = 1 cm, FOV 90°, near 10 cm, far 1 000 000 cm (10 km).
     this.camera = new THREE.PerspectiveCamera(90, w / h, 10, 1000000);
-    this.camera.position.set(500, 300, 500);
+    this.camera.position.set(0, 300, 500);
     this.camera.lookAt(0, 0, 0);
 
     // Non-hierarchy lights (not shown in scene tree)

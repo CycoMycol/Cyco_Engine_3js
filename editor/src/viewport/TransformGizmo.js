@@ -111,12 +111,17 @@ export class TransformGizmo {
     this._tc = tc;
     this._controls = tc;
     const gizmo = tc.getHelper();
+    gizmo.traverse((child) => {
+      child.userData._isGizmo = true;
+    });
+    gizmo.userData._isGizmo = true;
     scene.add(gizmo);
     this._gizmo = gizmo;
 
     // Build box tool (hidden by default)
     this._boxGroup = new THREE.Group();
     this._boxGroup.name = '__cyco_box_gizmo__';
+    this._boxGroup.userData._isGizmo = true;
     this._boxGroup.visible = false;
     scene.add(this._boxGroup);
     this._buildBoxHandles();
@@ -215,6 +220,8 @@ export class TransformGizmo {
       m.position.set(cx,cy,cz);
       m.scale.setScalar(0.08);
       m.userData._boxCorner = {cx,cy,cz};
+      m.userData._isGizmo = true;
+      m.raycast = () => {};
       g.add(m);
       this._boxPickers.push(m);
     }
