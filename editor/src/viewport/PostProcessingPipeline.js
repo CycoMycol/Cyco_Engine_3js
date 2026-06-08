@@ -689,8 +689,11 @@ export class PostProcessingPipeline {
       scene.removeEventListener('childadded', this._onSceneChildAdded); // guard against double-add
       scene.addEventListener('childadded', this._onSceneChildAdded);
 
-      this._tslPipelineActive = true;
-      this.engine.setPipelineActive(true);
+      // WebGPU TSL pipeline currently produces blank frames for scene
+      // backgrounds and sky/HDR modes in this environment. Fall back to
+      // direct renderer.render() until the native pipeline issue is fixed.
+      this._tslPipelineActive = false;
+      this.engine.setPipelineActive(false);
 
     } catch (err) {
       console.error('[PostProcessingPipeline] WebGPU TSL pipeline build failed:', err);

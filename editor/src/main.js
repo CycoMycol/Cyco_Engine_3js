@@ -46,6 +46,7 @@ import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
 import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
 import { loadPrefs }                from './ui/PreferencesWindow.js';
 
+const prefs = loadPrefs();
 const app = document.getElementById('app');
 
 // ── 1. Dock container ──────────────────────────────────────────────────────────
@@ -127,42 +128,74 @@ const objectFactory         = new ObjectFactory(sceneManager, loadingManager);
 
 // Selection + interaction
 const selectionManager      = new SelectionManager(viewportEngine);
-const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager);
-
-const prefs                 = loadPrefs();
-window.dispatchEvent(new CustomEvent('cyco-gizmo-size', {
-  detail: {
-    size: prefs.gizmo.size,
-    distance: prefs.gizmo.distance ?? 1,
-    useSeparateSizes: !!prefs.gizmo.useSeparateGizmoSizes,
-    translateSize: prefs.gizmo.translateSize,
-    rotateSize: prefs.gizmo.rotateSize,
-    scaleSize: prefs.gizmo.scaleSize,
-    translateDistance: prefs.gizmo.translateDistance ?? prefs.gizmo.distance ?? 1,
-    rotateDistance: prefs.gizmo.rotateDistance ?? prefs.gizmo.distance ?? 1,
-    scaleDistance: prefs.gizmo.scaleDistance ?? prefs.gizmo.distance ?? 1,
-  }
-}));
-
-// Rendering modes + post-processing
-const renderModeManager     = new RenderModeManager(viewportEngine);   // eslint-disable-line no-unused-vars
-const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
-// Expose postPipeline on viewportEngine so PostProcessingProperties can find it
-viewportEngine.postProcessing = postPipeline;
-
-// Undo/redo + play mode
-const commandManager        = new CommandManager();
-const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, selectionManager, transformGizmo); // eslint-disable-line no-unused-vars
-const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-disable-line no-unused-vars
-
-// Input + stats
-const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
+const transformGizmo        = new TransformGizmo(viewportEngine, selectionManager); // eslint-disable-line no-unused-vars
 const viewportStats         = new ViewportStats(viewportEngine); // eslint-disable-line no-unused-vars
 const viewportContextMenu   = new ViewportContextMenu(); // eslint-disable-line no-unused-vars
+const commandManager        = new CommandManager(); // eslint-disable-line no-unused-vars
+const renderModeManager     = new RenderModeManager(viewportEngine); // eslint-disable-line no-unused-vars
+const inputManager          = new InputManager(commandManager, selectionManager, viewportEngine); // eslint-disable-line no-unused-vars
+
+// Post-processing + runtime
+const postPipeline          = new PostProcessingPipeline(viewportEngine); // eslint-disable-line no-unused-vars
+const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, selectionManager, transformGizmo); // eslint-disable-line no-unused-vars
+const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-disable-line no-unused-vars
 
 // ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
 // event dispatched by CenterPanel when its canvas div is inserted into the DOM.
 // No manual init() call needed here.
+// Fallback: if the event was missed (e.g. fired before handler was registered),
+// or init ran on a tiny pre-layout container, retry after dockview settles.
+setTimeout(() => {
+  const vp = window.__cyco?.viewportEngine;
+  if (!vp) return;
+  const container = document.getElementById('cyco-viewport-canvas');
+  if (!container || !container.isConnected) return;
+
+  // Case A: init never ran
+  if (!vp.rendererManager?.renderer && !vp._initPending) {
+    console.info('[main] Viewport fallback init — event was missed on cold load');
+    vp._onContainerReady({ detail: { container } });
+    return;
+  }
+
+  // Case B: init ran but canvas is orphaned or container size is larger than
+  // what the renderer was created with (dockview layout restored after init).
+  const canvas = vp.rendererManager?.renderer?.domElement;
+  const canvasInDom = canvas && container.contains(canvas);
+  const rect = container.getBoundingClientRect();
+  const containerW = Math.floor(rect.width);
+  const containerH = Math.floor(rect.height);
+
+  if (!canvasInDom && containerW > 4 && containerH > 4) {
+    console.info('[main] Viewport fallback — canvas orphaned, re-attaching to settled container');
+    vp._onContainerReady({ detail: { container } });
+  }
+
+  // Case C: renderer exists but canvas is not properly attached or has zero dimensions
+  // This handles refresh scenarios where the canvas is created but not properly reattached
+  if (vp.rendererManager?.renderer && (!canvas || !canvas.isConnected || containerW <= 1 || containerH <= 1)) {
+    console.info('[main] Viewport fallback — renderer exists but canvas is invalid, reinitializing');
+    vp._onContainerReady({ detail: { container } });
+  }
+  
+  // Case D: renderer exists but there's no canvas attached (common on refresh)
+  // This specifically handles the case where WebGPU fails to initialize properly
+  if (vp.rendererManager?.renderer && !vp.rendererManager.renderer.domElement) {
+    console.info('[main] Viewport fallback — renderer exists but no domElement, reinitializing');
+    vp._onContainerReady({ detail: { container } });
+    return;
+  }
+  
+  // Case E: renderer exists but canvas is not properly attached to container
+  // This handles refresh scenarios where canvas is created but not attached
+  if (vp.rendererManager?.renderer?.domElement && 
+      vp.rendererManager.renderer.domElement && 
+      !container.contains(vp.rendererManager.renderer.domElement)) {
+    console.info('[main] Viewport fallback — renderer exists but canvas not attached, reattaching');
+    vp._onContainerReady({ detail: { container } });
+    return;
+  }
+}, 800);
 
 // Export modules to window for debugging
 if (typeof window !== 'undefined') {

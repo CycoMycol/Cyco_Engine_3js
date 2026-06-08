@@ -313,13 +313,19 @@ export class SelectionManager {
   }
 
   _isNonSelectable(obj) {
+    if (!obj) return true;
     if (obj.userData?._isGizmo)  return true;
     if (obj.userData?._isHelper) return true;
+    if (obj.type === 'GridHelper' || obj.type === 'AxesHelper') return true;
+    if (obj.name === 'Main Grid') return true;
     if (this.nonSelectableSet.has(obj)) return true;
     // Also walk up the parent chain — if any ancestor is non-selectable, skip
     let p = obj.parent;
     while (p) {
       if (this.nonSelectableSet.has(p)) return true;
+      if (p.userData?._isHelper) return true;
+      if (p.type === 'GridHelper' || p.type === 'AxesHelper') return true;
+      if (p.name === 'Main Grid') return true;
       p = p.parent;
     }
     return false;

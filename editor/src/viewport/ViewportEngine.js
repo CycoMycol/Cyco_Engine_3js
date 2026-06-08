@@ -153,13 +153,29 @@ export class ViewportEngine {
     try {
       await this.rendererManager.init(container, w, h);
     } catch (err) {
-      console.error('[ViewportEngine] Failed to create WebGL renderer after all retries:', err.message);
+      console.error('[ViewportEngine] Failed to create renderer after all retries:', err.message);
       // Show user-visible error in the container
       const msg = document.createElement('div');
       msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e07228;font-size:14px;padding:20px;text-align:center;';
-      msg.textContent = 'Unable to initialise WebGL. Please reload the page.';
+      msg.textContent = 'Unable to initialise renderer. Please reload the page.';
       container.appendChild(msg);
       return;
+    }
+    
+    // Ensure the renderer was properly initialized with a DOM element
+    if (!this.rendererManager.renderer) {
+      console.error('[ViewportEngine] Renderer was not properly initialized');
+      const msg = document.createElement('div');
+      msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e07228;font-size:14px;padding:20px;text-align:center;';
+      msg.textContent = 'Renderer initialization failed. Please reload the page.';
+      container.appendChild(msg);
+      return;
+    }
+    
+    // Ensure canvas is attached to container (handle refresh scenarios)
+    if (this.rendererManager.renderer.domElement && 
+        !container.contains(this.rendererManager.renderer.domElement)) {
+      container.appendChild(this.rendererManager.renderer.domElement);
     }
 
     // Build scene + camera
@@ -875,6 +891,7 @@ export class ViewportEngine {
       const gc = new THREE.Color(d.gridColor   ?? '#444444');
       const cc = new THREE.Color(d.centerColor ?? '#888888');
       const g  = new THREE.GridHelper(d.size ?? 20, d.divisions ?? 20, cc, gc);
+      g.name = 'Main Grid';
       g.raycast        = () => {};
       g.userData._isHelper = true;
       g.castShadow     = false;
@@ -973,7 +990,7 @@ export class ViewportEngine {
 
   _buildScene(w, h) {
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x5d564e);
+    this.scene.background = new THREE.Color(0x1a1a1a);
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
 
     // Default camera — Unreal Engine conventions: 1 unit = 1 cm
@@ -1012,6 +1029,7 @@ export class ViewportEngine {
 
   _makeGrid(size, divisions) {
     const g = new THREE.GridHelper(size, divisions, 0x888888, 0x555555);
+    g.name = 'Main Grid';
     g.raycast = () => {}; // non-selectable
     g.userData._isHelper = true;
     g.castShadow    = false;
@@ -1091,13 +1109,13 @@ export class ViewportEngine {
       material.colorNode   = vec4(colFinal, alpha);
 
       const plane = new THREE.Mesh(new THREE.PlaneGeometry(10000, 10000), material);
+      plane.name               = 'Main Grid';
       plane.rotation.x         = -Math.PI / 2;
       plane.renderOrder        = -1;
       plane.raycast            = () => {};
       plane.userData._isHelper = true;
       plane.castShadow         = false;
       plane.receiveShadow      = false;
-      plane.name               = '__cyco_infinite_grid';
       plane._uniforms          = { uCellSize, uLineW, uLineColor, uXColor, uZColor, uOpacity };
       return plane;
 
@@ -1158,13 +1176,13 @@ export class ViewportEngine {
 
       const planeSize = infinite ? 10000 : 400;
       const plane = new THREE.Mesh(new THREE.PlaneGeometry(planeSize, planeSize), material);
+      plane.name               = 'Main Grid';
       plane.rotation.x         = -Math.PI / 2;
       plane.renderOrder        = -1;
       plane.raycast            = () => {};
       plane.userData._isHelper = true;
       plane.castShadow         = false;
       plane.receiveShadow      = false;
-      plane.name               = '__cyco_checker_grid';
       plane._uniforms          = { uCellSize, uColor1, uColor2, uOpacity };
       return plane;
 
@@ -1345,6 +1363,16 @@ export class ViewportEngine {
       pointerEvents: 'none',
       userSelect: 'none',
     });
+
+    // Auto-dismiss: if no loading event fires within 2s, hide the overlay.
+    // This prevents a stuck "Loading…" screen when the LoadingManager
+    // dispatches onStart but never fires onLoad (e.g. during IBL setup).
+    setTimeout(() => {
+      if (ov.style.opacity !== '0') {
+        ov.style.opacity = '0';
+        ov.style.pointerEvents = 'none';
+      }
+    }, 2000);
 
     // Spinner ring
     const spinner = document.createElement('div');
@@ -1688,11 +1716,11 @@ export class ViewportEngine {
     // Default render — PostProcessingPipeline overrides this via cyco-vp-tick
     // by calling composer.render() instead. If no pipeline is active, render directly.
     if (!this._pipelineActive) {
-      console.debug(
+      if (_D) console.debug(
         `[CYCO:ANOMALY] Frame #${this._dbgFrame} — _pipelineActive=false, rendering direct to canvas (fallback)!`
       );
       renderer.render(this.scene, this.camera);
-      window._cycoDbgCanvasWrites++;
+      if (_D) window._cycoDbgCanvasWrites++;
     }
 
     // ViewHelper renders on top of main frame.
@@ -1723,22 +1751,22 @@ export class ViewportEngine {
         renderer.autoClear = false;
         this.viewHelper.render(renderer);
         renderer.autoClear = true;
-        window._cycoDbgCanvasWrites++;
+        if (_D) window._cycoDbgCanvasWrites++;
       }
     }
 
-    // Anomaly check: 1 write in WebGPU mode (overlay skips main canvas), 2 in WebGL
-    const _totalWrites   = window._cycoDbgCanvasWrites;
-    const _expectedWrites = renderer?.isWebGPURenderer ? 1 : 2;
-    if (_totalWrites > _expectedWrites || _totalWrites === 0) {
-      console.warn(
-        `[CYCO:ANOMALY] Frame #${this._dbgFrame} — canvas writes=${_totalWrites}` +
-        ` (expected ${_expectedWrites})  _pipelineActive=${this._pipelineActive}` +
-        `  hasViewHelper=${!!this.viewHelper}`
-      );
-    }
-
     if (_D) {
+      // Anomaly check: 1 write in WebGPU mode (overlay skips main canvas), 2 in WebGL
+      const _totalWrites   = window._cycoDbgCanvasWrites;
+      const _expectedWrites = renderer?.isWebGPURenderer ? 1 : 2;
+      if (_totalWrites > _expectedWrites || _totalWrites === 0) {
+        console.warn(
+          `[CYCO:ANOMALY] Frame #${this._dbgFrame} — canvas writes=${_totalWrites}` +
+          ` (expected ${_expectedWrites})  _pipelineActive=${this._pipelineActive}` +
+          `  hasViewHelper=${!!this.viewHelper}`
+        );
+      }
+
       const color = _totalWrites !== 2 ? 'color:#f44;font-weight:bold' : 'color:#4f4';
       const label = _totalWrites === 0 ? '⚠ NO canvas writes — pipeline dead?' :
                     (_totalWrites !== 2 ? `⚠ ${_totalWrites} writes — ANOMALY!` : '✓ OK');
@@ -1971,27 +1999,28 @@ export class ViewportEngine {
     const lbl = container.querySelector('#cyco-viewport-placeholder-label');
     if (lbl) lbl.remove();
 
-    if (this._container && this.rendererManager?.renderer) {
-      // Layout was restored — just move the existing canvas to the new container.
-      // Full re-init would be wasteful and would reset camera/scene state.
+    if (this.rendererManager?.renderer) {
+      // Layout was restored or container was swapped — move the existing canvas
+      // to the new container. Full re-init would be wasteful and reset state.
       const canvas = this.rendererManager.renderer.domElement;
       if (canvas) container.appendChild(canvas);
 
       // Repoint resize observer
       if (this._resizeObserver) {
-        this._resizeObserver.unobserve(this._container);
+        if (this._container) this._resizeObserver.unobserve(this._container);
         this._resizeObserver.observe(container);
       }
       this._container = container;
-      // Keep RendererManager's container in sync so renderer switches read the correct size
       this.rendererManager.container = container;
 
       // Rebuild loading overlay in the new container
       this._buildLoadingOverlay(container);
 
-      // Use _handleResize so cyco-vp-resize fires and PostProcessingPipeline rebuilds
+      // Sync renderer to settled container size
       const { width, height } = container.getBoundingClientRect();
-      this._handleResize(Math.max(1, Math.floor(width)), Math.max(1, Math.floor(height)));
+      const w = Math.max(1, Math.floor(width));
+      const h = Math.max(1, Math.floor(height));
+      if (w > 1 && h > 1) this._handleResize(w, h);
       return;
     }
 

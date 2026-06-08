@@ -44,7 +44,7 @@ export const DEFAULT_PREFS = {
     axisColorZ: '#4444ff',
   },
   renderer: {
-    defaultType: 'webgl',
+    defaultType: 'webgpu',
     shadowMapType: 'PCFSoftShadowMap',
     pixelRatio: '1',
   },

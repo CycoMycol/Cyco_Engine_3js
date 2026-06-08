@@ -19,7 +19,7 @@ import { CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
 export class RendererManager {
   constructor() {
     /** @type {'webgl'|'webgpu'|'svg'|'css3d'|'pathtracer'} */
-    this.activeType = 'webgl';
+    this.activeType = 'webgpu';
     /** @type {THREE.WebGLRenderer|null} */
     this.renderer = null;
     /** @type {HTMLElement|null} */
@@ -49,18 +49,44 @@ export class RendererManager {
   async init(container, width, height) {
     this.container = container;
 
+    // Check preferences for default renderer type
+    let prefType = 'webgpu';
+    try {
+      const raw = localStorage.getItem('cyco-prefs');
+      if (raw) {
+        const prefs = JSON.parse(raw);
+        if (prefs?.renderer?.defaultType) prefType = prefs.renderer.defaultType;
+      }
+    } catch (_) {}
+    this.activeType = prefType;
+
     const MAX_ATTEMPTS = 3;
     const RETRY_DELAY_MS = 400;
     let lastErr;
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    if (prefType === 'webgpu') {
       try {
-        this.renderer = this._createWebGL(width, height);
-        break; // success
+        this.renderer = await this._createWebGPU(width, height);
       } catch (err) {
-        lastErr = err;
-        if (attempt < MAX_ATTEMPTS) {
-          console.warn(`[RendererManager] WebGL context creation failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${RETRY_DELAY_MS}ms…`, err.message);
-          await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+        console.warn('[RendererManager] WebGPU init failed, falling back to WebGL:', err.message);
+        this.activeType = 'webgl';
+        try {
+          this.renderer = this._createWebGL(width, height);
+        } catch (webglErr) {
+          console.error('[RendererManager] WebGL fallback also failed:', webglErr.message);
+          throw webglErr; // propagate the WebGL error if both fail
+        }
+      }
+    } else {
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        try {
+          this.renderer = this._createWebGL(width, height);
+          break; // success
+        } catch (err) {
+          lastErr = err;
+          if (attempt < MAX_ATTEMPTS) {
+            console.warn(`[RendererManager] WebGL context creation failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${RETRY_DELAY_MS}ms…`, err.message);
+            await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
+          }
         }
       }
     }
@@ -68,7 +94,11 @@ export class RendererManager {
       throw lastErr; // all attempts exhausted — propagate for caller to handle
     }
 
-    container.appendChild(this.renderer.domElement);
+    // Ensure the canvas is properly attached to the container
+    if (this.renderer.domElement && !container.contains(this.renderer.domElement)) {
+      container.appendChild(this.renderer.domElement);
+    }
+    
     this._dispatch('cyco-renderer-ready', { renderer: this.renderer, type: this.activeType });
     return this.renderer;
   }
@@ -106,7 +136,10 @@ export class RendererManager {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
-    await renderer.init();
+    await renderer.init().catch(err => {
+      console.error('[RendererManager] WebGPU init() failed:', err);
+      throw err;
+    });
     // WebGPURenderer defaults clearAlpha=0 (transparent). An opaque clear is
     // required so that renderer.clear() before the TSL composite blit doesn't
     // leave alpha=0 in the canvas — which would let the previous frame bleed
@@ -213,10 +246,11 @@ export class RendererManager {
 
   /** Restore the renderer type saved in localStorage (runs once after vp-ready). */
   _onVpReady() {
+    // No-op — init() now reads preferences directly.
+    // The cyco:rendererType key is only set by manual user switches.
     try {
       const saved = localStorage.getItem('cyco:rendererType');
-      if (!saved) return; // keep the default renderer unless user explicitly picked one
-        if (saved !== this.activeType) {
+      if (saved && saved !== this.activeType) {
         window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: saved } }));
       }
     } catch (_) {}
