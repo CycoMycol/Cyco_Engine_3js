@@ -263,7 +263,8 @@ export class TransformGizmo {
     const faceShaftGeometry = new THREE.CylinderGeometry(1, 1, 1, 16);
     const faceTipGeometry = new THREE.SphereGeometry(1, 16, 12);
     const edgeGeometry = new THREE.CylinderGeometry(0.3, 0.3, 1, 16);
-    const cornerGeometry = new THREE.BoxGeometry(1, 1, 1);
+    // Corner scale handles read better as spheres than cubes on the box gizmo.
+    const cornerGeometry = new THREE.SphereGeometry(1, 16, 12);
 
     const faceAxes = [
       { dir: [1, 0, 0], axis: 'X', color: 0xff3b30 },
