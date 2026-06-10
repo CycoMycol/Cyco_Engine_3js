@@ -26,6 +26,7 @@ export class PreferencesPanel extends BasePanel {
     this._gizmoTabBtns   = {};
     this._gridProps   = null;
     this._contentArea = null;
+    this._committed   = false;
   }
 
   _clonePrefs(value) {
@@ -33,6 +34,15 @@ export class PreferencesPanel extends BasePanel {
       try { return structuredClone(value); } catch (_) {}
     }
     return JSON.parse(JSON.stringify(value));
+  }
+
+  _applyPrefsChange({ makeDefault = false } = {}) {
+    window.dispatchEvent(new CustomEvent('cyco-preferences-preview', { detail: { prefs: this._prefs } }));
+    if (makeDefault) {
+      savePrefs(this._prefs);
+      saveDefaultPrefs(this._prefs);
+      this._committed = true;
+    }
   }
 
   _getDefaultPrefsForTab(tabId) {
@@ -61,11 +71,13 @@ export class PreferencesPanel extends BasePanel {
     if (defaults.gizmo) this._prefs.gizmo = defaults.gizmo;
     if (defaults.renderer) this._prefs.renderer = defaults.renderer;
     if (defaults.general) this._prefs.general = defaults.general;
+    this._applyPrefsChange();
     this._switchTab(this._activeTab);
   }
 
   _commitDraftPrefs({ makeDefault = false } = {}) {
     if (this._gridProps?.commit) this._gridProps.commit();
+    this._committed = true;
     savePrefs(this._prefs);
     if (makeDefault) saveDefaultPrefs(this._prefs);
   }
@@ -94,6 +106,7 @@ export class PreferencesPanel extends BasePanel {
 
   _buildContent() {
     this._prefs = loadPrefs();
+    this._committed = false;
 
     const root = document.createElement('div');
     root.style.cssText = 'height:100%;display:flex;flex-direction:column;overflow:hidden;';
@@ -103,7 +116,7 @@ export class PreferencesPanel extends BasePanel {
     body.style.cssText = 'display:flex;flex:1;overflow:hidden;';
 
     const sidebar = document.createElement('div');
-    sidebar.style.cssText = 'width:140px;flex-shrink:0;border-right:1px solid var(--border-color,#333);overflow-y:auto;padding:8px 0;';
+    sidebar.style.cssText = 'width:146px;flex-shrink:0;border-right:1px solid var(--ce-border,#3d3028);overflow-y:auto;padding:8px 0;background:var(--ce-bg-panel);';
 
     this._contentArea = document.createElement('div');
     this._contentArea.style.cssText = 'flex:1;overflow-y:auto;padding:16px;';
@@ -121,7 +134,7 @@ export class PreferencesPanel extends BasePanel {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
       btn.dataset.tabId = tab.id;
-      btn.style.cssText = 'width:100%;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);text-align:left;padding:8px 12px;margin:4px 8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-secondary,#aaa);';
+      btn.style.cssText = 'width:100%;background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);text-align:left;padding:8px 12px;margin:4px 8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--ce-accent-orange,#e07228);font-weight:600;letter-spacing:0;';
       btn.addEventListener('click', () => this._switchTab(tab.id));
       sidebar.appendChild(btn);
       this._tabBtns[tab.id] = btn;
@@ -133,19 +146,19 @@ export class PreferencesPanel extends BasePanel {
 
     // ── Footer ────────────────────────────────────────────────────────────────
     const footer = document.createElement('div');
-    footer.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--border-color,#333);flex-shrink:0;';
+    footer.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:8px;padding:10px 16px;border-top:1px solid var(--ce-border,#3d3028);flex-shrink:0;background:var(--ce-bg-panel);';
 
     const leftGroup = document.createElement('div');
     leftGroup.style.cssText = 'display:flex;gap:8px;';
 
     const resetBtn = document.createElement('button');
     resetBtn.textContent = 'Reset';
-    resetBtn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    resetBtn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;';
     resetBtn.addEventListener('click', () => this._resetActiveTabDraft());
 
     const makeDefaultBtn = document.createElement('button');
     makeDefaultBtn.textContent = 'Make Default';
-    makeDefaultBtn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    makeDefaultBtn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;';
     makeDefaultBtn.addEventListener('click', () => {
       this._commitDraftPrefs({ makeDefault: true });
       alert('Current preferences have been saved as your default settings.');
@@ -159,7 +172,7 @@ export class PreferencesPanel extends BasePanel {
 
     const doneBtn = document.createElement('button');
     doneBtn.textContent = 'Do It';
-    doneBtn.style.cssText = 'background:var(--accent-color,#4488ff);border:none;color:#fff;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    doneBtn.style.cssText = 'background:var(--ce-accent-orange,#e07228);border:1px solid rgba(224,114,40,0.55);color:#fff;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:700;';
     doneBtn.addEventListener('click', () => {
       this._commitDraftPrefs();
       try { this._panelApi.close(); } catch (_) {} 
@@ -182,9 +195,10 @@ export class PreferencesPanel extends BasePanel {
     this._activeTab = tabId;
     for (const [id, btn] of Object.entries(this._tabBtns)) {
       const active = id === tabId;
-      btn.style.color           = active ? '#fff' : 'var(--text-secondary,#aaa)';
-      btn.style.borderLeftColor = active ? 'rgba(224,120,64,0.55)' : 'transparent';
-      btn.style.background      = active ? 'rgba(224,120,64,0.18)' : 'var(--bg-secondary,#252525)';
+      btn.style.color           = 'var(--ce-accent-orange,#e07228)';
+      btn.style.opacity         = active ? '1' : '0.8';
+      btn.style.borderLeftColor = active ? 'rgba(224,114,40,0.55)' : 'transparent';
+      btn.style.background      = active ? 'rgba(224,114,40,0.14)' : 'var(--ce-bg-surface,#332a22)';
     }
     if (this._contentArea) this._contentArea.innerHTML = '';
     
@@ -215,7 +229,7 @@ export class PreferencesPanel extends BasePanel {
     for (const t of ['Action', 'Key Binding']) {
       const th = document.createElement('th');
       th.textContent = t;
-      th.style.cssText = 'text-align:left;padding:4px 8px;color:var(--text-secondary,#888);border-bottom:1px solid var(--border-color,#333);';
+      th.style.cssText = 'text-align:left;padding:4px 8px;color:var(--ce-accent-orange,#e07228);border-bottom:1px solid var(--ce-border,#3d3028);';
       headRow.appendChild(th);
     }
 
@@ -224,28 +238,29 @@ export class PreferencesPanel extends BasePanel {
 
     for (const [action, defaultKey] of Object.entries(DEFAULT_KEYS)) {
       const tr = tbody.insertRow();
-      tr.style.cssText = 'border-bottom:1px solid var(--border-color,#222);';
+      tr.style.cssText = 'border-bottom:1px solid var(--ce-border,#3d3028);';
 
       const tdAction = tr.insertCell();
       tdAction.textContent = action;
-      tdAction.style.cssText = 'padding:6px 8px;color:var(--text-primary,#e0e0e0);';
+      tdAction.style.cssText = 'padding:6px 8px;color:var(--ce-text-primary,#ede8e0);';
 
       const tdKey = tr.insertCell();
       tdKey.style.cssText = 'padding:4px 8px;';
 
       const keyBtn = document.createElement('button');
       keyBtn.textContent = kb[action] ?? defaultKey;
-      keyBtn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-primary,#e0e0e0);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:12px;min-width:80px;';
+      keyBtn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);border-radius:3px;padding:2px 10px;cursor:pointer;font-size:12px;min-width:80px;font-weight:600;';
       keyBtn.addEventListener('click', () => this._captureKey(keyBtn, action));
       tdKey.appendChild(keyBtn);
 
       const resetKeyBtn = document.createElement('button');
       resetKeyBtn.textContent = '↺';
       resetKeyBtn.title = 'Reset to default';
-      resetKeyBtn.style.cssText = 'background:none;border:none;color:var(--text-secondary,#666);cursor:pointer;margin-left:4px;font-size:13px;';
+      resetKeyBtn.style.cssText = 'background:none;border:none;color:var(--ce-accent-orange,#e07228);cursor:pointer;margin-left:4px;font-size:13px;';
       resetKeyBtn.addEventListener('click', () => {
         this._prefs.keybindings[action] = defaultKey;
         keyBtn.textContent = defaultKey;
+        this._applyPrefsChange();
       });
       tdKey.appendChild(resetKeyBtn);
     }
@@ -257,7 +272,7 @@ export class PreferencesPanel extends BasePanel {
   _captureKey(btn, action) {
     const original = btn.textContent;
     btn.textContent = 'Press a key…';
-    btn.style.borderColor = 'var(--accent-color,#4488ff)';
+    btn.style.borderColor = 'var(--ce-accent-orange,#e07228)';
     const onKey = (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -271,6 +286,7 @@ export class PreferencesPanel extends BasePanel {
       btn.textContent = binding || original;
       btn.style.borderColor = '';
       this._prefs.keybindings[action] = binding;
+      this._applyPrefsChange();
       document.removeEventListener('keydown', onKey, true);
     };
     document.addEventListener('keydown', onKey, true);
@@ -285,23 +301,23 @@ export class PreferencesPanel extends BasePanel {
     const hdr = document.createElement('div');
     hdr.innerHTML =
       '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Gizmo</h3>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);">Tune transform gizmos, the box tool, and the bounding-box glow.</div>';
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Tune transform gizmos, the box tool, and the outline.</div>';
     root.appendChild(hdr);
 
     const tabBar = document.createElement('div');
-    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:6px;background:var(--bg-secondary,#1f1f1f);border:1px solid var(--border-color,#333);border-radius:8px;overflow-x:auto;';
+    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
     this._gizmoTabBtns = {};
     const tabs = [
       { id: 'move', label: 'Move' },
       { id: 'scale', label: 'Scale' },
       { id: 'rotate', label: 'Rotate' },
       { id: 'box', label: 'Box Tool' },
-      { id: 'bounds', label: 'Bounding Box' },
+      { id: 'bounds', label: 'Outline' },
     ];
     for (const tab of tabs) {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
-      btn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;';
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
       btn.addEventListener('click', () => this._switchGizmoSubTab(tab.id));
       tabBar.appendChild(btn);
       this._gizmoTabBtns[tab.id] = btn;
@@ -320,9 +336,10 @@ export class PreferencesPanel extends BasePanel {
     this._gizmoActiveTab = tabId;
     for (const [id, btn] of Object.entries(this._gizmoTabBtns || {})) {
       const active = id === tabId;
-      btn.style.color = active ? '#fff' : 'var(--text-secondary,#aaa)';
-      btn.style.background = active ? 'rgba(224,120,64,0.18)' : 'var(--bg-secondary,#252525)';
-      btn.style.borderColor = active ? 'rgba(224,120,64,0.55)' : 'var(--border-color,#333)';
+      btn.style.color = 'var(--ce-accent-orange,#e07228)';
+      btn.style.opacity = active ? '1' : '0.82';
+      btn.style.background = active ? 'rgba(224,114,40,0.16)' : 'var(--ce-bg-surface,#332a22)';
+      btn.style.borderColor = active ? 'rgba(224,114,40,0.55)' : 'var(--ce-border,#3d3028)';
     }
     if (!this._gizmoContentArea) return;
     this._gizmoContentArea.innerHTML = '';
@@ -357,16 +374,17 @@ export class PreferencesPanel extends BasePanel {
     const render = () => {
       btn.textContent = checked ? `${leftLabel} · Locked` : `${rightLabel} · Unlocked`;
       btn.style.cssText = [
-        'background:var(--bg-secondary,#252525)',
-        'border:1px solid var(--border-color,#333)',
-        'color:var(--text-primary,#e0e0e0)',
+        'background:var(--ce-bg-surface,#332a22)',
+        'border:1px solid var(--ce-border,#3d3028)',
+        'color:var(--ce-accent-orange,#e07228)',
         'padding:6px 12px',
         'border-radius:999px',
         'cursor:pointer',
         'font-size:12px',
+        'font-weight:600',
       ].join(';');
-      btn.style.borderColor = checked ? 'rgba(68,136,255,0.45)' : 'var(--border-color,#333)';
-      btn.style.background = checked ? 'rgba(68,136,255,0.18)' : 'var(--bg-secondary,#252525)';
+      btn.style.borderColor = checked ? 'rgba(224,114,40,0.55)' : 'var(--ce-border,#3d3028)';
+      btn.style.background = checked ? 'rgba(224,114,40,0.16)' : 'var(--ce-bg-surface,#332a22)';
     };
     render();
     btn.addEventListener('click', () => {
@@ -384,8 +402,8 @@ export class PreferencesPanel extends BasePanel {
     return this._makeSettingRow(label, sw.el);
   }
 
-  _makeSliderRow(label, value, min, max, step, onChange, note = '') {
-    const sl = slider({ value, min, max, step, onChange });
+  _makeSliderRow(label, value, min, max, step, onChange, note = '', defaultValue) {
+    const sl = slider({ value, min, max, step, onChange, defaultValue });
     sl.el.style.width = '100%';
     return this._makeSettingRow(label, sl.el, note);
   }
@@ -431,6 +449,7 @@ export class PreferencesPanel extends BasePanel {
         this._prefs.gizmo.scaleAxisColorY = this._prefs.gizmo.axisColorY;
         this._prefs.gizmo.scaleAxisColorZ = this._prefs.gizmo.axisColorZ;
       }
+      this._applyPrefsChange();
       this._switchGizmoSubTab(this._gizmoActiveTab);
     }, 'Combined', 'Separate'));
 
@@ -443,7 +462,8 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}Size`] = v;
       }
-    }, 'Controls handle thickness and visual weight.'));
+      this._applyPrefsChange();
+    }, 'Controls handle thickness and visual weight.', shared ? DEFAULT_PREFS.gizmo.size : DEFAULT_PREFS.gizmo[`${modeKey}Size`]));
 
     root.appendChild(this._makeSliderRow('Distance', distanceValue, 0.05, 3, 0.01, (v) => {
       if (shared) {
@@ -454,7 +474,8 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}Distance`] = v;
       }
-    }, 'Moves the handles farther away from the object.'));
+      this._applyPrefsChange();
+    }, 'Moves the handles farther away from the object.', shared ? DEFAULT_PREFS.gizmo.distance : DEFAULT_PREFS.gizmo[`${modeKey}Distance`]));
 
     root.appendChild(this._makeColorRow('X Color', xColor, (c) => {
       if (shared) {
@@ -465,6 +486,7 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}AxisColorX`] = c;
       }
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Y Color', yColor, (c) => {
       if (shared) {
@@ -475,6 +497,7 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}AxisColorY`] = c;
       }
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Z Color', zColor, (c) => {
       if (shared) {
@@ -485,6 +508,7 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}AxisColorZ`] = c;
       }
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Active', activeColor, (c) => {
       if (shared) {
@@ -495,6 +519,7 @@ export class PreferencesPanel extends BasePanel {
       } else {
         this._prefs.gizmo[`${modeKey}ActiveColor`] = c;
       }
+      this._applyPrefsChange();
     }));
 
     return root;
@@ -507,33 +532,40 @@ export class PreferencesPanel extends BasePanel {
 
     const titleEl = document.createElement('div');
     titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Box Tool Gizmo</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);">Controls the custom box selection gizmo.</div>';
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Controls the custom selection box gizmo.</div>';
     root.appendChild(titleEl);
 
     root.appendChild(this._makeToggleRow('Combined / Separate', !prefs.useSeparate, (isCombined) => {
       this._prefs.gizmo.box.useSeparate = !isCombined;
+      this._applyPrefsChange();
       this._switchGizmoSubTab(this._gizmoActiveTab);
     }, 'Combined', 'Separate'));
 
     root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
       this._prefs.gizmo.box.thickness = v;
-    }, 'Changes the box handle thickness without moving the gizmo points.'));
+      this._applyPrefsChange();
+    }, 'Changes the box handle thickness without moving the gizmo points.', DEFAULT_PREFS.gizmo.box.thickness));
 
     root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
       this._prefs.gizmo.box.distance = v;
-    }, 'Pushes the box handles farther away from the object.'));
+      this._applyPrefsChange();
+    }, 'Pushes the box handles farther away from the object.', DEFAULT_PREFS.gizmo.box.distance));
 
     root.appendChild(this._makeColorRow('X Color', prefs.axisColorX, (c) => {
       this._prefs.gizmo.box.axisColorX = c;
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Y Color', prefs.axisColorY, (c) => {
       this._prefs.gizmo.box.axisColorY = c;
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Z Color', prefs.axisColorZ, (c) => {
       this._prefs.gizmo.box.axisColorZ = c;
+      this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Corner Color', prefs.cornerColor, (c) => {
       this._prefs.gizmo.box.cornerColor = c;
+      this._applyPrefsChange();
     }));
 
     return root;
@@ -545,25 +577,34 @@ export class PreferencesPanel extends BasePanel {
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
 
     const titleEl = document.createElement('div');
-    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Bounding Box</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);">Outline and purple glow shared by all gizmos.</div>';
+    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Outline</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Selection outline and glow shared by all gizmos.</div>';
     root.appendChild(titleEl);
 
     root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
       this._prefs.gizmo.bounds.thickness = v;
-    }, 'Controls the outline line thickness.'));
+      this._applyPrefsChange();
+    }, 'Controls the outline line thickness.', DEFAULT_PREFS.gizmo.bounds.thickness));
 
     root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
       this._prefs.gizmo.bounds.distance = v;
-    }, 'Moves the outline frame away from the object.'));
+      this._applyPrefsChange();
+    }, 'Moves the outline frame away from the object.', DEFAULT_PREFS.gizmo.bounds.distance));
+
+    root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
+      this._prefs.gizmo.bounds.outlineColor = c;
+      this._applyPrefsChange();
+    }));
 
     root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
       this._prefs.gizmo.bounds.glowColor = c;
+      this._applyPrefsChange();
     }));
 
     root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 2, 0.01, (v) => {
       this._prefs.gizmo.bounds.glowIntensity = v;
-    }, 'No post-processing required.'));
+      this._applyPrefsChange();
+    }, 'No post-processing required.', DEFAULT_PREFS.gizmo.bounds.glowIntensity));
 
     return root;
   }
@@ -589,7 +630,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['webgl','WebGL'],['webgpu','WebGPU'],['svg','SVG'],['css3d','CSS3D'],['pathtracer','Path Tracer']],
           value: this._prefs.renderer.defaultType,
-          onChange: (v) => { this._prefs.renderer.defaultType = v; },
+          onChange: (v) => { this._prefs.renderer.defaultType = v; this._applyPrefsChange(); },
         }),
       },
       {
@@ -597,7 +638,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['PCFSoftShadowMap','PCF Soft'],['PCFShadowMap','PCF'],['BasicShadowMap','Basic'],['VSMShadowMap','VSM']],
           value: this._prefs.renderer.shadowMapType,
-          onChange: (v) => { this._prefs.renderer.shadowMapType = v; },
+          onChange: (v) => { this._prefs.renderer.shadowMapType = v; this._applyPrefsChange(); },
         }),
       },
       {
@@ -605,7 +646,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['1','1×'],['device','Device ('+window.devicePixelRatio+'×)'],['2','2×']],
           value: this._prefs.renderer.pixelRatio,
-          onChange: (v) => { this._prefs.renderer.pixelRatio = v; },
+          onChange: (v) => { this._prefs.renderer.pixelRatio = v; this._applyPrefsChange(); },
         }),
       },
     ];
@@ -643,7 +684,7 @@ export class PreferencesPanel extends BasePanel {
     const asSelect = select({
       options: [['off','Off'],['1','1 minute'],['5','5 minutes'],['10','10 minutes']],
       value: this._prefs.general.autoSaveInterval,
-      onChange: (v) => { this._prefs.general.autoSaveInterval = v; },
+      onChange: (v) => { this._prefs.general.autoSaveInterval = v; this._applyPrefsChange(); },
     });
     asRow.appendChild(asLabel);
     asRow.appendChild(asSelect);
@@ -661,6 +702,7 @@ export class PreferencesPanel extends BasePanel {
     wsCb.style.cursor = 'pointer';
     wsCb.addEventListener('change', () => {
       this._prefs.general.showWelcomeScreen = wsCb.checked;
+      this._applyPrefsChange();
     });
     wsRow.appendChild(wsLabel);
     wsRow.appendChild(wsCb);
@@ -673,6 +715,9 @@ export class PreferencesPanel extends BasePanel {
 
   dispose() {
     if (this._gridProps) { this._gridProps.dispose?.(); this._gridProps = null; }
+    if (!this._committed) {
+      window.dispatchEvent(new CustomEvent('cyco-preferences-preview', { detail: { prefs: loadPrefs() } }));
+    }
     super.dispose?.();
   }
 }

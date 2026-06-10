@@ -35,6 +35,7 @@ import { SSAOPass }        from 'three/addons/postprocessing/SSAOPass.js';
 import { FXAAShader }      from 'three/addons/shaders/FXAAShader.js';
 import { LUTCubeLoader }   from 'three/addons/loaders/LUTCubeLoader.js';
 import { GodRays }         from './GodRays.js';
+import { loadPrefs }       from '../ui/PreferencesWindow.js';
 
 // ─── WebGL post-FX shader definitions ────────────────────────────────────────
 
@@ -140,6 +141,9 @@ export class PostProcessingPipeline {
 
     /** @type {OutlinePass|null} — hover highlight (white outline, thinner) */
     this.hoverOutlinePass = null;
+
+    this._selectedObjects = [];
+    this._prefs = loadPrefs();
 
     /** @type {UnrealBloomPass|null} */
     this.bloomPass = null;
@@ -298,6 +302,7 @@ export class PostProcessingPipeline {
     this._onSceneChildAdded    = this._onSceneChildAdded.bind(this);
     this._onVpTool             = this._onVpTool.bind(this);
     this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
+    this._onPrefsChanged       = this._onPrefsChanged.bind(this);
 
     window.addEventListener('cyco-vp-ready',                this._onVpReady);
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
@@ -310,6 +315,8 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-postfx-change',           this._onPostFxChange);
     window.addEventListener('cyco-vp-tool',                 this._onVpTool);
     window.addEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
+    window.addEventListener('cyco-preferences-change',      this._onPrefsChanged);
+    window.addEventListener('cyco-preferences-preview',     this._onPrefsChanged);
 
     // If the viewport was already initialized before this pipeline was
     // constructed, rebuild immediately so the composer is available.
@@ -353,11 +360,8 @@ export class PostProcessingPipeline {
     // 3. Outline pass — added AFTER bloom so the orange outline (0xff6600) is never
     //    treated as a bright emissive and bloomed into a yellow glow on shadows.
     this.outlinePass = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
-    this.outlinePass.edgeStrength = 3;
-    this.outlinePass.edgeGlow     = 0;
-    this.outlinePass.edgeThickness = 1;
-    this.outlinePass.visibleEdgeColor.set(0xff6600);
-    this.outlinePass.hiddenEdgeColor.set(0x333333);
+    this._applySelectionOutlinePrefs();
+    this.outlinePass.selectedObjects = this._selectedObjects;
     this._composer.addPass(this.outlinePass);
 
     // 3b. Hover outline pass — white outline when mousing over unselected objects
@@ -1278,10 +1282,35 @@ export class PostProcessingPipeline {
     this.godRays?.resize(w, h);
   }
 
+  _getSelectionObjects(detail = {}) {
+    if (Array.isArray(detail.objects)) return detail.objects.filter(Boolean);
+    if (detail.object) return [detail.object];
+    return [];
+  }
+
+  _applySelectionOutlinePrefs() {
+    if (!this.outlinePass) return;
+    const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    const thickness = Math.max(0.05, bounds.thickness ?? 1);
+    const glowIntensity = Math.max(0, bounds.glowIntensity ?? 0.35);
+    this.outlinePass.enabled = true;
+    this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
+    this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
+    this.outlinePass.edgeThickness = thickness;
+    this.outlinePass.visibleEdgeColor.set(bounds.outlineColor ?? '#e8eeff');
+    this.outlinePass.hiddenEdgeColor.set(0x000000);
+  }
+
+  _onPrefsChanged(event) {
+    this._prefs = event.detail?.prefs ?? loadPrefs();
+    this._applySelectionOutlinePrefs();
+  }
+
   _onSelectNode(event) {
+    this._selectedObjects = this._getSelectionObjects(event.detail);
     if (this.outlinePass) {
-      const { objects } = event.detail;
-      this.outlinePass.selectedObjects = objects ?? [];
+      this._applySelectionOutlinePrefs();
+      this.outlinePass.selectedObjects = this._selectedObjects;
     }
     // When selection changes with the TSL pipeline active, newly-visible gizmo
     // handles (TransformControls) may not have compiled shaders yet.  Schedule
@@ -1290,6 +1319,7 @@ export class PostProcessingPipeline {
   }
 
   _onDeselectAll() {
+    this._selectedObjects = [];
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
   }
 
@@ -1456,6 +1486,8 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-postfx-change',     this._onPostFxChange);
     window.removeEventListener('cyco-vp-tool',                 this._onVpTool);
     window.removeEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
+    window.removeEventListener('cyco-preferences-change',      this._onPrefsChanged);
+    window.removeEventListener('cyco-preferences-preview',     this._onPrefsChanged);
   }
 }
 

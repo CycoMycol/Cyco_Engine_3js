@@ -54,6 +54,7 @@ export class TransformGizmo {
     window.addEventListener('cyco-rvp-snap',              this._onSnap);
     window.addEventListener('cyco-hierarchy-remove',      this._onHierarchyRemove);
     window.addEventListener('cyco-preferences-change',    this._onPrefsChanged);
+    window.addEventListener('cyco-preferences-preview',   this._onPrefsChanged);
   }
 
   get controls() { return this._controls; }
@@ -118,6 +119,16 @@ export class TransformGizmo {
     const gizmo = tc.getHelper();
     gizmo.traverse((child) => {
       child.userData._isGizmo = true;
+      if (child.material) {
+        const materials = Array.isArray(child.material) ? child.material : [child.material];
+        for (const material of materials) {
+          material.transparent = false;
+          material.opacity = 1;
+          material.depthTest = false;
+          material.depthWrite = false;
+          material.needsUpdate = true;
+        }
+      }
     });
     gizmo.userData._isGizmo = true;
     scene.add(gizmo);
@@ -221,59 +232,57 @@ export class TransformGizmo {
   }
 
   _applyMode() {
-    if (!this._tc) return;
     const hasTarget = !!this._targetObject;
-    if (this._mode === 'universal') {
-      this._tc.detach();
-      this._gizmo.visible = false;
-      this._tc.enabled = false;
-      if (hasTarget) {
-        this._showBox();
-        this._setBoxModeVisibility('full');
-      } else {
-        this._hideBox();
-      }
-    } else if (this._mode === 'select') {
-      this._tc.detach();
-      this._gizmo.visible = false;
-      this._tc.enabled = false;
-      if (hasTarget) {
-        this._showBox();
-        this._setBoxModeVisibility('outline');
-      } else {
-        this._hideBox();
-      }
-    } else {
-      if (hasTarget) {
-        this._tc.setMode(this._mode);
-        this._gizmo.visible = true;
-        this._tc.enabled = true;
-      } else {
+    if (this._mode === 'universal' || this._mode === 'select') {
+      if (this._tc) {
         this._tc.detach();
-        this._gizmo.visible = false;
         this._tc.enabled = false;
       }
+      if (this._gizmo) this._gizmo.visible = false;
+      if (hasTarget) {
+        this._showBox();
+        this._setBoxModeVisibility(this._mode === 'select' ? 'outline' : 'full');
+      } else {
+        this._hideBox();
+      }
+      return;
+    }
+
+    if (!this._tc) return;
+    if (hasTarget) {
+      this._tc.setMode(this._mode);
+      this._gizmo.visible = true;
+      this._tc.enabled = true;
+      this._showBox();
+      this._setBoxModeVisibility('outline');
+    } else {
+      this._tc.detach();
+      this._gizmo.visible = false;
+      this._tc.enabled = false;
       this._hideBox();
     }
   }
 
   _attachTo(obj) {
     this._targetObject = obj;
-    if (this._mode === 'universal') {
+    if (this._mode === 'universal' || this._mode === 'select') {
       if (obj) {
         this._showBox();
         this._updateBoxGizmo();
       } else {
         this._hideBox();
       }
-    } else if (this._tc) {
+      this._applyMode();
+      return;
+    }
+    if (this._tc) {
       if (obj) {
         this._tc.attach(obj);
       } else {
         this._tc.detach();
       }
-      this._applyMode();
     }
+    this._applyMode();
   }
 
   _detachAll() {
@@ -285,25 +294,25 @@ export class TransformGizmo {
   detach() { this._detachAll(); }
 
   _updateBoxPalette() {
-    const prefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
+    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
+    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
     if (this._boxOutline?.material) {
-      this._boxOutline.material.color.set(prefs.outlineColor || prefs.glowColor || '#e8eeff');
-      this._boxOutline.material.opacity = Math.min(0.95, 0.5 + (prefs.glowIntensity ?? 0.35) * 0.45);
-      this._boxOutline.material.linewidth = Math.max(1, prefs.thickness ?? 1);
+      this._boxOutline.material.color.set(boundsPrefs.outlineColor ?? boxPrefs.outlineColor ?? '#e8eeff');
+      this._boxOutline.material.opacity = Math.min(1, 0.55 + (boundsPrefs.thickness ?? 1) * 0.08);
     }
     if (this._boxGlow?.material) {
-      this._boxGlow.material.color.set(prefs.glowColor || '#9b6cff');
-      this._boxGlow.material.opacity = Math.max(0.05, Math.min(0.6, (prefs.glowIntensity ?? 0.35) * 0.25));
+      this._boxGlow.material.color.set(boundsPrefs.glowColor ?? boxPrefs.glowColor ?? '#9b6cff');
+      this._boxGlow.material.opacity = Math.max(0, Math.min(0.65, (boundsPrefs.glowIntensity ?? 0.35) * 0.28));
     }
     for (const handle of this._boxHandles) {
       const role = handle.userData.handleRole;
       const axis = handle.userData.handleAxis;
       if (role === 'scaleAxis' || role === 'rotate') {
-        const c = axis === 'X' ? prefs.axisColorX : axis === 'Y' ? prefs.axisColorY : prefs.axisColorZ;
+        const c = axis === 'X' ? boxPrefs.axisColorX : axis === 'Y' ? boxPrefs.axisColorY : boxPrefs.axisColorZ;
         handle.userData.baseColor = c;
         handle.userData.hoverColor = 0xffff00;
       } else if (role === 'scaleUniform') {
-        handle.userData.baseColor = prefs.cornerColor || '#e8eeff';
+        handle.userData.baseColor = boxPrefs.cornerColor || '#e8eeff';
         handle.userData.hoverColor = 0xffff00;
       }
       if (handle.material && handle.userData.baseColor) handle.material.color.set(handle.userData.baseColor);
@@ -315,10 +324,74 @@ export class TransformGizmo {
     }
   }
 
+  _createBoxEdgeLayer(name, material, renderOrder, { pickable = false } = {}) {
+    const group = new THREE.Group();
+    group.name = name;
+    group.material = material;
+    group.renderOrder = renderOrder;
+    group.userData = { _isGizmo: true };
+    if (pickable) group.userData.handleRole = 'translate';
+
+    const corners = [
+      [-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5],
+      [-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5],
+    ];
+    const edgePairs = [
+      [0, 1], [0, 2], [0, 4], [1, 3], [1, 5], [2, 3], [2, 6], [3, 7], [4, 5], [4, 6], [5, 7], [6, 7],
+    ];
+
+    for (const [aIndex, bIndex] of edgePairs) {
+      const a = new THREE.Vector3().fromArray(corners[aIndex]);
+      const b = new THREE.Vector3().fromArray(corners[bIndex]);
+      const midpoint = new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5);
+      const direction = new THREE.Vector3().subVectors(b, a).normalize();
+      const edge = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 1, 10), material);
+      edge.userData = {
+        _isGizmo: true,
+        localPosition: midpoint,
+        handleDir: direction,
+      };
+      if (pickable) edge.userData.handleRole = 'translate';
+      edge.renderOrder = renderOrder;
+      edge.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction);
+      group.add(edge);
+    }
+
+    return group;
+  }
+
+  _updateBoxEdgeLayer(layer, center, size, radius, opacity = null) {
+    if (!layer) return;
+    layer.position.copy(center);
+    if (layer.material && opacity !== null) layer.material.opacity = opacity;
+    for (const edge of layer.children) {
+      const midpoint = edge.userData.localPosition;
+      const direction = edge.userData.handleDir;
+      if (!midpoint || !direction) continue;
+      const axisSize = Math.abs(direction.x) > 0.9 ? size.x : Math.abs(direction.y) > 0.9 ? size.y : size.z;
+      edge.position.copy(midpoint).multiply(size);
+      edge.scale.set(radius, Math.max(0.001, axisSize), radius);
+    }
+  }
+
+  _getWorldUnitsPerPixel(point, camera, renderer) {
+    const height = Math.max(1, renderer?.domElement?.clientHeight ?? 1);
+    if (camera?.isPerspectiveCamera) {
+      const distance = camera.position.distanceTo(point);
+      return 2 * distance * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) / height;
+    }
+    if (camera?.isOrthographicCamera) {
+      return Math.abs(camera.top - camera.bottom) / (height * Math.max(0.0001, camera.zoom ?? 1));
+    }
+    return 0.01;
+  }
+
   _buildBoxGizmo() {
     if (this._boxGroup) return;
     const scene = this.engine.scene;
     if (!scene) return;
+    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
+    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
 
     this._boxGroup = new THREE.Group();
     this._boxGroup.name = '__cyco_box_gizmo__';
@@ -326,43 +399,36 @@ export class TransformGizmo {
     this._boxGroup.visible = false;
     scene.add(this._boxGroup);
 
-    const outlineMaterial = new THREE.LineBasicMaterial({
-      color: 0xe8eeff,
+    const outlineMaterial = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(boundsPrefs.outlineColor ?? boxPrefs.outlineColor ?? '#e8eeff'),
       transparent: true,
       opacity: 0.85,
-      depthTest: false,
-      depthWrite: false,
+      depthTest: true,
+      depthWrite: true,
     });
-    const outline = new THREE.LineSegments(
-      new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1)),
-      outlineMaterial
-    );
-    outline.name = 'BoxGizmoOutline';
-    outline.renderOrder = 1000;
-    outline.userData = { _isGizmo: true, handleRole: 'translate' };
+    const outline = this._createBoxEdgeLayer('BoxGizmoOutline', outlineMaterial, 1000, { pickable: true });
     this._boxGroup.add(outline);
     this._boxOutline = outline;
 
     const glowMaterial = new THREE.MeshBasicMaterial({
-      color: 0x9b6cff,
+      color: new THREE.Color(boundsPrefs.glowColor ?? boxPrefs.glowColor ?? '#9b6cff'),
       transparent: true,
       opacity: 0.18,
-      depthTest: false,
+      depthTest: true,
       depthWrite: false,
-      side: THREE.BackSide,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
     });
-    const glow = new THREE.Mesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), glowMaterial);
-    glow.name = 'BoxGizmoGlow';
-    glow.renderOrder = 999;
+    const glow = this._createBoxEdgeLayer('BoxGizmoGlow', glowMaterial, 999);
     glow.visible = true;
-    glow.userData = { _isGizmo: true };
     this._boxGroup.add(glow);
     this._boxGlow = glow;
 
     const volumeMaterial = new THREE.MeshBasicMaterial({
       transparent: true,
       opacity: 0.0,
-      depthTest: false,
+      depthTest: true,
+      depthWrite: false,
     });
     const volume = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), volumeMaterial);
     volume.name = 'BoxGizmoVolume';
@@ -399,8 +465,13 @@ export class TransformGizmo {
     faceAxes.forEach((config, index) => {
       const faceGroup = new THREE.Group();
       const faceMaterial = new THREE.MeshBasicMaterial({
-        color: config.color,
-        depthTest: false,
+        color: config.axis === 'X'
+          ? (boxPrefs.axisColorX ?? config.color)
+          : config.axis === 'Y'
+            ? (boxPrefs.axisColorY ?? config.color)
+            : (boxPrefs.axisColorZ ?? config.color),
+        depthTest: true,
+        depthWrite: true,
       });
       const shaft = new THREE.Mesh(faceShaftGeometry, faceMaterial);
       const tip = new THREE.Mesh(faceTipGeometry, faceMaterial);
@@ -415,7 +486,11 @@ export class TransformGizmo {
         handleRole: 'scaleAxis',
         handleAxis: config.axis,
         handleDir: new THREE.Vector3(...config.dir),
-        baseColor: config.color,
+        baseColor: config.axis === 'X'
+          ? (boxPrefs.axisColorX ?? config.color)
+          : config.axis === 'Y'
+            ? (boxPrefs.axisColorY ?? config.color)
+            : (boxPrefs.axisColorZ ?? config.color),
         hoverColor: 0xffff00,
       };
       faceGroup.renderOrder = 1001;
@@ -432,8 +507,13 @@ export class TransformGizmo {
       const axis = Math.abs(direction.x) > 0.9 ? 'X' : Math.abs(direction.y) > 0.9 ? 'Y' : 'Z';
       const color = axis === 'X' ? 0xff3b30 : axis === 'Y' ? 0x34c759 : 0x0a84ff;
       const material = new THREE.MeshBasicMaterial({
-        color,
-        depthTest: false,
+        color: axis === 'X'
+          ? (boxPrefs.axisColorX ?? color)
+          : axis === 'Y'
+            ? (boxPrefs.axisColorY ?? color)
+            : (boxPrefs.axisColorZ ?? color),
+        depthTest: true,
+        depthWrite: true,
       });
       const edge = new THREE.Mesh(edgeGeometry, material);
       edge.name = `BoxGizmoEdge${index}`;
@@ -455,8 +535,9 @@ export class TransformGizmo {
 
     corners.forEach((position, index) => {
       const material = new THREE.MeshBasicMaterial({
-        color: 0xe8eeff,
-        depthTest: false,
+        color: new THREE.Color(boxPrefs.cornerColor || '#e8eeff'),
+        depthTest: true,
+        depthWrite: true,
       });
       const corner = new THREE.Mesh(cornerGeometry, material);
       corner.name = `BoxGizmoCorner${index}`;
@@ -465,7 +546,7 @@ export class TransformGizmo {
         handleRole: 'scaleUniform',
         handleAxis: 'XYZ',
         handleDir: new THREE.Vector3().fromArray(position).multiplyScalar(2),
-        baseColor: 0xe8eeff,
+        baseColor: boxPrefs.cornerColor || '#e8eeff',
         hoverColor: 0xffff00,
       };
       corner.renderOrder = 1001;
@@ -562,24 +643,28 @@ export class TransformGizmo {
     }
 
     size.set(Math.max(0.1, size.x), Math.max(0.1, size.y), Math.max(0.1, size.z));
-    outline.geometry.dispose();
-    const outlineScale = Math.max(0.05, boundsPrefs.distance ?? 1);
-    outline.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x * outlineScale, size.y * outlineScale, size.z * outlineScale));
-    if (this._boxOutline) {
-      this._boxOutline.scale.setScalar(1);
-    }
-    if (this._boxGlow) {
-      this._boxGlow.scale.setScalar(1 + Math.max(0, boundsPrefs.distance ?? 1) * 0.03);
-    }
+    const renderer = this.engine.rendererManager?.renderer;
+    const camera = this.engine.camera;
+    const baseSize = Math.min(size.x, size.y, size.z);
+    const outlineDistance = Math.max(0.05, boundsPrefs.distance ?? 1);
+    const outlineSize = size.clone().multiplyScalar(outlineDistance);
+    const worldPerPixel = renderer && camera
+      ? this._getWorldUnitsPerPixel(this._boxGroup.position, camera, renderer)
+      : Math.max(baseSize, 1) * 0.002;
+    const outlineThickness = Math.max(0.05, boundsPrefs.thickness ?? 1);
+    const outlineRadius = Math.max(worldPerPixel * 0.75, Math.max(baseSize, 1) * 0.002) * outlineThickness;
+    const glowIntensity = Math.max(0, boundsPrefs.glowIntensity ?? 0.35);
+    const glowRadius = outlineRadius * (2.5 + glowIntensity * 2.5);
+    const glowOpacity = Math.min(0.65, glowIntensity * 0.28);
+
+    this._updateBoxEdgeLayer(this._boxOutline, center, outlineSize, outlineRadius);
+    this._updateBoxEdgeLayer(this._boxGlow, center, outlineSize.clone().multiplyScalar(1.012), glowRadius, glowOpacity);
 
     if (this._boxVolume) {
       this._boxVolume.scale.copy(size);
       this._boxVolume.position.copy(center);
     }
 
-    const renderer = this.engine.rendererManager?.renderer;
-    const camera = this.engine.camera;
-    const baseSize = Math.min(size.x, size.y, size.z);
     const defaultFaceRadius = baseSize * 0.11;
     const minWorldFaceRadius = Math.max(0.12, defaultFaceRadius * 0.75);
     const maxWorldFaceRadius = Math.max(defaultFaceRadius, 0.35);
@@ -738,6 +823,7 @@ export class TransformGizmo {
 
   _onGizmoPointerMove(event) {
     if (!this._boxActive || !this._boxGroup) return;
+    if (this._mode !== 'universal') return;
     if (this._interaction && this._interaction.pointerId === event.pointerId) {
       event.stopPropagation();
       event.preventDefault();
@@ -982,6 +1068,8 @@ export class TransformGizmo {
     window.removeEventListener('cyco-rvp-snap', this._onSnap);
     window.removeEventListener('cyco-hierarchy-remove', this._onHierarchyRemove);
     this._teardown();
+    window.removeEventListener('cyco-preferences-change', this._onPrefsChanged);
+    window.removeEventListener('cyco-preferences-preview', this._onPrefsChanged);
   }
 }
 

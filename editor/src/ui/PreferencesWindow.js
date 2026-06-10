@@ -84,6 +84,7 @@ export const DEFAULT_PREFS = {
     bounds: {
       thickness: 1,
       distance: 1,
+      outlineColor: '#e8eeff',
       glowIntensity: 0.35,
       glowColor: '#9b6cff',
     },
