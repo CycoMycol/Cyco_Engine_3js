@@ -27,9 +27,6 @@ export class LeftToolbarPanel extends BasePanel {
   }
 
   _exitPhysicsEdit(toolMode) {
-    const sel = window.__cyco?.selectionManager;
-    const beforeSelection = sel?.selected ? [...sel.selected] : [];
-
     if (this._physicsEdit) {
       this._physicsEdit = false;
       window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
@@ -41,25 +38,6 @@ export class LeftToolbarPanel extends BasePanel {
     }
     this._refreshToolBtns();
     window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: toolMode } }));
-
-    // Keep the current selection intact when leaving Edit Collider mode.
-    if (sel && beforeSelection.length > 0 && sel.selected.size === 0) {
-      for (const obj of beforeSelection) {
-        if (obj) sel.selectObject(obj);
-      }
-    }
-
-    // Force the normal selection outline / gizmo to refresh from the live
-    // selection set after physics edit mode has been exited.
-    if (beforeSelection.length > 0) {
-      const current = beforeSelection[beforeSelection.length - 1];
-      window.dispatchEvent(new CustomEvent('cyco-select-node', {
-        detail: {
-          object: current ?? null,
-          objects: beforeSelection,
-        }
-      }));
-    }
   }
 
   // ── Abstract getters ────────────────────────────────────────────────────────
@@ -127,19 +105,8 @@ export class LeftToolbarPanel extends BasePanel {
     this._physicsEditBtn = _toolBtn(_toolIcon('editCollider'), 'Edit Collider', () => {
       const enabling = !this._physicsEdit;
       if (enabling) {
-        const sel = window.__cyco?.selectionManager;
-        const selected = sel?.selected ? [...sel.selected] : [];
         this._activeTool = 'editCollider';
         this._physicsEditTool = 'translate';
-        if (selected.length > 0) {
-          const current = selected[selected.length - 1];
-          window.dispatchEvent(new CustomEvent('cyco-select-node', {
-            detail: {
-              object: current ?? null,
-              objects: selected,
-            }
-          }));
-        }
       }
       window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: enabling } }));
     });
