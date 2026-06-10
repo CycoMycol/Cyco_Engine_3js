@@ -1153,11 +1153,15 @@ export class TransformGizmo {
       this._physicsTemporaryOutline = !this._physicsProxy && !!this._physicsOwner;
       this._targetObject = this._physicsProxy || this._physicsOwner || null;
     } else {
+      const selected = this.selectionManager?.selected ? [...this.selectionManager.selected] : [];
+      const current = selected[selected.length - 1] ?? null;
       this._physicsOwner = null;
       this._physicsProxy = null;
       this._physicsTemporaryOutline = false;
-      this._targetObject = null;
-      this._mode = 'select';
+      this._targetObject = current ?? null;
+      if (this._mode === 'universal' || this._mode === 'select') {
+        this._mode = 'select';
+      }
     }
     this._applyMode();
   }

@@ -61,9 +61,11 @@ export class SelectionManager {
     this._onPointerUp        = this._onPointerUp.bind(this);
     this._onPointerLeave     = this._onPointerLeave.bind(this);
     this._onDeselect         = this._onDeselect.bind(this);
+    this._onSelectNode       = this._onSelectNode.bind(this);
 
     window.addEventListener('cyco-vp-ready',         this._onVpReady);
     window.addEventListener('cyco-renderer-changed', this._onRendererChanged);
+    window.addEventListener('cyco-select-node',      this._onSelectNode);
     window.addEventListener('cyco-deselect',         this._onDeselect);
   }
 
@@ -334,6 +336,17 @@ export class SelectionManager {
 
   _onDeselect() { this.clearSelection(); }
 
+  _onSelectNode(event) {
+    const objects = Array.isArray(event.detail?.objects)
+      ? event.detail.objects.filter(Boolean)
+      : (event.detail?.object ? [event.detail.object] : []);
+
+    this.selected.clear();
+    for (const obj of objects) {
+      this.selected.add(obj);
+    }
+  }
+
   // ——— Hover / outline helpers ——————————————————————————————————————
 
   clearHover() {
@@ -358,6 +371,7 @@ export class SelectionManager {
     this._detachPointerEvents();
     window.removeEventListener('cyco-vp-ready',         this._onVpReady);
     window.removeEventListener('cyco-renderer-changed', this._onRendererChanged);
+    window.removeEventListener('cyco-select-node',      this._onSelectNode);
     window.removeEventListener('cyco-deselect',         this._onDeselect);
     this._selectionHelper = null;
   }
