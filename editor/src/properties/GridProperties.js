@@ -74,15 +74,17 @@ function mkSelect(options, currentVal, onChange) {
 }
 
 export class GridProperties {
-  constructor() {
+  constructor({ commit = true } = {}) {
     this._el       = document.createElement('div');
     this._el.className = 'ce-props-panel';
     this._settings = loadSettings();
+    this._commit   = commit;
     this._allRows  = [];
     this._build();
   }
 
   get element() { return this._el; }
+  get settings() { return { ...this._settings }; }
 
   /** Add a row to the section body and tag it with which styles show it. */
   _addRow(body, label, ctrl, visibleFor) {
@@ -186,7 +188,21 @@ export class GridProperties {
   }
 
   _save() {
+    if (this._commit) {
+      saveSettings(this._settings);
+    }
+  }
+
+  commit() {
     saveSettings(this._settings);
+  }
+
+  resetToDefaults() {
+    this._settings = { ...DEFAULTS };
+    this._build();
+    if (this._commit) {
+      saveSettings(this._settings);
+    }
   }
 
   dispose() {}

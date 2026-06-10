@@ -1,4 +1,4 @@
-/**
+﻿/**
  * PreferencesPanel.js — Preferences floating/dockable panel.
  * Opened by: Edit → Preferences, or cyco-open-preferences event.
  * Extends BasePanel so it floats freely, is draggable, and can dock into the layout.
@@ -14,7 +14,7 @@
 import { BasePanel } from './BasePanel.js';
 import { loadPrefs, savePrefs, saveDefaultPrefs, DEFAULT_PREFS, DEFAULT_KEYS } from '../ui/PreferencesWindow.js';
 import { GridProperties } from '../properties/GridProperties.js';
-import { select } from '../properties/propUtils.js';
+import { select, slider, colorSwatch, row } from '../properties/propUtils.js';
 
 export class PreferencesPanel extends BasePanel {
   constructor() {
@@ -22,8 +22,52 @@ export class PreferencesPanel extends BasePanel {
     this._prefs       = null;
     this._activeTab   = 'keybindings';
     this._tabBtns     = {};
+    this._gizmoActiveTab = 'move';
+    this._gizmoTabBtns   = {};
     this._gridProps   = null;
     this._contentArea = null;
+  }
+
+  _clonePrefs(value) {
+    if (typeof structuredClone === 'function') {
+      try { return structuredClone(value); } catch (_) {}
+    }
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  _getDefaultPrefsForTab(tabId) {
+    switch (tabId) {
+      case 'keybindings':
+        return { keybindings: this._clonePrefs(DEFAULT_KEYS) };
+      case 'gizmo':
+        return { gizmo: this._clonePrefs(DEFAULT_PREFS.gizmo) };
+      case 'renderer':
+        return { renderer: this._clonePrefs(DEFAULT_PREFS.renderer) };
+      case 'general':
+        return { general: this._clonePrefs(DEFAULT_PREFS.general) };
+      default:
+        return {};
+    }
+  }
+
+  _resetActiveTabDraft() {
+    if (this._activeTab === 'grid') {
+      this._gridProps?.resetToDefaults?.();
+      return;
+    }
+
+    const defaults = this._getDefaultPrefsForTab(this._activeTab);
+    if (defaults.keybindings) this._prefs.keybindings = defaults.keybindings;
+    if (defaults.gizmo) this._prefs.gizmo = defaults.gizmo;
+    if (defaults.renderer) this._prefs.renderer = defaults.renderer;
+    if (defaults.general) this._prefs.general = defaults.general;
+    this._switchTab(this._activeTab);
+  }
+
+  _commitDraftPrefs({ makeDefault = false } = {}) {
+    if (this._gridProps?.commit) this._gridProps.commit();
+    savePrefs(this._prefs);
+    if (makeDefault) saveDefaultPrefs(this._prefs);
   }
 
   // ── Float dimensions ─────────────────────────────────────────────────────────
@@ -77,7 +121,7 @@ export class PreferencesPanel extends BasePanel {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
       btn.dataset.tabId = tab.id;
-      btn.style.cssText = 'width:100%;background:none;border:none;text-align:left;padding:8px 16px;cursor:pointer;font-size:13px;color:var(--text-secondary,#aaa);border-left:3px solid transparent;';
+      btn.style.cssText = 'width:100%;background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);text-align:left;padding:8px 12px;margin:4px 8px;border-radius:6px;cursor:pointer;font-size:13px;color:var(--text-secondary,#aaa);';
       btn.addEventListener('click', () => this._switchTab(tab.id));
       sidebar.appendChild(btn);
       this._tabBtns[tab.id] = btn;
@@ -95,22 +139,15 @@ export class PreferencesPanel extends BasePanel {
     leftGroup.style.cssText = 'display:flex;gap:8px;';
 
     const resetBtn = document.createElement('button');
-    resetBtn.textContent = 'Reset All';
-    resetBtn.style.cssText = 'background:none;border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
-    resetBtn.addEventListener('click', () => {
-      if (confirm('Reset all preferences to defaults?')) {
-        this._prefs = JSON.parse(JSON.stringify(DEFAULT_PREFS));
-        savePrefs(this._prefs);
-        this._switchTab(this._activeTab);
-      }
-    });
+    resetBtn.textContent = 'Reset';
+    resetBtn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    resetBtn.addEventListener('click', () => this._resetActiveTabDraft());
 
     const makeDefaultBtn = document.createElement('button');
     makeDefaultBtn.textContent = 'Make Default';
-    makeDefaultBtn.style.cssText = 'background:none;border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
+    makeDefaultBtn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
     makeDefaultBtn.addEventListener('click', () => {
-      savePrefs(this._prefs);
-      saveDefaultPrefs(this._prefs);
+      this._commitDraftPrefs({ makeDefault: true });
       alert('Current preferences have been saved as your default settings.');
     });
 
@@ -124,7 +161,8 @@ export class PreferencesPanel extends BasePanel {
     doneBtn.textContent = 'Do It';
     doneBtn.style.cssText = 'background:var(--accent-color,#4488ff);border:none;color:#fff;padding:4px 14px;border-radius:4px;cursor:pointer;font-size:12px;';
     doneBtn.addEventListener('click', () => {
-      try { this._panelApi.close(); } catch (_) {}
+      this._commitDraftPrefs();
+      try { this._panelApi.close(); } catch (_) {} 
     });
 
     rightGroup.appendChild(doneBtn);
@@ -144,15 +182,12 @@ export class PreferencesPanel extends BasePanel {
     this._activeTab = tabId;
     for (const [id, btn] of Object.entries(this._tabBtns)) {
       const active = id === tabId;
-      btn.style.color           = active ? 'var(--text-primary,#e0e0e0)' : 'var(--text-secondary,#aaa)';
-      btn.style.borderLeftColor = active ? 'var(--accent-color,#4488ff)' : 'transparent';
-      btn.style.background      = active ? 'var(--bg-secondary,#252525)' : 'none';
+      btn.style.color           = active ? '#fff' : 'var(--text-secondary,#aaa)';
+      btn.style.borderLeftColor = active ? 'rgba(224,120,64,0.55)' : 'transparent';
+      btn.style.background      = active ? 'rgba(224,120,64,0.18)' : 'var(--bg-secondary,#252525)';
     }
     if (this._contentArea) this._contentArea.innerHTML = '';
-    if (this._gridProps && tabId !== 'grid') {
-      this._gridProps.dispose?.();
-      this._gridProps = null;
-    }
+    
     switch (tabId) {
       case 'keybindings': this._contentArea.appendChild(this._buildKeybindingsTab()); break;
       case 'gizmo':       this._contentArea.appendChild(this._buildGizmoTab());       break;
@@ -211,7 +246,6 @@ export class PreferencesPanel extends BasePanel {
       resetKeyBtn.addEventListener('click', () => {
         this._prefs.keybindings[action] = defaultKey;
         keyBtn.textContent = defaultKey;
-        savePrefs(this._prefs);
       });
       tdKey.appendChild(resetKeyBtn);
     }
@@ -237,7 +271,6 @@ export class PreferencesPanel extends BasePanel {
       btn.textContent = binding || original;
       btn.style.borderColor = '';
       this._prefs.keybindings[action] = binding;
-      savePrefs(this._prefs);
       document.removeEventListener('keydown', onKey, true);
     };
     document.addEventListener('keydown', onKey, true);
@@ -247,28 +280,296 @@ export class PreferencesPanel extends BasePanel {
 
   _buildGizmoTab() {
     const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:12px;height:100%;';
 
-    const hdr = document.createElement('h3');
-    hdr.textContent = 'Gizmo';
-    hdr.style.cssText = 'margin:0 0 12px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;';
+    const hdr = document.createElement('div');
+    hdr.innerHTML =
+      '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Gizmo</h3>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Tune transform gizmos, the box tool, and the bounding-box glow.</div>';
     root.appendChild(hdr);
 
-    const placeholder = document.createElement('div');
-    placeholder.style.cssText = 'padding:20px;color:var(--text-secondary,#888);font-size:12px;font-style:italic;';
-    placeholder.textContent = 'Gizmo settings will be rebuilt here.';
-    root.appendChild(placeholder);
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:6px;background:var(--bg-secondary,#1f1f1f);border:1px solid var(--border-color,#333);border-radius:8px;overflow-x:auto;';
+    this._gizmoTabBtns = {};
+    const tabs = [
+      { id: 'move', label: 'Move' },
+      { id: 'scale', label: 'Scale' },
+      { id: 'rotate', label: 'Rotate' },
+      { id: 'box', label: 'Box Tool' },
+      { id: 'bounds', label: 'Bounding Box' },
+    ];
+    for (const tab of tabs) {
+      const btn = document.createElement('button');
+      btn.textContent = tab.label;
+      btn.style.cssText = 'background:var(--bg-secondary,#252525);border:1px solid var(--border-color,#333);color:var(--text-secondary,#aaa);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;';
+      btn.addEventListener('click', () => this._switchGizmoSubTab(tab.id));
+      tabBar.appendChild(btn);
+      this._gizmoTabBtns[tab.id] = btn;
+    }
+
+    this._gizmoContentArea = document.createElement('div');
+    this._gizmoContentArea.style.cssText = 'flex:1;overflow-y:auto;padding-right:4px;';
+
+    root.appendChild(tabBar);
+    root.appendChild(this._gizmoContentArea);
+    this._switchGizmoSubTab(this._gizmoActiveTab);
+    return root;
+  }
+
+  _switchGizmoSubTab(tabId) {
+    this._gizmoActiveTab = tabId;
+    for (const [id, btn] of Object.entries(this._gizmoTabBtns || {})) {
+      const active = id === tabId;
+      btn.style.color = active ? '#fff' : 'var(--text-secondary,#aaa)';
+      btn.style.background = active ? 'rgba(224,120,64,0.18)' : 'var(--bg-secondary,#252525)';
+      btn.style.borderColor = active ? 'rgba(224,120,64,0.55)' : 'var(--border-color,#333)';
+    }
+    if (!this._gizmoContentArea) return;
+    this._gizmoContentArea.innerHTML = '';
+    if (tabId === 'move') this._gizmoContentArea.appendChild(this._buildGizmoSubTab('move'));
+    else if (tabId === 'scale') this._gizmoContentArea.appendChild(this._buildGizmoSubTab('scale'));
+    else if (tabId === 'rotate') this._gizmoContentArea.appendChild(this._buildGizmoSubTab('rotate'));
+    else if (tabId === 'box') this._gizmoContentArea.appendChild(this._buildBoxToolTab());
+    else if (tabId === 'bounds') this._gizmoContentArea.appendChild(this._buildBoundingBoxTab());
+  }
+
+  _makeSettingRow(label, control, note = '') {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:10px;';
+    const r = row(label, control);
+    r.style.cssText = 'display:flex;align-items:center;gap:10px;margin:0;';
+    const labelEl = r.querySelector('.ce-prop-row-label');
+    if (labelEl) labelEl.style.cssText = 'flex:0 0 120px;font-size:12px;color:var(--text-primary,#e0e0e0);';
+    const controlEl = r.lastElementChild;
+    if (controlEl) controlEl.style.flex = '1';
+    wrap.appendChild(r);
+    if (note) {
+      const helper = document.createElement('div');
+      helper.textContent = note;
+      helper.style.cssText = 'margin-top:4px;font-size:11px;color:var(--text-secondary,#888);line-height:1.3;';
+      wrap.appendChild(helper);
+    }
+    return wrap;
+  }
+
+  _makeToggleRow(label, checked, onChange, leftLabel = 'Combined', rightLabel = 'Separate') {
+    const btn = document.createElement('button');
+    const render = () => {
+      btn.textContent = checked ? `${leftLabel} · Locked` : `${rightLabel} · Unlocked`;
+      btn.style.cssText = [
+        'background:var(--bg-secondary,#252525)',
+        'border:1px solid var(--border-color,#333)',
+        'color:var(--text-primary,#e0e0e0)',
+        'padding:6px 12px',
+        'border-radius:999px',
+        'cursor:pointer',
+        'font-size:12px',
+      ].join(';');
+      btn.style.borderColor = checked ? 'rgba(68,136,255,0.45)' : 'var(--border-color,#333)';
+      btn.style.background = checked ? 'rgba(68,136,255,0.18)' : 'var(--bg-secondary,#252525)';
+    };
+    render();
+    btn.addEventListener('click', () => {
+      checked = !checked;
+      render();
+      onChange?.(checked);
+    });
+    return this._makeSettingRow(label, btn);
+  }
+
+  _makeColorRow(label, value, onChange) {
+    const sw = colorSwatch({ color: value, onChange });
+    sw.el.style.width = '38px';
+    sw.el.style.height = '24px';
+    return this._makeSettingRow(label, sw.el);
+  }
+
+  _makeSliderRow(label, value, min, max, step, onChange, note = '') {
+    const sl = slider({ value, min, max, step, onChange });
+    sl.el.style.width = '100%';
+    return this._makeSettingRow(label, sl.el, note);
+  }
+
+  _buildGizmoSubTab(tabId) {
+    const prefs = this._prefs.gizmo;
+    const shared = !prefs.useSeparateGizmoSizes;
+    const modeKey = tabId === 'move' ? 'translate' : tabId;
+    const sizeValue = shared ? prefs.size : (prefs[`${modeKey}Size`] ?? prefs.size);
+    const distanceValue = shared ? prefs.distance : (prefs[`${modeKey}Distance`] ?? prefs.distance);
+    const xColor = shared ? prefs.axisColorX : (prefs[`${modeKey}AxisColorX`] ?? prefs.axisColorX);
+    const yColor = shared ? prefs.axisColorY : (prefs[`${modeKey}AxisColorY`] ?? prefs.axisColorY);
+    const zColor = shared ? prefs.axisColorZ : (prefs[`${modeKey}AxisColorZ`] ?? prefs.axisColorZ);
+    const activeColor = shared
+      ? (prefs.activeColor || '#ffd54a')
+      : (prefs[`${modeKey}ActiveColor`] ?? (prefs.activeColor || '#ffd54a'));
+
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    const title = tabId === 'move' ? 'Move' : tabId.charAt(0).toUpperCase() + tabId.slice(1);
+    const titleEl = document.createElement('div');
+    titleEl.innerHTML = `<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">${title} Gizmo</div>` +
+      `<div style="font-size:11px;color:var(--text-secondary,#888);">${shared ? 'Locked together with the other transform gizmos.' : 'Unlocked for per-gizmo tuning.'}</div>`;
+    root.appendChild(titleEl);
+
+    root.appendChild(this._makeToggleRow('Combined / Separate', shared, (isCombined) => {
+      this._prefs.gizmo.useSeparateGizmoSizes = !isCombined;
+      if (isCombined) {
+        this._prefs.gizmo.translateSize = this._prefs.gizmo.size;
+        this._prefs.gizmo.rotateSize = this._prefs.gizmo.size;
+        this._prefs.gizmo.scaleSize = this._prefs.gizmo.size;
+        this._prefs.gizmo.translateDistance = this._prefs.gizmo.distance;
+        this._prefs.gizmo.rotateDistance = this._prefs.gizmo.distance;
+        this._prefs.gizmo.scaleDistance = this._prefs.gizmo.distance;
+        this._prefs.gizmo.translateAxisColorX = this._prefs.gizmo.axisColorX;
+        this._prefs.gizmo.translateAxisColorY = this._prefs.gizmo.axisColorY;
+        this._prefs.gizmo.translateAxisColorZ = this._prefs.gizmo.axisColorZ;
+        this._prefs.gizmo.rotateAxisColorX = this._prefs.gizmo.axisColorX;
+        this._prefs.gizmo.rotateAxisColorY = this._prefs.gizmo.axisColorY;
+        this._prefs.gizmo.rotateAxisColorZ = this._prefs.gizmo.axisColorZ;
+        this._prefs.gizmo.scaleAxisColorX = this._prefs.gizmo.axisColorX;
+        this._prefs.gizmo.scaleAxisColorY = this._prefs.gizmo.axisColorY;
+        this._prefs.gizmo.scaleAxisColorZ = this._prefs.gizmo.axisColorZ;
+      }
+      this._switchGizmoSubTab(this._gizmoActiveTab);
+    }, 'Combined', 'Separate'));
+
+    root.appendChild(this._makeSliderRow('Thickness', sizeValue, 0.1, 3, 0.01, (v) => {
+      if (shared) {
+        this._prefs.gizmo.size = v;
+        this._prefs.gizmo.translateSize = v;
+        this._prefs.gizmo.rotateSize = v;
+        this._prefs.gizmo.scaleSize = v;
+      } else {
+        this._prefs.gizmo[`${modeKey}Size`] = v;
+      }
+    }, 'Controls handle thickness and visual weight.'));
+
+    root.appendChild(this._makeSliderRow('Distance', distanceValue, 0.05, 3, 0.01, (v) => {
+      if (shared) {
+        this._prefs.gizmo.distance = v;
+        this._prefs.gizmo.translateDistance = v;
+        this._prefs.gizmo.rotateDistance = v;
+        this._prefs.gizmo.scaleDistance = v;
+      } else {
+        this._prefs.gizmo[`${modeKey}Distance`] = v;
+      }
+    }, 'Moves the handles farther away from the object.'));
+
+    root.appendChild(this._makeColorRow('X Color', xColor, (c) => {
+      if (shared) {
+        this._prefs.gizmo.axisColorX = c;
+        this._prefs.gizmo.translateAxisColorX = c;
+        this._prefs.gizmo.rotateAxisColorX = c;
+        this._prefs.gizmo.scaleAxisColorX = c;
+      } else {
+        this._prefs.gizmo[`${modeKey}AxisColorX`] = c;
+      }
+    }));
+    root.appendChild(this._makeColorRow('Y Color', yColor, (c) => {
+      if (shared) {
+        this._prefs.gizmo.axisColorY = c;
+        this._prefs.gizmo.translateAxisColorY = c;
+        this._prefs.gizmo.rotateAxisColorY = c;
+        this._prefs.gizmo.scaleAxisColorY = c;
+      } else {
+        this._prefs.gizmo[`${modeKey}AxisColorY`] = c;
+      }
+    }));
+    root.appendChild(this._makeColorRow('Z Color', zColor, (c) => {
+      if (shared) {
+        this._prefs.gizmo.axisColorZ = c;
+        this._prefs.gizmo.translateAxisColorZ = c;
+        this._prefs.gizmo.rotateAxisColorZ = c;
+        this._prefs.gizmo.scaleAxisColorZ = c;
+      } else {
+        this._prefs.gizmo[`${modeKey}AxisColorZ`] = c;
+      }
+    }));
+    root.appendChild(this._makeColorRow('Active', activeColor, (c) => {
+      if (shared) {
+        this._prefs.gizmo.activeColor = c;
+        this._prefs.gizmo.translateActiveColor = c;
+        this._prefs.gizmo.rotateActiveColor = c;
+        this._prefs.gizmo.scaleActiveColor = c;
+      } else {
+        this._prefs.gizmo[`${modeKey}ActiveColor`] = c;
+      }
+    }));
 
     return root;
   }
 
-  _dispatchGizmoSize() {
-    // Stub — gizmo code removed, will be rebuilt later.
+  _buildBoxToolTab() {
+    const prefs = this._prefs.gizmo.box;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    const titleEl = document.createElement('div');
+    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Box Tool Gizmo</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Controls the custom box selection gizmo.</div>';
+    root.appendChild(titleEl);
+
+    root.appendChild(this._makeToggleRow('Combined / Separate', !prefs.useSeparate, (isCombined) => {
+      this._prefs.gizmo.box.useSeparate = !isCombined;
+      this._switchGizmoSubTab(this._gizmoActiveTab);
+    }, 'Combined', 'Separate'));
+
+    root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.box.thickness = v;
+    }, 'Changes the box handle thickness without moving the gizmo points.'));
+
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.box.distance = v;
+    }, 'Pushes the box handles farther away from the object.'));
+
+    root.appendChild(this._makeColorRow('X Color', prefs.axisColorX, (c) => {
+      this._prefs.gizmo.box.axisColorX = c;
+    }));
+    root.appendChild(this._makeColorRow('Y Color', prefs.axisColorY, (c) => {
+      this._prefs.gizmo.box.axisColorY = c;
+    }));
+    root.appendChild(this._makeColorRow('Z Color', prefs.axisColorZ, (c) => {
+      this._prefs.gizmo.box.axisColorZ = c;
+    }));
+    root.appendChild(this._makeColorRow('Corner Color', prefs.cornerColor, (c) => {
+      this._prefs.gizmo.box.cornerColor = c;
+    }));
+
+    return root;
   }
 
-  // ── Grid tab ─────────────────────────────────────────────────────────────────
+  _buildBoundingBoxTab() {
+    const prefs = this._prefs.gizmo.bounds;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    const titleEl = document.createElement('div');
+    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Bounding Box</div>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Outline and purple glow shared by all gizmos.</div>';
+    root.appendChild(titleEl);
+
+    root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.bounds.thickness = v;
+    }, 'Controls the outline line thickness.'));
+
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.bounds.distance = v;
+    }, 'Moves the outline frame away from the object.'));
+
+    root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
+      this._prefs.gizmo.bounds.glowColor = c;
+    }));
+
+    root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 2, 0.01, (v) => {
+      this._prefs.gizmo.bounds.glowIntensity = v;
+    }, 'No post-processing required.'));
+
+    return root;
+  }
 
   _buildGridTab(content) {
-    this._gridProps = new GridProperties();
+    if (!this._gridProps) this._gridProps = new GridProperties({ commit: false });
     content.appendChild(this._gridProps.element);
   }
 
@@ -288,7 +589,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['webgl','WebGL'],['webgpu','WebGPU'],['svg','SVG'],['css3d','CSS3D'],['pathtracer','Path Tracer']],
           value: this._prefs.renderer.defaultType,
-          onChange: (v) => { this._prefs.renderer.defaultType = v; savePrefs(this._prefs); },
+          onChange: (v) => { this._prefs.renderer.defaultType = v; },
         }),
       },
       {
@@ -296,7 +597,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['PCFSoftShadowMap','PCF Soft'],['PCFShadowMap','PCF'],['BasicShadowMap','Basic'],['VSMShadowMap','VSM']],
           value: this._prefs.renderer.shadowMapType,
-          onChange: (v) => { this._prefs.renderer.shadowMapType = v; savePrefs(this._prefs); },
+          onChange: (v) => { this._prefs.renderer.shadowMapType = v; },
         }),
       },
       {
@@ -304,7 +605,7 @@ export class PreferencesPanel extends BasePanel {
         el: select({
           options: [['1','1×'],['device','Device ('+window.devicePixelRatio+'×)'],['2','2×']],
           value: this._prefs.renderer.pixelRatio,
-          onChange: (v) => { this._prefs.renderer.pixelRatio = v; savePrefs(this._prefs); },
+          onChange: (v) => { this._prefs.renderer.pixelRatio = v; },
         }),
       },
     ];
@@ -342,7 +643,7 @@ export class PreferencesPanel extends BasePanel {
     const asSelect = select({
       options: [['off','Off'],['1','1 minute'],['5','5 minutes'],['10','10 minutes']],
       value: this._prefs.general.autoSaveInterval,
-      onChange: (v) => { this._prefs.general.autoSaveInterval = v; savePrefs(this._prefs); },
+      onChange: (v) => { this._prefs.general.autoSaveInterval = v; },
     });
     asRow.appendChild(asLabel);
     asRow.appendChild(asSelect);
@@ -360,7 +661,6 @@ export class PreferencesPanel extends BasePanel {
     wsCb.style.cursor = 'pointer';
     wsCb.addEventListener('change', () => {
       this._prefs.general.showWelcomeScreen = wsCb.checked;
-      savePrefs(this._prefs);
     });
     wsRow.appendChild(wsLabel);
     wsRow.appendChild(wsCb);
@@ -376,3 +676,8 @@ export class PreferencesPanel extends BasePanel {
     super.dispose?.();
   }
 }
+
+
+
+
+

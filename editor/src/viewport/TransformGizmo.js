@@ -1,6 +1,6 @@
-﻿import * as THREE from 'three';
+import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-
+import { loadPrefs } from '../ui/PreferencesWindow.js';
 export class TransformGizmo {
   constructor(viewportEngine, selectionManager) {
     this.engine           = viewportEngine;
@@ -11,6 +11,7 @@ export class TransformGizmo {
     this._targetObject = null;
     this._isDragging   = false;
     this._matrixBefore = null;
+    this._prefs        = loadPrefs();
 
     this._tc      = null;
     this._gizmo   = null;
@@ -19,6 +20,8 @@ export class TransformGizmo {
     this._boxGroup      = null;
     this._boxHandles    = [];
     this._boxVolume     = null;
+    this._boxOutline    = null;
+    this._boxGlow       = null;
     this._boxActive     = false;
     this._hoveredHandle = null;
     this._interaction   = null;
@@ -38,6 +41,7 @@ export class TransformGizmo {
     this._onGizmoPointerDown = this._onGizmoPointerDown.bind(this);
     this._onGizmoPointerMove = this._onGizmoPointerMove.bind(this);
     this._onGizmoPointerUp   = this._onGizmoPointerUp.bind(this);
+    this._onPrefsChanged     = this._onPrefsChanged.bind(this);
     this._rcHandler          = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
@@ -49,6 +53,7 @@ export class TransformGizmo {
     window.addEventListener('cyco-vp-world',              this._onWorld);
     window.addEventListener('cyco-rvp-snap',              this._onSnap);
     window.addEventListener('cyco-hierarchy-remove',      this._onHierarchyRemove);
+    window.addEventListener('cyco-preferences-change',    this._onPrefsChanged);
   }
 
   get controls() { return this._controls; }
@@ -121,6 +126,57 @@ export class TransformGizmo {
     this._buildBoxGizmo();
     this._applyMode();
     if (this._targetObject) this._attachTo(this._targetObject);
+    this._applyPreferences();
+  }
+
+  _onPrefsChanged(event) {
+    this._prefs = event.detail?.prefs ?? loadPrefs();
+    this._applyPreferences();
+  }
+
+  _getTransformPrefs(mode) {
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
+    const shared = !gizmo.useSeparateGizmoSizes;
+    const key = mode === 'translate' ? 'translate' : mode;
+    return {
+      size: shared ? gizmo.size : (gizmo[`${key}Size`] ?? gizmo.size),
+      distance: shared ? gizmo.distance : (gizmo[`${key}Distance`] ?? gizmo.distance),
+      x: shared ? gizmo.axisColorX : (gizmo[`${key}AxisColorX`] ?? gizmo.axisColorX),
+      y: shared ? gizmo.axisColorY : (gizmo[`${key}AxisColorY`] ?? gizmo.axisColorY),
+      z: shared ? gizmo.axisColorZ : (gizmo[`${key}AxisColorZ`] ?? gizmo.axisColorZ),
+      active: shared
+        ? (gizmo.activeColor || '#ffd54a')
+        : (gizmo[`${key}ActiveColor`] ?? (gizmo.activeColor || '#ffd54a')),
+    };
+  }
+
+  _applyPreferences() {
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
+    if (this._tc && this._mode !== 'select' && this._mode !== 'universal') {
+      const mode = this._mode;
+      const p = this._getTransformPrefs(mode);
+      this._tc.setSize(p.size ?? 1);
+      this._tc.setDistance(p.distance ?? 1);
+      this._tc.setColors(p.x ?? '#ff4444', p.y ?? '#44ff44', p.z ?? '#4444ff', p.active ?? '#ffd54a');
+      if (this._gizmo) {
+        this._gizmo.visible = true;
+      }
+    }
+    if (this._boxGroup) {
+      this._updateBoxPalette();
+      if (this._boxActive && this._targetObject) this._updateBoxGizmo();
+    }
+  }
+
+  _setBoxModeVisibility(mode = 'full') {
+    if (!this._boxGroup) return;
+    const showHandles = mode === 'full';
+    if (this._boxOutline) this._boxOutline.visible = true;
+    if (this._boxGlow) this._boxGlow.visible = true;
+    if (this._boxVolume) this._boxVolume.visible = showHandles;
+    for (const handle of this._boxHandles) {
+      handle.visible = showHandles;
+    }
   }
 
   _teardown() {
@@ -157,6 +213,8 @@ export class TransformGizmo {
       this._boxGroup = null;
       this._boxHandles = [];
       this._boxVolume = null;
+      this._boxOutline = null;
+      this._boxGlow = null;
       this._hoveredHandle = null;
       this._interaction = null;
     }
@@ -171,6 +229,7 @@ export class TransformGizmo {
       this._tc.enabled = false;
       if (hasTarget) {
         this._showBox();
+        this._setBoxModeVisibility('full');
       } else {
         this._hideBox();
       }
@@ -178,7 +237,12 @@ export class TransformGizmo {
       this._tc.detach();
       this._gizmo.visible = false;
       this._tc.enabled = false;
-      this._hideBox();
+      if (hasTarget) {
+        this._showBox();
+        this._setBoxModeVisibility('outline');
+      } else {
+        this._hideBox();
+      }
     } else {
       if (hasTarget) {
         this._tc.setMode(this._mode);
@@ -220,6 +284,37 @@ export class TransformGizmo {
 
   detach() { this._detachAll(); }
 
+  _updateBoxPalette() {
+    const prefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
+    if (this._boxOutline?.material) {
+      this._boxOutline.material.color.set(prefs.outlineColor || prefs.glowColor || '#e8eeff');
+      this._boxOutline.material.opacity = Math.min(0.95, 0.5 + (prefs.glowIntensity ?? 0.35) * 0.45);
+      this._boxOutline.material.linewidth = Math.max(1, prefs.thickness ?? 1);
+    }
+    if (this._boxGlow?.material) {
+      this._boxGlow.material.color.set(prefs.glowColor || '#9b6cff');
+      this._boxGlow.material.opacity = Math.max(0.05, Math.min(0.6, (prefs.glowIntensity ?? 0.35) * 0.25));
+    }
+    for (const handle of this._boxHandles) {
+      const role = handle.userData.handleRole;
+      const axis = handle.userData.handleAxis;
+      if (role === 'scaleAxis' || role === 'rotate') {
+        const c = axis === 'X' ? prefs.axisColorX : axis === 'Y' ? prefs.axisColorY : prefs.axisColorZ;
+        handle.userData.baseColor = c;
+        handle.userData.hoverColor = 0xffff00;
+      } else if (role === 'scaleUniform') {
+        handle.userData.baseColor = prefs.cornerColor || '#e8eeff';
+        handle.userData.hoverColor = 0xffff00;
+      }
+      if (handle.material && handle.userData.baseColor) handle.material.color.set(handle.userData.baseColor);
+      if (handle.children) {
+        handle.children.forEach((child) => {
+          if (child.material && handle.userData.baseColor) child.material.color.set(handle.userData.baseColor);
+        });
+      }
+    }
+  }
+
   _buildBoxGizmo() {
     if (this._boxGroup) return;
     const scene = this.engine.scene;
@@ -246,6 +341,23 @@ export class TransformGizmo {
     outline.renderOrder = 1000;
     outline.userData = { _isGizmo: true, handleRole: 'translate' };
     this._boxGroup.add(outline);
+    this._boxOutline = outline;
+
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x9b6cff,
+      transparent: true,
+      opacity: 0.18,
+      depthTest: false,
+      depthWrite: false,
+      side: THREE.BackSide,
+    });
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(1.06, 1.06, 1.06), glowMaterial);
+    glow.name = 'BoxGizmoGlow';
+    glow.renderOrder = 999;
+    glow.visible = true;
+    glow.userData = { _isGizmo: true };
+    this._boxGroup.add(glow);
+    this._boxGlow = glow;
 
     const volumeMaterial = new THREE.MeshBasicMaterial({
       transparent: true,
@@ -372,6 +484,7 @@ export class TransformGizmo {
     if (this._boxGroup) {
       this._boxGroup.visible = true;
       this._boxActive = true;
+      this._setBoxModeVisibility(this._mode === 'select' ? 'outline' : 'full');
       this._updateBoxGizmo();
     }
   }
@@ -394,6 +507,8 @@ export class TransformGizmo {
       this._boxGroup = null;
       this._boxHandles = [];
       this._boxVolume = null;
+      this._boxOutline = null;
+      this._boxGlow = null;
       this._clearHoveredHandle();
     }
     this._boxActive = false;
@@ -405,6 +520,8 @@ export class TransformGizmo {
     const target = this._targetObject;
     const outline = this._boxGroup.getObjectByName('BoxGizmoOutline');
     if (!outline) return;
+    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
+    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
 
     const center = new THREE.Vector3();
     const size = new THREE.Vector3(1, 1, 1);
@@ -431,7 +548,7 @@ export class TransformGizmo {
       }
     }
 
-    if (!isMesh || size.x === 0 || size.y === 0 || size.z === 0) {
+    if (!isMesh || size.x < 0.001 || size.y < 0.001 || size.z < 0.001) {
       const worldBox = new THREE.Box3().setFromObject(target);
       if (!worldBox.isEmpty()) {
         worldBox.getCenter(center);
@@ -446,7 +563,14 @@ export class TransformGizmo {
 
     size.set(Math.max(0.1, size.x), Math.max(0.1, size.y), Math.max(0.1, size.z));
     outline.geometry.dispose();
-    outline.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x, size.y, size.z));
+    const outlineScale = Math.max(0.05, boundsPrefs.distance ?? 1);
+    outline.geometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(size.x * outlineScale, size.y * outlineScale, size.z * outlineScale));
+    if (this._boxOutline) {
+      this._boxOutline.scale.setScalar(1);
+    }
+    if (this._boxGlow) {
+      this._boxGlow.scale.setScalar(1 + Math.max(0, boundsPrefs.distance ?? 1) * 0.03);
+    }
 
     if (this._boxVolume) {
       this._boxVolume.scale.copy(size);
@@ -463,40 +587,44 @@ export class TransformGizmo {
       ? 2 * camera.position.distanceTo(this._boxGroup.position) * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 40 / renderer.domElement.clientHeight
       : minWorldFaceRadius;
     const faceRadius = Math.min(maxWorldFaceRadius, Math.max(minWorldFaceRadius, screenFaceRadius));
-    const edgeRadius = Math.max(faceRadius * 0.95, 0.14);
-    const cornerScale = Math.max(faceRadius * 1.25, 0.14);
-    const faceDepth = Math.max(baseSize * 0.28, faceRadius * 3.0, 0.35);
+    const handleThickness = Math.max(0.05, boxPrefs.thickness ?? 1);
+    const handleDistance = Math.max(0.05, boxPrefs.distance ?? 1);
+    const edgeRadius = Math.max(faceRadius * 0.95 * handleThickness, 0.14);
+    const cornerScale = Math.max(faceRadius * 1.25 * handleThickness, 0.14);
+    const faceDepth = Math.max(baseSize * 0.28 * handleDistance, faceRadius * 3.0 * handleDistance, 0.35);
+
+    this._updateBoxPalette();
 
     this._boxHandles.forEach((handle) => {
       const role = handle.userData.handleRole;
       const dir = handle.userData.handleDir?.clone();
       if (role === 'scaleAxis' && dir) {
-        const offset = dir.clone().multiply(size).multiplyScalar(0.5);
+        const offset = dir.clone().multiply(size).multiplyScalar(0.5 * handleDistance);
         handle.position.copy(center).add(offset);
         handle.position.addScaledVector(dir, faceDepth * 0.5);
         handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
         const shaft = handle.getObjectByName('AxisShaft');
         const tip = handle.getObjectByName('AxisTip');
         if (shaft) {
-          shaft.scale.set(faceRadius * 0.35, faceDepth, faceRadius * 0.35);
+          shaft.scale.set(faceRadius * 0.35 * handleThickness, faceDepth, faceRadius * 0.35 * handleThickness);
         }
         if (tip) {
-          const tipRadius = faceRadius * 1.15;
+          const tipRadius = faceRadius * 1.15 * handleThickness;
           tip.scale.set(tipRadius, tipRadius, tipRadius);
           tip.position.y = 0.5 + faceDepth * 0.5 + tipRadius * 0.9;
         }
       } else if (role === 'rotate' && dir) {
         const localPosition = handle.userData.localPosition?.clone() ?? new THREE.Vector3();
-        handle.position.copy(center).add(localPosition.multiply(size));
+        handle.position.copy(center).add(localPosition.multiply(size).multiplyScalar(handleDistance));
         handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
         const axisSize = Math.abs(dir.x) > 0.9 ? size.x : Math.abs(dir.y) > 0.9 ? size.y : size.z;
-        handle.scale.set(edgeRadius, axisSize * 0.9, edgeRadius);
+        handle.scale.set(edgeRadius * handleThickness, axisSize * 0.9 * handleDistance, edgeRadius * handleThickness);
       } else if (role === 'scaleUniform' && dir) {
-        const offset = dir.clone().multiply(size).multiplyScalar(0.5);
+        const offset = dir.clone().multiply(size).multiplyScalar(0.5 * handleDistance);
         handle.position.copy(center).add(offset);
         handle.position.addScaledVector(dir, cornerScale * 0.5);
         handle.quaternion.identity();
-        handle.scale.setScalar(cornerScale);
+        handle.scale.setScalar(cornerScale * handleThickness);
       }
     });
   }
@@ -856,3 +984,18 @@ export class TransformGizmo {
     this._teardown();
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

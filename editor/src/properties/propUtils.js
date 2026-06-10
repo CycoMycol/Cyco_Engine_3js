@@ -211,37 +211,87 @@ export function numInput({ value = 0, step = 1, min, max, decimals = 3, onChange
 
 // ── Slider ────────────────────────────────────────────────────────────────────
 
-/** Range slider with value label. Returns { el, input, setValue }. */
-export function slider({ value = 0, min = 0, max = 1, step = 0.01, onChange } = {}) {
-  const wrap     = document.createElement('div');
+/** Range slider with value box. Returns { el, input, numberInput, setValue }. */
+export function slider({ value = 0, min = 0, max = 1, step = 0.01, decimals, defaultValue, onChange } = {}) {
+  const wrap = document.createElement('div');
   wrap.className = 'ce-prop-slider-wrap';
+  wrap.style.cssText = 'display:flex;align-items:center;gap:8px;width:100%;';
 
-  const inp     = document.createElement('input');
-  inp.type      = 'range';
-  inp.min       = String(min);
-  inp.max       = String(max);
-  inp.step      = String(step);
-  inp.value     = String(value);
+  const precision = (() => {
+    if (Number.isInteger(decimals)) return Math.max(0, decimals);
+    const stepText = String(step);
+    if (stepText.includes('e-')) {
+      const exp = parseInt(stepText.split('e-')[1] || '0', 10);
+      return Number.isFinite(exp) ? Math.max(0, exp) : 2;
+    }
+    const frac = stepText.split('.')[1];
+    return frac ? frac.length : 2;
+  })();
+
+  const clamp = (v) => {
+    const num = Number.isFinite(v) ? v : 0;
+    return Math.min(max, Math.max(min, num));
+  };
+
+  const format = (v) => {
+    const num = clamp(parseFloat(v));
+    return Number.isFinite(num) ? num.toFixed(precision) : Number(clamp(0)).toFixed(precision);
+  };
+
+  const initial = clamp(parseFloat(value));
+  const resetValue = clamp(defaultValue !== undefined ? parseFloat(defaultValue) : initial);
+
+  const inp = document.createElement('input');
+  inp.type = 'range';
+  inp.min = String(min);
+  inp.max = String(max);
+  inp.step = String(step);
+  inp.value = String(initial);
   inp.className = 'ce-prop-slider';
+  inp.style.flex = '1';
 
-  const lbl     = document.createElement('span');
-  lbl.className   = 'ce-prop-slider-val';
-  lbl.textContent = parseFloat(value).toFixed(2);
+  const num = document.createElement('input');
+  num.type = 'number';
+  num.min = String(min);
+  num.max = String(max);
+  num.step = String(step);
+  num.value = format(initial);
+  num.className = 'ce-prop-num ce-prop-slider-num';
+  num.style.cssText = 'width:78px;flex:0 0 78px;';
 
-  inp.addEventListener('input', () => {
-    lbl.textContent = parseFloat(inp.value).toFixed(2);
-    if (onChange) onChange(parseFloat(inp.value));
+  const sync = (raw, fire = true) => {
+    const next = clamp(parseFloat(raw));
+    inp.value = String(next);
+    num.value = format(next);
+    if (fire && onChange) onChange(next);
+  };
+
+  inp.addEventListener('input', () => sync(inp.value, true));
+  num.addEventListener('change', () => sync(num.value, true));
+  const reset = () => sync(resetValue, true);
+  inp.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    reset();
+  });
+  num.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    reset();
+  });
+  wrap.addEventListener('dblclick', (e) => {
+    if (e.target === inp || e.target === num) return;
+    e.preventDefault();
+    e.stopPropagation();
+    reset();
   });
 
   wrap.appendChild(inp);
-  wrap.appendChild(lbl);
+  wrap.appendChild(num);
 
-  const setValue = (v) => {
-    inp.value       = String(v);
-    lbl.textContent = parseFloat(v).toFixed(2);
-  };
+  const setValue = (v) => sync(v, false);
 
-  return { el: wrap, input: inp, setValue };
+  return { el: wrap, input: inp, numberInput: num, setValue };
 }
 
 // ── Checkbox ──────────────────────────────────────────────────────────────────
