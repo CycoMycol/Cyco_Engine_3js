@@ -1,5 +1,7 @@
 ﻿import * as THREE from 'three';
 import { BasePanel } from '../panels/BasePanel.js';
+import { loadPrefs } from './PreferencesWindow.js';
+import { getColliderBounds } from '../utils/colliderBounds.js';
 
 /**
  * ComponentPicker.js — Dockable component picker panel helper.
@@ -140,13 +142,13 @@ export const COMPONENT_TABS = [
 
 const DEFAULTS = {
   'Rigid Body':            { type: 'Rigid Body',           bodyType: 'dynamic', mass: 1, linearDamping: 0, angularDamping: 0, lockRotation: false },
-  'Box Collider':          { type: 'Box Collider',         isTrigger: false, friction: 0.5, restitution: 0, scale: { x: 0.5, y: 0.5, z: 0.5 } },
-  'Sphere Collider':       { type: 'Sphere Collider',      isTrigger: false, friction: 0.5, restitution: 0, scale: { x: 0.5, y: 0.5, z: 0.5 } },
-  'Capsule Collider':      { type: 'Capsule Collider',     isTrigger: false, scale: { x: 0.25, y: 0.5, z: 0.25 } },
+  'Box Collider':          { type: 'Box Collider',         isTrigger: false, friction: 0.5, restitution: 0, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.5, y: 0.5, z: 0.5 } },
+  'Sphere Collider':       { type: 'Sphere Collider',      isTrigger: false, friction: 0.5, restitution: 0, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.5, y: 0.5, z: 0.5 } },
+  'Capsule Collider':      { type: 'Capsule Collider',     isTrigger: false, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.25, y: 0.5, z: 0.25 } },
   'Mesh Collider':         { type: 'Mesh Collider',        mode: 'convexHull', isTrigger: false },
-  'Box Trigger':           { type: 'Box Trigger',          isTrigger: true, scale: { x: 0.5, y: 0.5, z: 0.5 } },
-  'Sphere Trigger':        { type: 'Sphere Trigger',       isTrigger: true, scale: { x: 0.5, y: 0.5, z: 0.5 } },
-  'Capsule Trigger':       { type: 'Capsule Trigger',      isTrigger: true, scale: { x: 0.25, y: 0.5, z: 0.25 } },
+  'Box Trigger':           { type: 'Box Trigger',          isTrigger: true, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.5, y: 0.5, z: 0.5 } },
+  'Sphere Trigger':        { type: 'Sphere Trigger',       isTrigger: true, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.5, y: 0.5, z: 0.5 } },
+  'Capsule Trigger':       { type: 'Capsule Trigger',      isTrigger: true, position: { x: 0, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0, w: 1 }, scale: { x: 0.25, y: 0.5, z: 0.25 } },
   'Mesh Trigger':          { type: 'Mesh Trigger',         mode: 'convexHull', isTrigger: true },
   'Character Controller':  { type: 'Character Controller', offset: 0.01, maxSlopeAngle: 45, autoStepHeight: 0.25, snapToGround: true, moveSpeed: 5, jumpVelocity: 8, controlled: true },
   'Joint':                 { type: 'Joint',                jointType: 'fixed', targetUuid: '', axis: { x: 0, y: 1, z: 0 }, anchorA: { x: 0, y: 0, z: 0 }, anchorB: { x: 0, y: 0, z: 0 } },
@@ -288,12 +290,9 @@ export const ComponentPicker = {
       return result;
     }
 
-    // Ensure world matrix is up to date
-    object.updateMatrixWorld(true);
-
-    // Compute the world-space bounds for the object. This handles scale, rotation,
-    // hierarchy, and any children that contribute to the shape.
-    const bbox = new THREE.Box3().setFromObject(object);
+    const scope = loadPrefs()?.gizmo?.colliderBox?.fitScope ?? 'smart';
+    const bbox = getColliderBounds(object, { scope });
+    if (!bbox) return result;
 
     if (!bbox.isEmpty()) {
       const size = new THREE.Vector3();
@@ -307,12 +306,14 @@ export const ComponentPicker = {
             y: Math.max(size.y * 0.5, 0.05),
             z: Math.max(size.z * 0.5, 0.05),
           };
+          result.scale = { ...result.halfExtents };
           break;
         case 'Sphere Collider':
         case 'Sphere Trigger': {
           const sphere = new THREE.Sphere();
           bbox.getBoundingSphere(sphere);
           result.radius = Math.max(sphere.radius, 0.05);
+          result.scale = { x: result.radius, y: result.radius, z: result.radius };
           break;
         }
         case 'Capsule Collider':
@@ -320,6 +321,7 @@ export const ComponentPicker = {
           const radius = Math.max(Math.min(size.x, size.z) * 0.5, 0.05);
           result.radius = radius;
           result.halfHeight = Math.max(size.y * 0.5 - radius, 0.05);
+          result.scale = { x: result.radius, y: result.halfHeight, z: result.radius };
           break;
         }
         default:

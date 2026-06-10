@@ -25,6 +25,10 @@ export class TransformGizmo {
     this._boxActive     = false;
     this._hoveredHandle = null;
     this._interaction   = null;
+    this._physicsEdit   = false;
+    this._physicsOwner  = null;
+    this._physicsProxy  = null;
+    this._physicsTemporaryOutline = false;
 
     this._raycaster = new THREE.Raycaster();
     this._pointer   = new THREE.Vector2();
@@ -42,6 +46,10 @@ export class TransformGizmo {
     this._onGizmoPointerMove = this._onGizmoPointerMove.bind(this);
     this._onGizmoPointerUp   = this._onGizmoPointerUp.bind(this);
     this._onPrefsChanged     = this._onPrefsChanged.bind(this);
+    this._onPhysicsEditMode  = this._onPhysicsEditMode.bind(this);
+    this._onPhysicsProxyReady = this._onPhysicsProxyReady.bind(this);
+    this._onPhysicsEditFocus = this._onPhysicsEditFocus.bind(this);
+    this._onPhysicsTool      = this._onPhysicsTool.bind(this);
     this._rcHandler          = null;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
@@ -55,6 +63,10 @@ export class TransformGizmo {
     window.addEventListener('cyco-hierarchy-remove',      this._onHierarchyRemove);
     window.addEventListener('cyco-preferences-change',    this._onPrefsChanged);
     window.addEventListener('cyco-preferences-preview',   this._onPrefsChanged);
+    window.addEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
+    window.addEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
+    window.addEventListener('cyco-physics-edit-focus',    this._onPhysicsEditFocus);
+    window.addEventListener('cyco-physics-vp-tool',       this._onPhysicsTool);
   }
 
   get controls() { return this._controls; }
@@ -86,6 +98,15 @@ export class TransformGizmo {
       if (orbit) orbit.enabled = !event.value;
       this.selectionManager._gizmoDragging = !!event.value;
       this._isDragging = !!event.value;
+      if (event.value) {
+        window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
+      }
+    });
+
+    tc.addEventListener('change', () => {
+      if (this._boxActive && this._targetObject) {
+        this._updateBoxGizmo();
+      }
     });
 
     tc.addEventListener('mouseDown', () => {
@@ -93,6 +114,7 @@ export class TransformGizmo {
       const orbit = this.engine.controls;
       if (orbit) orbit.enabled = false;
       if (this._targetObject) this._matrixBefore = this._targetObject.matrix.clone();
+      window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
     });
 
     tc.addEventListener('mouseUp', () => {
@@ -110,6 +132,9 @@ export class TransformGizmo {
             undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
           }
         }));
+      }
+      if (this._boxActive && this._targetObject) {
+        this._updateBoxGizmo();
       }
       this._matrixBefore = null;
     });
@@ -179,6 +204,21 @@ export class TransformGizmo {
     }
   }
 
+  _getBoxPrefs() {
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
+    return this._physicsEdit
+      ? (gizmo.colliderBox ?? gizmo.box)
+      : gizmo.box;
+  }
+
+  _getBoundsPrefs() {
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
+    if (!this._physicsEdit) return gizmo.bounds;
+    if (this._physicsProxy) return gizmo.colliderBounds ?? gizmo.bounds;
+    if (this._physicsTemporaryOutline) return gizmo.temporaryBounds ?? gizmo.colliderBounds ?? gizmo.bounds;
+    return gizmo.colliderBounds ?? gizmo.bounds;
+  }
+
   _setBoxModeVisibility(mode = 'full') {
     if (!this._boxGroup) return;
     const showHandles = mode === 'full';
@@ -214,6 +254,7 @@ export class TransformGizmo {
     }
     this._gizmo = null;
     this.controls = null;
+    this._physicsTemporaryOutline = false;
 
     if (this._boxGroup) {
       this._boxGroup.traverse((child) => {
@@ -232,6 +273,21 @@ export class TransformGizmo {
   }
 
   _applyMode() {
+    if (this._physicsEdit) {
+      if (this._tc) {
+        this._tc.detach();
+        this._tc.enabled = false;
+      }
+      if (this._gizmo) this._gizmo.visible = false;
+      if (this._targetObject) {
+        this._showBox();
+        this._setBoxModeVisibility(this._physicsProxy ? 'full' : 'outline');
+      } else {
+        this._hideBox();
+      }
+      return;
+    }
+
     const hasTarget = !!this._targetObject;
     if (this._mode === 'universal' || this._mode === 'select') {
       if (this._tc) {
@@ -264,6 +320,14 @@ export class TransformGizmo {
   }
 
   _attachTo(obj) {
+    if (this._physicsEdit) {
+      this._physicsOwner = obj ?? null;
+      this._physicsProxy = obj?.userData?._physicsEditProxy ?? null;
+      this._physicsTemporaryOutline = !this._physicsProxy && !!obj;
+      this._targetObject = this._physicsProxy || obj || null;
+      this._applyMode();
+      return;
+    }
     this._targetObject = obj;
     if (this._mode === 'universal' || this._mode === 'select') {
       if (obj) {
@@ -286,6 +350,7 @@ export class TransformGizmo {
   }
 
   _detachAll() {
+    if (this._physicsEdit) return;
     this._targetObject = null;
     if (this._tc) this._tc.detach();
     this._hideBox();
@@ -294,8 +359,8 @@ export class TransformGizmo {
   detach() { this._detachAll(); }
 
   _updateBoxPalette() {
-    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
-    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    const boxPrefs = this._getBoxPrefs();
+    const boundsPrefs = this._getBoundsPrefs();
     if (this._boxOutline?.material) {
       this._boxOutline.material.color.set(boundsPrefs.outlineColor ?? boxPrefs.outlineColor ?? '#e8eeff');
       this._boxOutline.material.opacity = Math.min(1, 0.55 + (boundsPrefs.thickness ?? 1) * 0.08);
@@ -390,8 +455,8 @@ export class TransformGizmo {
     if (this._boxGroup) return;
     const scene = this.engine.scene;
     if (!scene) return;
-    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
-    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    const boxPrefs = this._getBoxPrefs();
+    const boundsPrefs = this._getBoundsPrefs();
 
     this._boxGroup = new THREE.Group();
     this._boxGroup.name = '__cyco_box_gizmo__';
@@ -599,10 +664,15 @@ export class TransformGizmo {
     if (!this._boxActive || !this._targetObject || !this._boxGroup) return;
 
     const target = this._targetObject;
+    if (typeof target.updateWorldMatrix === 'function') {
+      target.updateWorldMatrix(true, true);
+    } else if (typeof target.updateMatrixWorld === 'function') {
+      target.updateMatrixWorld(true);
+    }
     const outline = this._boxGroup.getObjectByName('BoxGizmoOutline');
     if (!outline) return;
-    const boxPrefs = this._prefs?.gizmo?.box ?? loadPrefs().gizmo.box;
-    const boundsPrefs = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    const boxPrefs = this._getBoxPrefs();
+    const boundsPrefs = this._getBoundsPrefs();
 
     const center = new THREE.Vector3();
     const size = new THREE.Vector3(1, 1, 1);
@@ -721,6 +791,15 @@ export class TransformGizmo {
   _onSelectNode(event) {
     const { object } = event.detail;
     if (!object || object.userData.cycoLocked) { this.detach(); return; }
+    if (this._physicsEdit) {
+      this._physicsOwner = object;
+      this._physicsProxy = object.userData?._physicsEditProxy ?? null;
+      this._physicsTemporaryOutline = !this._physicsProxy;
+      this._targetObject = this._physicsProxy || object;
+      this._mode = 'universal';
+      this._applyMode();
+      return;
+    }
     this._attachTo(object);
   }
 
@@ -763,7 +842,8 @@ export class TransformGizmo {
   }
 
   _onGizmoPointerDown(event) {
-    if (event.button !== 0 || this._mode !== 'universal' || !this._boxActive || !this._boxGroup) return;
+    if (event.button !== 0 || (!this._physicsEdit && this._mode !== 'universal') || !this._boxActive || !this._boxGroup) return;
+    if (this._physicsEdit && !this._physicsProxy) return;
     const hit = this._pickGizmoHit(event);
     if (!hit) return;
 
@@ -772,7 +852,7 @@ export class TransformGizmo {
     window.__cyco = window.__cyco || {};
     window.__cyco._suppressSelectionManagerClick = true;
 
-    if (this._targetObject && !this.selectionManager.selected.has(this._targetObject)) {
+    if (!this._physicsEdit && this._targetObject && !this.selectionManager.selected.has(this._targetObject)) {
       this.selectionManager.selectObject(this._targetObject);
     }
 
@@ -819,11 +899,13 @@ export class TransformGizmo {
     }
 
     this._isDragging = true;
+    this.selectionManager._gizmoDragging = true;
   }
 
   _onGizmoPointerMove(event) {
     if (!this._boxActive || !this._boxGroup) return;
-    if (this._mode !== 'universal') return;
+    if (!this._physicsEdit && this._mode !== 'universal') return;
+    if (this._physicsEdit && !this._physicsProxy) return;
     if (this._interaction && this._interaction.pointerId === event.pointerId) {
       event.stopPropagation();
       event.preventDefault();
@@ -863,7 +945,9 @@ export class TransformGizmo {
     const obj = this._targetObject;
     const before = this._matrixBefore;
     const after = obj ? obj.matrix.clone() : null;
-    if (obj && before && after && !before.equals(after)) {
+    if (this._physicsEdit) {
+      this._syncPhysicsComponentFromProxy();
+    } else if (obj && before && after && !before.equals(after)) {
       window.dispatchEvent(new CustomEvent('cyco-command-execute', {
         detail: {
           name: `${this._interaction.type.charAt(0).toUpperCase() + this._interaction.type.slice(1)} ${obj.name}`,
@@ -876,6 +960,7 @@ export class TransformGizmo {
     this._matrixBefore = null;
     this._interaction = null;
     this._isDragging = false;
+    this.selectionManager._gizmoDragging = false;
     if (window.__cyco) { try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {} }
     this._updateBoxGizmo();
     this._clearHoveredHandle();
@@ -981,6 +1066,7 @@ export class TransformGizmo {
     } else if (this._interaction.type === 'scaleUniform') {
       this._updateScaleUniform(dx, dy);
     }
+    if (this._physicsEdit) this._syncPhysicsComponentFromProxy();
     this._updateBoxGizmo();
   }
 
@@ -1054,6 +1140,93 @@ export class TransformGizmo {
     this._targetObject.scale.copy(this._interaction.startScale).multiplyScalar(factor);
   }
 
+  _onPhysicsEditMode(event) {
+    this._physicsEdit = !!event.detail?.enabled;
+    if (this._physicsEdit) {
+      const selected = this.selectionManager?.selected ? [...this.selectionManager.selected] : [];
+      const current = selected[selected.length - 1] ?? null;
+      if (current) {
+        this._physicsOwner = current;
+      }
+      this._mode = 'universal';
+      this._physicsProxy = this._physicsOwner?.userData?._physicsEditProxy ?? null;
+      this._physicsTemporaryOutline = !this._physicsProxy && !!this._physicsOwner;
+      this._targetObject = this._physicsProxy || this._physicsOwner || null;
+    } else {
+      this._physicsOwner = null;
+      this._physicsProxy = null;
+      this._physicsTemporaryOutline = false;
+      this._targetObject = null;
+      this._mode = 'select';
+    }
+    this._applyMode();
+  }
+
+  _onPhysicsProxyReady(event) {
+    const { object, proxy } = event.detail ?? {};
+    if (!this._physicsEdit || !object || !proxy) return;
+    if (this._physicsOwner && this._physicsOwner !== object) return;
+    this._physicsOwner = object;
+    this._physicsProxy = proxy;
+    this._physicsTemporaryOutline = false;
+    this._targetObject = proxy;
+    this._applyMode();
+  }
+
+  _onPhysicsEditFocus(event) {
+    const object = event.detail?.object;
+    if (!this._physicsEdit || !object) return;
+    this._physicsOwner = object;
+    this._physicsProxy = object.userData?._physicsEditProxy ?? null;
+    this._physicsTemporaryOutline = !this._physicsProxy;
+    this._targetObject = this._physicsProxy || object;
+    this._applyMode();
+  }
+
+  _onPhysicsTool(event) {
+    if (!this._physicsEdit) return;
+    const mode = event.detail?.mode;
+    if (['translate', 'rotate', 'scale', 'universal'].includes(mode)) {
+      this._mode = 'universal';
+      this._applyMode();
+    }
+  }
+
+  _syncPhysicsComponentFromProxy() {
+    const proxy = this._physicsProxy || this._targetObject;
+    const comp = proxy?.userData?.physicsComponent;
+    const owner = this._physicsOwner || proxy?.parent;
+    if (!proxy || !comp || !owner) return;
+
+    comp.position = { x: proxy.position.x, y: proxy.position.y, z: proxy.position.z };
+    comp.offset = { ...comp.position };
+    comp.rotation = { x: proxy.quaternion.x, y: proxy.quaternion.y, z: proxy.quaternion.z, w: proxy.quaternion.w };
+
+    const worldScale = new THREE.Vector3();
+    proxy.getWorldScale(worldScale);
+    comp.scale = {
+      x: Math.max(0.001, Math.abs(worldScale.x)),
+      y: Math.max(0.001, Math.abs(worldScale.y)),
+      z: Math.max(0.001, Math.abs(worldScale.z)),
+    };
+
+    if (comp.type === 'Box Collider' || comp.type === 'Box Trigger') {
+      comp.halfExtents = { ...comp.scale };
+    } else if (comp.type === 'Sphere Collider' || comp.type === 'Sphere Trigger') {
+      const radius = (comp.scale.x + comp.scale.y + comp.scale.z) / 3;
+      comp.radius = Math.max(0.001, radius);
+      comp.scale = { x: comp.radius, y: comp.radius, z: comp.radius };
+    } else if (comp.type === 'Capsule Collider' || comp.type === 'Capsule Trigger') {
+      comp.radius = Math.max(0.001, Math.min(comp.scale.x, comp.scale.z));
+      comp.halfHeight = Math.max(0.001, comp.scale.y);
+      comp.scale = { x: comp.radius, y: comp.halfHeight, z: comp.radius };
+    }
+
+    window.dispatchEvent(new CustomEvent('cyco-physics-edit-update', {
+      detail: { object: owner, component: comp }
+    }));
+  }
+
   suspend() { this.detach(); }
   restore() { if (this._targetObject && this._mode !== 'select') this._attachTo(this._targetObject); }
 
@@ -1067,6 +1240,10 @@ export class TransformGizmo {
     window.removeEventListener('cyco-vp-world', this._onWorld);
     window.removeEventListener('cyco-rvp-snap', this._onSnap);
     window.removeEventListener('cyco-hierarchy-remove', this._onHierarchyRemove);
+    window.removeEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
+    window.removeEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
+    window.removeEventListener('cyco-physics-edit-focus', this._onPhysicsEditFocus);
+    window.removeEventListener('cyco-physics-vp-tool', this._onPhysicsTool);
     this._teardown();
     window.removeEventListener('cyco-preferences-change', this._onPrefsChanged);
     window.removeEventListener('cyco-preferences-preview', this._onPrefsChanged);

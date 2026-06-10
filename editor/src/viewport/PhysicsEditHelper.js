@@ -24,6 +24,7 @@
  */
 
 import * as THREE from 'three';
+import { loadPrefs } from '../ui/PreferencesWindow.js';
 
 try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[PhysicsEditHelper] module loaded'); else console.log('[PhysicsEditHelper] module loaded'); } catch (err) {}
 
@@ -43,6 +44,7 @@ export class PhysicsEditHelper {
     this._engine  = viewportEngine;
     this._enabled = false;
     this._playing = false;
+    this._prefs = loadPrefs();
 
     /** Map: object.uuid → THREE.LineSegments[] (overlay meshes added to scene) */
     this._overlays = new Map();
@@ -55,6 +57,7 @@ export class PhysicsEditHelper {
     this._onSceneDirty  = this._onSceneDirty.bind(this);
     this._onEditUpdate  = this._onEditUpdate.bind(this);
     this._onSelectNode  = this._onSelectNode.bind(this);
+    this._onPrefsChanged = this._onPrefsChanged.bind(this);
 
     window.addEventListener('cyco-physics-edit-mode', this._onEditMode);
     window.addEventListener('cyco-runtime-state',     this._onRuntimeState);
@@ -62,6 +65,8 @@ export class PhysicsEditHelper {
     window.addEventListener('cyco-scene-dirty',       this._onSceneDirty);
     window.addEventListener('cyco-physics-edit-update',this._onEditUpdate);
     window.addEventListener('cyco-select-node',        this._onSelectNode);
+    window.addEventListener('cyco-preferences-change', this._onPrefsChanged);
+    window.addEventListener('cyco-preferences-preview',this._onPrefsChanged);
 
     this._raycaster = new THREE.Raycaster();
     this._domElement = null;
@@ -75,6 +80,8 @@ export class PhysicsEditHelper {
     window.removeEventListener('cyco-scene-dirty',       this._onSceneDirty);
     window.removeEventListener('cyco-physics-edit-update',this._onEditUpdate);
     window.removeEventListener('cyco-select-node',        this._onSelectNode);
+    window.removeEventListener('cyco-preferences-change', this._onPrefsChanged);
+    window.removeEventListener('cyco-preferences-preview',this._onPrefsChanged);
     this._clearAll();
   }
 
@@ -89,6 +96,11 @@ export class PhysicsEditHelper {
       this._detachPointer();
       this._clearAll();
     }
+  }
+
+  _onPrefsChanged(event) {
+    this._prefs = event.detail?.prefs ?? loadPrefs();
+    if (this._enabled && !this._playing) this._rebuild();
   }
 
   _attachPointer() {
@@ -114,67 +126,8 @@ export class PhysicsEditHelper {
 
   _onPointerDown(e) {
     if (!this._enabled || this._playing) return;
-    try {
-      // Signal SelectionManager to skip its click handling for this press
-      try { window.__cyco = window.__cyco || {}; window.__cyco._suppressSelectionManagerClick = true; } catch (err) {}
-      // Ensure suppression is cleared eventually in case pointerup is missed
-      setTimeout(() => { try { if (window.__cyco) delete window.__cyco._suppressSelectionManagerClick; } catch (err) {} }, 250);
-      // Do not stop propagation — allow TransformControls and other systems to receive the event
-      const rect = this._domElement.getBoundingClientRect();
-      const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      this._raycaster.setFromCamera({ x, y }, this._engine.camera);
-
-      // Build list of overlay objects to test
-      const overlays = [];
-      for (const meshes of this._overlays.values()) {
-        for (const m of meshes) overlays.push(m);
-      }
-      if (overlays.length === 0) return;
-      const hits = this._raycaster.intersectObjects(overlays, true);
-      if (hits && hits.length > 0) {
-        const hit = hits[0];
-        const hitObj = hit.object;
-        const ownerUuid = hitObj.userData?._ownerUuid || hitObj.parent?.userData?._ownerUuid || null;
-        try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[PhysicsEditHelper] overlay hit', { point: hit.point, object: hitObj.name || hitObj.uuid, ownerUuid }); else console.log('[PhysicsEditHelper] overlay hit', { point: hit.point, object: hitObj.name || hitObj.uuid, ownerUuid }); } catch (err) {}
-        if (ownerUuid) {
-          const owner = this._engine.scene?.getObjectByProperty('uuid', ownerUuid) || null;
-          if (owner) {
-            window.dispatchEvent(new CustomEvent('cyco-select-node', { detail: { object: owner } }));
-            // ensure the editor selects the collider for physics edit mode
-            window.dispatchEvent(new CustomEvent('cyco-physics-edit-focus', { detail: { object: owner } }));
-              // prevent the SelectionManager from clearing selection on pointerup
-              try {
-                window.__cyco = window.__cyco || {};
-                window.__cyco._suppressSelectionManagerClick = true;
-              } catch (err) {}
-              // Temporarily disable overlay raycasts for this object's overlays so
-              // TransformControls can receive pointer events for gizmo handles.
-              try {
-                const overlays = this._overlays.get(owner.uuid) || [];
-                for (const o of overlays) {
-                  if (!o.userData) o.userData = {};
-                  if (!o.userData._origRaycast) o.userData._origRaycast = o.raycast;
-                  o.raycast = () => {};
-                }
-                const restore = () => {
-                  const overlays2 = this._overlays.get(owner.uuid) || [];
-                  for (const o of overlays2) {
-                    if (o.userData && o.userData._origRaycast) {
-                      o.raycast = o.userData._origRaycast;
-                      delete o.userData._origRaycast;
-                    }
-                  }
-                  try { document.removeEventListener('pointerup', restore); } catch (e) {}
-                };
-                document.addEventListener('pointerup', restore, { once: true });
-              } catch (err) {}
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('PhysicsEditHelper pointer handling failed', err);
-    }
+    // Collider overlays are now editor-only and non-selectable, so regular
+    // SelectionManager picking can decide what the user meant.
   }
 
   _onRuntimeState(e) {
@@ -238,6 +191,7 @@ export class PhysicsEditHelper {
     }
 
     this._clearObject(object);
+    for (const comp of comps) this._normalizeColliderComponent(comp);
     const proxy = this._ensureColliderProxy(object, comps);
 
     for (const comp of comps) {
@@ -287,6 +241,7 @@ export class PhysicsEditHelper {
     scene.traverse((obj) => {
       const comps = obj.userData?.physics?.components;
       if (!Array.isArray(comps) || comps.length === 0) return;
+      for (const comp of comps) this._normalizeColliderComponent(comp);
       const proxy = this._ensureColliderProxy(obj, comps);
       for (const comp of comps) {
         const lines = this._makeOverlay(comp, obj, proxy);
@@ -337,8 +292,15 @@ export class PhysicsEditHelper {
    */
   _makeOverlay(comp, obj, attachToProxy = false) {
     const isTrigger = !!comp.isTrigger;
-    const color = isTrigger ? COLORS.trigger : (COLORS[comp.type] ?? 0xffffff);
-    const mat   = new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: 0.75 });
+    const boundsPrefs = this._prefs?.gizmo?.colliderBounds ?? loadPrefs().gizmo.colliderBounds;
+    const color = boundsPrefs.outlineColor ?? (isTrigger ? COLORS.trigger : (COLORS[comp.type] ?? 0xffffff));
+    const mat   = new THREE.LineBasicMaterial({
+      color,
+      depthTest: false,
+      transparent: true,
+      opacity: Math.min(1, 0.55 + (boundsPrefs.thickness ?? 1) * 0.08),
+      linewidth: Math.max(1, boundsPrefs.thickness ?? 1),
+    });
 
     let geo = null;
     const bbox = new THREE.Box3().setFromObject(obj);
@@ -346,7 +308,8 @@ export class PhysicsEditHelper {
     if (!bbox.isEmpty()) bbox.getSize(extents);
 
     switch (comp.type) {
-      case 'Box Collider': {
+      case 'Box Collider':
+      case 'Box Trigger': {
         if (attachToProxy) {
           geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(2, 2, 2));
         } else {
@@ -384,7 +347,8 @@ export class PhysicsEditHelper {
         break;
       }
 
-      case 'Sphere Collider': {
+      case 'Sphere Collider':
+      case 'Sphere Trigger': {
         if (attachToProxy) {
           geo = new THREE.EdgesGeometry(new THREE.SphereGeometry(1, 12, 8));
         } else {
@@ -409,7 +373,8 @@ export class PhysicsEditHelper {
         break;
       }
 
-      case 'Capsule Collider': {
+      case 'Capsule Collider':
+      case 'Capsule Trigger': {
         if (attachToProxy) {
           geo = new THREE.EdgesGeometry(new THREE.CapsuleGeometry(1, 2, 4, 8));
         } else {
@@ -433,7 +398,8 @@ export class PhysicsEditHelper {
         break;
       }
 
-      case 'Mesh Collider': {
+      case 'Mesh Collider':
+      case 'Mesh Trigger': {
         if (!obj.geometry) return null;
         geo = new THREE.EdgesGeometry(obj.geometry);
         break;
@@ -456,16 +422,6 @@ export class PhysicsEditHelper {
     const lines = new THREE.LineSegments(geo, mat);
     // mark ownership for picking
     lines.userData._ownerUuid = obj.uuid;
-    // allow component to override visual style
-    if (comp.color) {
-      try { lines.material.color.set(comp.color); } catch (err) {}
-    }
-    if (comp.lineOpacity != null) {
-      lines.material.opacity = comp.lineOpacity;
-    }
-    if (comp.lineThickness != null) {
-      try { lines.material.linewidth = comp.lineThickness; } catch (err) {}
-    }
     if (!attachToProxy) {
       const position = this._getColliderLocalPosition(comp);
       lines.position.set(position.x ?? 0, position.y ?? 0, position.z ?? 0);
@@ -502,7 +458,8 @@ export class PhysicsEditHelper {
   }
 
   _ensureColliderProxy(obj, comps) {
-    const comp = comps.find(c => ['Box Collider', 'Sphere Collider', 'Capsule Collider', 'Mesh Collider'].includes(c.type));
+    const comp = comps.find(c => ['Box Collider', 'Sphere Collider', 'Capsule Collider', 'Mesh Collider',
+      'Box Trigger', 'Sphere Trigger', 'Capsule Trigger', 'Mesh Trigger'].includes(c.type));
     if (!comp) return null;
 
     let proxy = obj.userData?._physicsEditProxy;
@@ -561,6 +518,41 @@ export class PhysicsEditHelper {
 
   _getColliderLocalPosition(comp) {
     return comp.position || comp.offset || { x: 0, y: 0, z: 0 };
+  }
+
+  _normalizeColliderComponent(comp) {
+    if (!comp) return;
+    const type = String(comp.type || '');
+    if (!type.includes('Collider') && !type.includes('Trigger')) return;
+
+    if (!comp.position) comp.position = { ...(comp.offset || { x: 0, y: 0, z: 0 }) };
+    if (!comp.offset) comp.offset = { ...comp.position };
+    if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
+    if (!comp.scale) {
+      if (comp.halfExtents) {
+        comp.scale = {
+          x: comp.halfExtents.x ?? 0.5,
+          y: comp.halfExtents.y ?? 0.5,
+          z: comp.halfExtents.z ?? 0.5,
+        };
+      } else if (comp.radius != null || comp.halfHeight != null) {
+        const radius = comp.radius ?? 0.5;
+        comp.scale = { x: radius, y: comp.halfHeight ?? radius, z: radius };
+      } else {
+        comp.scale = { x: 0.5, y: 0.5, z: 0.5 };
+      }
+    }
+
+    if ((type === 'Box Collider' || type === 'Box Trigger') && !comp.halfExtents) {
+      comp.halfExtents = { x: comp.scale.x ?? 0.5, y: comp.scale.y ?? 0.5, z: comp.scale.z ?? 0.5 };
+    }
+    if ((type === 'Sphere Collider' || type === 'Sphere Trigger') && comp.radius == null) {
+      comp.radius = comp.scale.x ?? comp.scale.y ?? comp.scale.z ?? 0.5;
+    }
+    if (type === 'Capsule Collider' || type === 'Capsule Trigger') {
+      comp.radius = comp.radius ?? comp.scale.x ?? 0.25;
+      comp.halfHeight = comp.halfHeight ?? comp.scale.y ?? 0.5;
+    }
   }
 
   _getColliderWorldScale(comp) {
@@ -628,13 +620,16 @@ export class PhysicsEditHelper {
 
     let mesh = proxy.children.find((child) => child.userData?._isColliderProxyMesh) || null;
     if (!mesh || !mesh.geometry || !mesh.material) {
-      if (mesh && mesh.parent) mesh.parent.remove(mesh);
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ visible: false }));
+        if (mesh && mesh.parent) mesh.parent.remove(mesh);
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshBasicMaterial({ visible: false }));
       mesh.userData._isColliderProxyMesh = true;
-      // Make the proxy mesh non-interactive so it doesn't block scene picking
+      mesh.userData._editorOnly = true;
+        // Make the proxy mesh non-interactive so it doesn't block scene picking
       mesh.visible = false;
       mesh.raycast = () => {};
       proxy.add(mesh);
+    } else {
+      mesh.userData._editorOnly = true;
     }
   }
 

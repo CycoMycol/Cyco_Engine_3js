@@ -284,10 +284,9 @@ export class SelectionManager {
 
   _selectObject(object) {
     if (this.selected.has(object)) return; // already selected
-    // If this object was being hovered, clear the hover outline — selection outline takes over
-    if (this._hoveredObject === object) {
-      window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
-    }
+    // Selection should always clear hover so stale hover outlines cannot linger
+    // behind a moved object.
+    this._setHoveredObject(null);
     this.selected.add(object);
     this._dispatchSelection();
   }
@@ -316,6 +315,7 @@ export class SelectionManager {
     if (!obj) return true;
     if (obj.userData?._isGizmo)  return true;
     if (obj.userData?._isHelper) return true;
+    if (obj.userData?._editorOnly) return true;
     if (obj.type === 'GridHelper' || obj.type === 'AxesHelper') return true;
     if (obj.name === 'Main Grid') return true;
     if (this.nonSelectableSet.has(obj)) return true;
@@ -324,6 +324,7 @@ export class SelectionManager {
     while (p) {
       if (this.nonSelectableSet.has(p)) return true;
       if (p.userData?._isHelper) return true;
+      if (p.userData?._editorOnly) return true;
       if (p.type === 'GridHelper' || p.type === 'AxesHelper') return true;
       if (p.name === 'Main Grid') return true;
       p = p.parent;

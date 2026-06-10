@@ -8,6 +8,8 @@
 import * as THREE from 'three';
 import { section, row, vec3, readOnly, colorSwatch, slider, numInput, nameHeader, checkbox, select } from './propUtils.js';
 import { ComponentPicker } from '../ui/ComponentPicker.js';
+import { loadPrefs } from '../ui/PreferencesWindow.js';
+import { getColliderBounds, isColliderAutoFitExcluded } from '../utils/colliderBounds.js';
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
@@ -296,6 +298,10 @@ export class ObjectProperties {
         }
         const comp = ComponentPicker.defaultParams(type, obj);
         components.push(comp);
+        if (type.includes('Collider') || type.includes('Trigger')) {
+          window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: true } }));
+          window.dispatchEvent(new CustomEvent('cyco-physics-edit-update', { detail: { object: obj, component: comp } }));
+        }
         // Rebuild the panel to show new component
         this._el.innerHTML = '';
         this._posVec = null; this._rotVec = null; this._sclVec = null;
@@ -461,6 +467,19 @@ export class ObjectProperties {
       return btn;
     };
 
+    const _applyAutoFitCenter = (worldCenter) => {
+      if (!worldCenter) return;
+      const localCenter = worldCenter.clone();
+      obj.worldToLocal(localCenter);
+      comp.position = { x: localCenter.x, y: localCenter.y, z: localCenter.z };
+      comp.offset = { ...comp.position };
+    };
+
+    const _fitBounds = () => {
+      const scope = loadPrefs()?.gizmo?.colliderBox?.fitScope ?? 'smart';
+      return getColliderBounds(obj, { scope, excludeNode: isColliderAutoFitExcluded });
+    };
+
     switch (comp.type) {
       case 'Rigid Body':
         _field('Body Type', _select(['dynamic', 'static', 'kinematic'], comp.bodyType ?? 'dynamic', v => { comp.bodyType = v; }));
@@ -481,10 +500,6 @@ export class ObjectProperties {
         if (!comp.scale) comp.scale = { ...scale };
         if (!comp.position) comp.position = { ...position };
         if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
-          // Visual defaults
-          comp.color = comp.color ?? '#00e676';
-          comp.lineOpacity = comp.lineOpacity ?? 0.75;
-          comp.lineThickness = comp.lineThickness ?? 1;
         const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
           comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
         ), 'XYZ');
@@ -520,34 +535,17 @@ export class ObjectProperties {
           }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Box Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
-        // Visual controls
-        const colorSw = colorSwatch({ color: comp.color, onChange: (hex) => { comp.color = hex; _dispatchPhysicsEditUpdate(); } });
-        _field('Color', colorSw.el, 'Wireframe color for this collider overlay');
-        _field('Opacity', _numInput(comp.lineOpacity, (v) => { comp.lineOpacity = v; }, 0.05, 2, 0, 1), 'Overlay opacity');
-        _field('Line Thickness', _numInput(comp.lineThickness, (v) => { comp.lineThickness = v; }, 0.5, 2, 0.1, 10), 'Overlay line thickness (may be limited by platform)');
         _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
           'Coefficient of friction: 0 = slippery, 1 = rough.');
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          obj.updateMatrixWorld(true);
-          // Compute world-space bbox excluding editor-only helpers/overlays
-          const bbox = new THREE.Box3();
-          const tmpBox = new THREE.Box3();
-          let hasAny = false;
-          obj.traverse((c) => {
-            if (c.userData?._editorOnly) return;
-            if (c.geometry) {
-              c.geometry.computeBoundingBox();
-              tmpBox.copy(c.geometry.boundingBox).applyMatrix4(c.matrixWorld);
-              if (!tmpBox.isEmpty()) {
-                if (!hasAny) { bbox.copy(tmpBox); hasAny = true; } else bbox.union(tmpBox);
-              }
-            }
-          });
-          if (!hasAny) return;
+          const bbox = _fitBounds();
+          if (!bbox) return;
           const size = bbox.getSize(new THREE.Vector3());
+          const center = bbox.getCenter(new THREE.Vector3());
           try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[ObjectProperties] AutoFit Box', { bboxMin: bbox.min.clone(), bboxMax: bbox.max.clone(), size: size.clone() }); else console.log('[ObjectProperties] AutoFit Box', { bboxMin: bbox.min.clone(), bboxMax: bbox.max.clone(), size: size.clone() }); } catch (err) {}
+          _applyAutoFitCenter(center);
           comp.scale = { x: size.x * 0.5, y: size.y * 0.5, z: size.z * 0.5 };
           comp.halfExtents = { ...comp.scale };
           _rebuildPanel();
@@ -562,9 +560,6 @@ export class ObjectProperties {
         if (!comp.scale) comp.scale = { x: radius, y: radius, z: radius };
         if (!comp.position) comp.position = { ...position };
         if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
-        comp.color = comp.color ?? '#00b0ff';
-        comp.lineOpacity = comp.lineOpacity ?? 0.75;
-        comp.lineThickness = comp.lineThickness ?? 1;
         const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
           comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
         ), 'XYZ');
@@ -599,33 +594,17 @@ export class ObjectProperties {
           }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Sphere Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
-        const colorSwS = colorSwatch({ color: comp.color, onChange: (hex) => { comp.color = hex; _dispatchPhysicsEditUpdate(); } });
-        _field('Color', colorSwS.el, 'Wireframe color for this collider overlay');
-        _field('Opacity', _numInput(comp.lineOpacity, (v) => { comp.lineOpacity = v; }, 0.05, 2, 0, 1), 'Overlay opacity');
-        _field('Line Thickness', _numInput(comp.lineThickness, (v) => { comp.lineThickness = v; }, 0.5, 2, 0.1, 10), 'Overlay line thickness');
         _field('Friction', _numInput(comp.friction ?? 0.5, v => { comp.friction = v; }, 0.01, 2, 0, 1),
           'Coefficient of friction: 0 = slippery, 1 = rough.');
         _field('Restitution', _numInput(comp.restitution ?? 0, v => { comp.restitution = v; }, 0.01, 2, 0, 1),
           'Bounciness: 0 = no bounce, 1 = perfect bounce.');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          obj.updateMatrixWorld(true);
-          const bbox = new THREE.Box3();
-          const tmpBox = new THREE.Box3();
-          let hasAny = false;
-          obj.traverse((c) => {
-            if (c.userData?._editorOnly) return;
-            if (c.geometry) {
-              c.geometry.computeBoundingBox();
-              tmpBox.copy(c.geometry.boundingBox).applyMatrix4(c.matrixWorld);
-              if (!tmpBox.isEmpty()) {
-                if (!hasAny) { bbox.copy(tmpBox); hasAny = true; } else bbox.union(tmpBox);
-              }
-            }
-          });
-          if (!hasAny) return;
+          const bbox = _fitBounds();
+          if (!bbox) return;
           const sphere = new THREE.Sphere();
           bbox.getBoundingSphere(sphere);
           try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[ObjectProperties] AutoFit Sphere', { sphereCenter: sphere.center.clone(), sphereRadius: sphere.radius }); else console.log('[ObjectProperties] AutoFit Sphere', { sphereCenter: sphere.center.clone(), sphereRadius: sphere.radius }); } catch (err) {}
+          _applyAutoFitCenter(sphere.center);
           comp.radius = sphere.radius;
           comp.scale = { x: sphere.radius, y: sphere.radius, z: sphere.radius };
           _rebuildPanel();
@@ -644,9 +623,6 @@ export class ObjectProperties {
         if (!comp.scale) comp.scale = { ...scale };
         if (!comp.position) comp.position = { ...position };
         if (!comp.rotation) comp.rotation = { x: 0, y: 0, z: 0, w: 1 };
-        comp.color = comp.color ?? '#ffab00';
-        comp.lineOpacity = comp.lineOpacity ?? 0.75;
-        comp.lineThickness = comp.lineThickness ?? 1;
         const euler = new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
           comp.rotation.x, comp.rotation.y, comp.rotation.z, comp.rotation.w
         ), 'XYZ');
@@ -687,30 +663,15 @@ export class ObjectProperties {
           }, 1), 'Collider local rotation relative to the object.');
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Capsule Trigger', v => { comp.isTrigger = v; }),
           'Collider acts as a sensor and does not generate physical contacts.');
-        const colorSwC = colorSwatch({ color: comp.color, onChange: (hex) => { comp.color = hex; _dispatchPhysicsEditUpdate(); } });
-        _field('Color', colorSwC.el, 'Wireframe color for this collider overlay');
-        _field('Opacity', _numInput(comp.lineOpacity, (v) => { comp.lineOpacity = v; }, 0.05, 2, 0, 1), 'Overlay opacity');
-        _field('Line Thickness', _numInput(comp.lineThickness, (v) => { comp.lineThickness = v; }, 0.5, 2, 0.1, 10), 'Overlay line thickness');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
-          obj.updateMatrixWorld(true);
-          const bbox = new THREE.Box3();
-          const tmpBox = new THREE.Box3();
-          let hasAny = false;
-          obj.traverse((c) => {
-            if (c.userData?._editorOnly) return;
-            if (c.geometry) {
-              c.geometry.computeBoundingBox();
-              tmpBox.copy(c.geometry.boundingBox).applyMatrix4(c.matrixWorld);
-              if (!tmpBox.isEmpty()) {
-                if (!hasAny) { bbox.copy(tmpBox); hasAny = true; } else bbox.union(tmpBox);
-              }
-            }
-          });
-          if (!hasAny) return;
+          const bbox = _fitBounds();
+          if (!bbox) return;
           const size = bbox.getSize(new THREE.Vector3());
+          const center = bbox.getCenter(new THREE.Vector3());
           const radius = Math.max(0.01, Math.min(size.x, size.z) * 0.5);
           const halfHeight = Math.max(0.01, (size.y * 0.5) - radius);
           try { if (typeof window !== 'undefined' && window.__cyco_log) window.__cyco_log('[ObjectProperties] AutoFit Capsule', { bboxMin: bbox.min.clone(), bboxMax: bbox.max.clone(), size: size.clone(), radius, halfHeight }); else console.log('[ObjectProperties] AutoFit Capsule', { bboxMin: bbox.min.clone(), bboxMax: bbox.max.clone(), size: size.clone(), radius, halfHeight }); } catch (err) {}
+          _applyAutoFitCenter(center);
           comp.radius = radius;
           comp.halfHeight = halfHeight;
           comp.scale = { x: radius, y: halfHeight, z: radius };
@@ -722,18 +683,13 @@ export class ObjectProperties {
 
       case 'Mesh Collider':
       case 'Mesh Trigger':
-        comp.color = comp.color ?? '#ff6d00';
-        comp.lineOpacity = comp.lineOpacity ?? 0.75;
-        comp.lineThickness = comp.lineThickness ?? 1;
         _field('Mode', _select(['convexHull', 'trimesh'], comp.mode ?? 'convexHull', v => { comp.mode = v; }));
         _field('Is Trigger', _checkbox(comp.isTrigger ?? comp.type === 'Mesh Trigger', v => { comp.isTrigger = v; }));
-        const colorSwM = colorSwatch({ color: comp.color, onChange: (hex) => { comp.color = hex; _dispatchPhysicsEditUpdate(); } });
-        _field('Color', colorSwM.el, 'Wireframe color for this collider overlay');
-        _field('Opacity', _numInput(comp.lineOpacity, (v) => { comp.lineOpacity = v; }, 0.05, 2, 0, 1), 'Overlay opacity');
-        _field('Line Thickness', _numInput(comp.lineThickness, (v) => { comp.lineThickness = v; }, 0.5, 2, 0.1, 10), 'Overlay line thickness');
         _field('Auto Fit', _actionButton('Auto Fit', () => {
           // For mesh collider, we use the bounding box to determine the shape
           // The mode (convexHull/trimesh) is already set, this just updates the mesh data
+          const bbox = _fitBounds();
+          if (bbox) _applyAutoFitCenter(bbox.getCenter(new THREE.Vector3()));
           _rebuildPanel();
           _dispatchPhysicsEditUpdate();
         }), 'Update mesh collider from object geometry.');

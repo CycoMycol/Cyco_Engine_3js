@@ -26,6 +26,30 @@ export class LeftToolbarPanel extends BasePanel {
     window.addEventListener('cyco-physics-edit-mode', this._onPhysicsEditMode);
   }
 
+  _exitPhysicsEdit(toolMode) {
+    const sel = window.__cyco?.selectionManager;
+    const beforeSelection = sel?.selected ? [...sel.selected] : [];
+
+    if (this._physicsEdit) {
+      this._physicsEdit = false;
+      window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
+    }
+
+    this._activeTool = toolMode;
+    if (['translate', 'rotate', 'scale', 'universal'].includes(toolMode)) {
+      this._lastTransformTool = toolMode;
+    }
+    this._refreshToolBtns();
+    window.dispatchEvent(new CustomEvent('cyco-vp-tool', { detail: { mode: toolMode } }));
+
+    // Keep the current selection intact when leaving Edit Collider mode.
+    if (sel && beforeSelection.length > 0 && sel.selected.size === 0) {
+      for (const obj of beforeSelection) {
+        if (obj) sel.selectObject(obj);
+      }
+    }
+  }
+
   // ── Abstract getters ────────────────────────────────────────────────────────
 
   get _barHeight() { return 36; }
@@ -52,7 +76,8 @@ export class LeftToolbarPanel extends BasePanel {
     // Select tool
     const selectBtn = _toolBtn(_toolIcon('select'), _toolTip('select'), () => {
       if (this._physicsEdit) {
-        window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
+        this._exitPhysicsEdit('select');
+        return;
       }
       this._activeTool = 'select';
       this._refreshToolBtns();
@@ -68,12 +93,9 @@ export class LeftToolbarPanel extends BasePanel {
     const CYCLE = ['translate', 'rotate', 'scale', 'universal'];
     const transformBtn = _toolBtn(_toolIcon(this._lastTransformTool), _toolTip(this._lastTransformTool), () => {
       if (this._physicsEdit) {
-        // Cycle the collider edit gizmo mode without switching to object transform.
-        const idx = CYCLE.indexOf(this._physicsEditTool);
-        this._physicsEditTool = CYCLE[(idx + 1) % CYCLE.length];
-        transformBtn.innerHTML = _toolIcon(this._physicsEditTool);
-        transformBtn.title = _toolTip(this._physicsEditTool);
-        window.dispatchEvent(new CustomEvent('cyco-physics-vp-tool', { detail: { mode: this._physicsEditTool } }));
+        const idx = CYCLE.indexOf(this._lastTransformTool);
+        const nextTool = CYCLE[(idx + 1) % CYCLE.length];
+        this._exitPhysicsEdit(nextTool);
         return;
       }
       if (this._activeTool === this._lastTransformTool) {
@@ -160,9 +182,7 @@ export class LeftToolbarPanel extends BasePanel {
       const { mode } = e.detail ?? {};
       if (!['select', 'translate', 'rotate', 'scale', 'universal'].includes(mode)) return;
       if (this._physicsEdit) {
-        if (mode === 'select') {
-          window.dispatchEvent(new CustomEvent('cyco-physics-edit-mode', { detail: { enabled: false } }));
-        }
+        this._exitPhysicsEdit(mode);
         this._refreshToolBtns();
         return;
       }
@@ -186,7 +206,7 @@ export class LeftToolbarPanel extends BasePanel {
     const tb = this._toolBtns['transform'];
     if (tb) {
       tb.classList.toggle('active', !this._physicsEdit && onCycle);
-      const currentTransform = this._physicsEdit ? this._physicsEditTool : this._lastTransformTool;
+      const currentTransform = this._lastTransformTool;
       tb.innerHTML = _toolIcon(currentTransform);
       tb.title     = _toolTip(currentTransform);
     }
@@ -207,6 +227,9 @@ export class LeftToolbarPanel extends BasePanel {
       this._activeTool = 'editCollider';
     } else if (this._activeTool === 'editCollider') {
       this._activeTool = 'select';
+    }
+    if (!this._physicsEdit) {
+      this._physicsEditTool = this._lastTransformTool;
     }
     if (this._physicsEditBtn) {
       this._physicsEditBtn.classList.toggle('active', this._physicsEdit);

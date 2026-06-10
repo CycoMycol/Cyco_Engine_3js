@@ -24,6 +24,8 @@ export class PreferencesPanel extends BasePanel {
     this._tabBtns     = {};
     this._gizmoActiveTab = 'move';
     this._gizmoTabBtns   = {};
+    this._colliderActiveTab = 'colliderBox';
+    this._colliderTabBtns   = {};
     this._gridProps   = null;
     this._contentArea = null;
     this._committed   = false;
@@ -313,6 +315,7 @@ export class PreferencesPanel extends BasePanel {
       { id: 'rotate', label: 'Rotate' },
       { id: 'box', label: 'Box Tool' },
       { id: 'bounds', label: 'Outline' },
+      { id: 'collider', label: 'Collider' },
     ];
     for (const tab of tabs) {
       const btn = document.createElement('button');
@@ -348,6 +351,59 @@ export class PreferencesPanel extends BasePanel {
     else if (tabId === 'rotate') this._gizmoContentArea.appendChild(this._buildGizmoSubTab('rotate'));
     else if (tabId === 'box') this._gizmoContentArea.appendChild(this._buildBoxToolTab());
     else if (tabId === 'bounds') this._gizmoContentArea.appendChild(this._buildBoundingBoxTab());
+    else if (tabId === 'collider') this._gizmoContentArea.appendChild(this._buildColliderTab());
+  }
+
+  _buildColliderTab() {
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:12px;height:100%;';
+
+    const hdr = document.createElement('div');
+    hdr.innerHTML =
+      '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Collider</h3>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);">Tune collider editing, the collider outline, and the temporary outline.</div>';
+    root.appendChild(hdr);
+
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
+    this._colliderTabBtns = {};
+    const tabs = [
+      { id: 'colliderBox', label: 'Collider' },
+      { id: 'colliderBounds', label: 'Collider Outline' },
+      { id: 'temporaryBounds', label: 'Temporary Outline' },
+    ];
+    for (const tab of tabs) {
+      const btn = document.createElement('button');
+      btn.textContent = tab.label;
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
+      btn.addEventListener('click', () => this._switchColliderSubTab(tab.id));
+      tabBar.appendChild(btn);
+      this._colliderTabBtns[tab.id] = btn;
+    }
+
+    this._colliderContentArea = document.createElement('div');
+    this._colliderContentArea.style.cssText = 'flex:1;overflow-y:auto;padding-right:4px;';
+
+    root.appendChild(tabBar);
+    root.appendChild(this._colliderContentArea);
+    this._switchColliderSubTab(this._colliderActiveTab);
+    return root;
+  }
+
+  _switchColliderSubTab(tabId) {
+    this._colliderActiveTab = tabId;
+    for (const [id, btn] of Object.entries(this._colliderTabBtns || {})) {
+      const active = id === tabId;
+      btn.style.color = 'var(--ce-accent-orange,#e07228)';
+      btn.style.opacity = active ? '1' : '0.82';
+      btn.style.background = active ? 'rgba(224,114,40,0.16)' : 'var(--ce-bg-surface,#332a22)';
+      btn.style.borderColor = active ? 'rgba(224,114,40,0.55)' : 'var(--ce-border,#3d3028)';
+    }
+    if (!this._colliderContentArea) return;
+    this._colliderContentArea.innerHTML = '';
+    if (tabId === 'colliderBox') this._colliderContentArea.appendChild(this._buildBoxToolTab('colliderBox'));
+    else if (tabId === 'colliderBounds') this._colliderContentArea.appendChild(this._buildBoundingBoxTab('colliderBounds'));
+    else if (tabId === 'temporaryBounds') this._colliderContentArea.appendChild(this._buildBoundingBoxTab('temporaryBounds'));
   }
 
   _makeSettingRow(label, control, note = '') {
@@ -525,86 +581,106 @@ export class PreferencesPanel extends BasePanel {
     return root;
   }
 
-  _buildBoxToolTab() {
-    const prefs = this._prefs.gizmo.box;
+  _buildBoxToolTab(key = 'box') {
+    const prefs = this._prefs.gizmo[key];
+    const defaults = DEFAULT_PREFS.gizmo[key];
+    const isCollider = key === 'colliderBox';
     const root = document.createElement('div');
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
 
     const titleEl = document.createElement('div');
-    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Box Tool Gizmo</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);">Controls the custom selection box gizmo.</div>';
+    titleEl.innerHTML = `<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">${isCollider ? 'Collider Box Tool Gizmo' : 'Box Tool Gizmo'}</div>` +
+      `<div style="font-size:11px;color:var(--text-secondary,#888);">${isCollider ? 'Controls the collider editing box gizmo only.' : 'Controls the custom selection box gizmo.'}</div>`;
     root.appendChild(titleEl);
 
     root.appendChild(this._makeToggleRow('Combined / Separate', !prefs.useSeparate, (isCombined) => {
-      this._prefs.gizmo.box.useSeparate = !isCombined;
+      this._prefs.gizmo[key].useSeparate = !isCombined;
       this._applyPrefsChange();
       this._switchGizmoSubTab(this._gizmoActiveTab);
     }, 'Combined', 'Separate'));
 
+    if (isCollider) {
+      root.appendChild(this._makeSettingRow('Fit Scope', select({
+        options: [
+          ['smart', 'Smart'],
+          ['selected', 'Selected Object'],
+          ['hierarchy', 'Whole Hierarchy'],
+        ],
+        value: prefs.fitScope ?? defaults.fitScope ?? 'smart',
+        onChange: (v) => {
+          this._prefs.gizmo[key].fitScope = v;
+          this._applyPrefsChange();
+        },
+      }), 'How collider Auto Fit decides whether to use the object itself or its descendants.'));
+    }
+
     root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.box.thickness = v;
+      this._prefs.gizmo[key].thickness = v;
       this._applyPrefsChange();
-    }, 'Changes the box handle thickness without moving the gizmo points.', DEFAULT_PREFS.gizmo.box.thickness));
+    }, 'Changes the box handle thickness without moving the gizmo points.', defaults.thickness));
 
     root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.box.distance = v;
+      this._prefs.gizmo[key].distance = v;
       this._applyPrefsChange();
-    }, 'Pushes the box handles farther away from the object.', DEFAULT_PREFS.gizmo.box.distance));
+    }, 'Pushes the box handles farther away from the object.', defaults.distance));
 
     root.appendChild(this._makeColorRow('X Color', prefs.axisColorX, (c) => {
-      this._prefs.gizmo.box.axisColorX = c;
+      this._prefs.gizmo[key].axisColorX = c;
       this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Y Color', prefs.axisColorY, (c) => {
-      this._prefs.gizmo.box.axisColorY = c;
+      this._prefs.gizmo[key].axisColorY = c;
       this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Z Color', prefs.axisColorZ, (c) => {
-      this._prefs.gizmo.box.axisColorZ = c;
+      this._prefs.gizmo[key].axisColorZ = c;
       this._applyPrefsChange();
     }));
     root.appendChild(this._makeColorRow('Corner Color', prefs.cornerColor, (c) => {
-      this._prefs.gizmo.box.cornerColor = c;
+      this._prefs.gizmo[key].cornerColor = c;
       this._applyPrefsChange();
     }));
 
     return root;
   }
 
-  _buildBoundingBoxTab() {
-    const prefs = this._prefs.gizmo.bounds;
+  _buildBoundingBoxTab(key = 'bounds') {
+    const prefs = this._prefs.gizmo[key];
+    const defaults = DEFAULT_PREFS.gizmo[key];
+    const isCollider = key === 'colliderBounds';
+    const isTemporary = key === 'temporaryBounds';
     const root = document.createElement('div');
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
 
     const titleEl = document.createElement('div');
-    titleEl.innerHTML = '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Outline</div>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);">Selection outline and glow shared by all gizmos.</div>';
+    titleEl.innerHTML = `<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">${isTemporary ? 'Temporary Outline' : (isCollider ? 'Collider Outline' : 'Outline')}</div>` +
+      `<div style="font-size:11px;color:var(--text-secondary,#888);">${isTemporary ? 'Used in Edit Collider mode when the selected object does not yet have a collider.' : (isCollider ? 'Collider edit outline and glow. Does not affect object selection outlines.' : 'Selection outline and glow shared by all gizmos.')}</div>`;
     root.appendChild(titleEl);
 
     root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.bounds.thickness = v;
+      this._prefs.gizmo[key].thickness = v;
       this._applyPrefsChange();
-    }, 'Controls the outline line thickness.', DEFAULT_PREFS.gizmo.bounds.thickness));
+    }, 'Controls the outline line thickness.', defaults.thickness));
 
     root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.bounds.distance = v;
+      this._prefs.gizmo[key].distance = v;
       this._applyPrefsChange();
-    }, 'Moves the outline frame away from the object.', DEFAULT_PREFS.gizmo.bounds.distance));
+    }, 'Moves the outline frame away from the object.', defaults.distance));
 
     root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
-      this._prefs.gizmo.bounds.outlineColor = c;
+      this._prefs.gizmo[key].outlineColor = c;
       this._applyPrefsChange();
     }));
 
     root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
-      this._prefs.gizmo.bounds.glowColor = c;
+      this._prefs.gizmo[key].glowColor = c;
       this._applyPrefsChange();
     }));
 
     root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 2, 0.01, (v) => {
-      this._prefs.gizmo.bounds.glowIntensity = v;
+      this._prefs.gizmo[key].glowIntensity = v;
       this._applyPrefsChange();
-    }, 'No post-processing required.', DEFAULT_PREFS.gizmo.bounds.glowIntensity));
+    }, 'No post-processing required.', defaults.glowIntensity));
 
     return root;
   }

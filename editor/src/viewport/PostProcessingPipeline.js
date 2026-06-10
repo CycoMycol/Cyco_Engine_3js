@@ -143,6 +143,7 @@ export class PostProcessingPipeline {
     this.hoverOutlinePass = null;
 
     this._selectedObjects = [];
+    this._physicsEditMode = false;
     this._prefs = loadPrefs();
 
     /** @type {UnrealBloomPass|null} */
@@ -303,6 +304,7 @@ export class PostProcessingPipeline {
     this._onVpTool             = this._onVpTool.bind(this);
     this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
     this._onPrefsChanged       = this._onPrefsChanged.bind(this);
+    this._onPhysicsEditMode    = this._onPhysicsEditMode.bind(this);
 
     window.addEventListener('cyco-vp-ready',                this._onVpReady);
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
@@ -317,6 +319,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
     window.addEventListener('cyco-preferences-change',      this._onPrefsChanged);
     window.addEventListener('cyco-preferences-preview',     this._onPrefsChanged);
+    window.addEventListener('cyco-physics-edit-mode',       this._onPhysicsEditMode);
 
     // If the viewport was already initialized before this pipeline was
     // constructed, rebuild immediately so the composer is available.
@@ -1288,12 +1291,22 @@ export class PostProcessingPipeline {
     return [];
   }
 
+  _hasPhysicsCollider(object) {
+    const comps = object?.userData?.physics?.components;
+    return Array.isArray(comps) && comps.some((comp) => {
+      const type = String(comp?.type || '');
+      return type.includes('Collider');
+    });
+  }
+
   _applySelectionOutlinePrefs() {
     if (!this.outlinePass) return;
     const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
     const thickness = Math.max(0.05, bounds.thickness ?? 1);
     const glowIntensity = Math.max(0, bounds.glowIntensity ?? 0.35);
-    this.outlinePass.enabled = true;
+    const selectedObject = this._selectedObjects[this._selectedObjects.length - 1] ?? null;
+    const showSelectionOutline = !this._physicsEditMode || !this._hasPhysicsCollider(selectedObject);
+    this.outlinePass.enabled = showSelectionOutline;
     this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
     this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
     this.outlinePass.edgeThickness = thickness;
@@ -1332,8 +1345,23 @@ export class PostProcessingPipeline {
 
   _onHoverObject(event) {
     if (!this.hoverOutlinePass) return;
+    if (this._physicsEditMode || this.engine.selectionManager?._gizmoDragging) {
+      this.hoverOutlinePass.selectedObjects = [];
+      return;
+    }
     const { object } = event.detail ?? {};
     this.hoverOutlinePass.selectedObjects = object ? [object] : [];
+  }
+
+  _onPhysicsEditMode(event) {
+    this._physicsEditMode = !!event.detail?.enabled;
+    if (this.outlinePass) {
+      this._applySelectionOutlinePrefs();
+      this.outlinePass.selectedObjects = this._selectedObjects;
+    }
+    if (this.hoverOutlinePass && this._physicsEditMode) {
+      this.hoverOutlinePass.selectedObjects = [];
+    }
   }
 
   _onPpSettings(event) {
@@ -1485,6 +1513,7 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-pp-settings',       this._onPpSettings);
     window.removeEventListener('cyco-postfx-change',     this._onPostFxChange);
     window.removeEventListener('cyco-vp-tool',                 this._onVpTool);
+    window.removeEventListener('cyco-physics-edit-mode',       this._onPhysicsEditMode);
     window.removeEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
     window.removeEventListener('cyco-preferences-change',      this._onPrefsChanged);
     window.removeEventListener('cyco-preferences-preview',     this._onPrefsChanged);
