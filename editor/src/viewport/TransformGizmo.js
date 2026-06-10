@@ -164,18 +164,31 @@ export class TransformGizmo {
 
   _applyMode() {
     if (!this._tc) return;
+    const hasTarget = !!this._targetObject;
     if (this._mode === 'universal') {
+      this._tc.detach();
       this._gizmo.visible = false;
       this._tc.enabled = false;
-      this._showBox();
+      if (hasTarget) {
+        this._showBox();
+      } else {
+        this._hideBox();
+      }
     } else if (this._mode === 'select') {
+      this._tc.detach();
       this._gizmo.visible = false;
       this._tc.enabled = false;
       this._hideBox();
     } else {
-      this._tc.setMode(this._mode);
-      this._gizmo.visible = true;
-      this._tc.enabled = true;
+      if (hasTarget) {
+        this._tc.setMode(this._mode);
+        this._gizmo.visible = true;
+        this._tc.enabled = true;
+      } else {
+        this._tc.detach();
+        this._gizmo.visible = false;
+        this._tc.enabled = false;
+      }
       this._hideBox();
     }
   }
@@ -183,10 +196,18 @@ export class TransformGizmo {
   _attachTo(obj) {
     this._targetObject = obj;
     if (this._mode === 'universal') {
-      this._showBox();
-      this._updateBoxGizmo();
+      if (obj) {
+        this._showBox();
+        this._updateBoxGizmo();
+      } else {
+        this._hideBox();
+      }
     } else if (this._tc) {
-      this._tc.attach(obj);
+      if (obj) {
+        this._tc.attach(obj);
+      } else {
+        this._tc.detach();
+      }
       this._applyMode();
     }
   }
@@ -342,6 +363,10 @@ export class TransformGizmo {
   }
 
   _showBox() {
+    if (!this._targetObject) {
+      this._hideBox();
+      return;
+    }
     if (!this._boxGroup) this._buildBoxGizmo();
     if (this._boxGroup) {
       this._boxGroup.visible = true;
@@ -352,7 +377,22 @@ export class TransformGizmo {
 
   _hideBox() {
     if (this._boxGroup) {
-      this._boxGroup.visible = false;
+      this._boxGroup.traverse((child) => {
+        if (child.geometry) {
+          child.geometry.dispose();
+          child.geometry = null;
+        }
+        if (child.material) {
+          child.material.dispose();
+          child.material = null;
+        }
+      });
+      if (this._boxGroup.parent) {
+        this._boxGroup.parent.remove(this._boxGroup);
+      }
+      this._boxGroup = null;
+      this._boxHandles = [];
+      this._boxVolume = null;
       this._clearHoveredHandle();
     }
     this._boxActive = false;
@@ -470,11 +510,17 @@ export class TransformGizmo {
     this._attachTo(object);
   }
 
-  _onDeselectAll() { this.detach(); }
+  _onDeselectAll() {
+    this.detach();
+    this._hideBox();
+  }
 
   _onHierarchyRemove(e) {
     const { objectId } = e.detail ?? {};
-    if (objectId && this._targetObject?.userData?.cycoId === objectId) this.detach();
+    if (objectId && this._targetObject?.userData?.cycoId === objectId) {
+      this.detach();
+      this._hideBox();
+    }
   }
 
   _onTool(event) {
