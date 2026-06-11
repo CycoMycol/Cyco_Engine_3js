@@ -170,7 +170,6 @@ const ProjectManager = {
   loadSnapshot(rawSnapshot, { recordRecent = true, applyPrefs = true } = {}) {
     const snapshot = this._normalizeSnapshot(rawSnapshot);
     this._project = snapshot;
-    this._save();
     if (applyPrefs && snapshot.prefs) savePrefs(snapshot.prefs);
     if (recordRecent) {
       this._addToRecents({
@@ -184,6 +183,7 @@ const ProjectManager = {
       detail: { name: snapshot.name, path: snapshot.path },
     }));
     this._restoreSceneFromSnapshot(snapshot.scene);
+    this._save();
     return true;
   },
 
