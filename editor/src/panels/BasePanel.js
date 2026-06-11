@@ -815,7 +815,7 @@ export class BasePanel {
     const dockApi = LayoutManager.api;
     const panelId = this._panelApi.id;
     const barH    = this._barHeight;
-    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
+      const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar', 'right-viewport'];
 
     try {
       const json = dockApi.toJSON();
@@ -944,7 +944,12 @@ export class BasePanel {
 
       // Stash orientation hints and preserve other bars already docked vertically.
       LayoutManager._pendingOrient = LayoutManager._pendingOrient ?? {};
-      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
+      const _barGroupClassMap = {
+        'toolbar-panel': 'ce-toolbar-group',
+        'menu-bar-panel': 'ce-menu-bar-group',
+        'left-toolbar': 'ce-left-toolbar-group',
+        'right-viewport': 'ce-left-toolbar-group',
+      };
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;
@@ -972,7 +977,43 @@ export class BasePanel {
 
       LayoutManager._restoringLayout = true;
       dockApi.fromJSON(newLayout);
-      LayoutManager._restoringLayout = false;
+
+      if (zone.isVertical) {
+        const findLeafSize = (node, id) => {
+          if (!node) return null;
+          if (node.type === 'leaf') {
+            return (node.data?.views ?? []).includes(id) ? node.size : null;
+          }
+          for (const child of (node.data ?? [])) {
+            const found = findLeafSize(child, id);
+            if (found !== null) return found;
+          }
+          return null;
+        };
+        const bottomHeight = findLeafSize(json.grid?.root, 'assets-browser');
+        if (bottomHeight !== null) {
+          setTimeout(() => {
+            const applyBottomHeight = () => {
+              try {
+                const bottomPanel = dockApi.getPanel('assets-browser');
+                const groupApi = bottomPanel?.api?.group?.api;
+                if (groupApi) groupApi.setSize({ height: bottomHeight });
+              } catch (_) {}
+            };
+            requestAnimationFrame(() => {
+              applyBottomHeight();
+              requestAnimationFrame(() => {
+                applyBottomHeight();
+                LayoutManager._restoringLayout = false;
+              });
+            });
+          }, 0);
+        } else {
+          LayoutManager._restoringLayout = false;
+        }
+      } else {
+        LayoutManager._restoringLayout = false;
+      }
 
       if (this._floatBtn) this._updateFloatBtn(this._floatBtn);
       setTimeout(() => {
@@ -998,7 +1039,7 @@ export class BasePanel {
     const dockApi = LayoutManager.api;
     const panelId = this._panelApi.id;
     const barH    = this._barHeight;
-    const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar'];
+      const BAR_IDS = ['menu-bar-panel', 'toolbar-panel', 'left-toolbar', 'right-viewport'];
 
     try {
       const json = dockApi.toJSON();
@@ -1137,7 +1178,12 @@ export class BasePanel {
 
       // Preserve orientation of ALL other bars (vertical or horizontal) so their
       // init() methods don't apply wrong constraints during fromJSON reconstruction.
-      const _barGroupClassMap = { 'toolbar-panel': 'ce-toolbar-group', 'menu-bar-panel': 'ce-menu-bar-group', 'left-toolbar': 'ce-left-toolbar-group' };
+      const _barGroupClassMap = {
+        'toolbar-panel': 'ce-toolbar-group',
+        'menu-bar-panel': 'ce-menu-bar-group',
+        'left-toolbar': 'ce-left-toolbar-group',
+        'right-viewport': 'ce-left-toolbar-group',
+      };
       for (const bId of BAR_IDS) {
         if (bId === panelId) continue;
         if (!newLayout.panels?.[bId]) continue;
@@ -1171,7 +1217,43 @@ export class BasePanel {
 
       LayoutManager._restoringLayout = true;
       dockApi.fromJSON(newLayout);
-      LayoutManager._restoringLayout = false;
+
+      if (zone.isVertical) {
+        const findLeafSize = (node, id) => {
+          if (!node) return null;
+          if (node.type === 'leaf') {
+            return (node.data?.views ?? []).includes(id) ? node.size : null;
+          }
+          for (const child of (node.data ?? [])) {
+            const found = findLeafSize(child, id);
+            if (found !== null) return found;
+          }
+          return null;
+        };
+        const bottomHeight = findLeafSize(json.grid?.root, 'assets-browser');
+        if (bottomHeight !== null) {
+          setTimeout(() => {
+            const applyBottomHeight = () => {
+              try {
+                const bottomPanel = dockApi.getPanel('assets-browser');
+                const groupApi = bottomPanel?.api?.group?.api;
+                if (groupApi) groupApi.setSize({ height: bottomHeight });
+              } catch (_) {}
+            };
+            requestAnimationFrame(() => {
+              applyBottomHeight();
+              requestAnimationFrame(() => {
+                applyBottomHeight();
+                LayoutManager._restoringLayout = false;
+              });
+            });
+          }, 0);
+        } else {
+          LayoutManager._restoringLayout = false;
+        }
+      } else {
+        LayoutManager._restoringLayout = false;
+      }
 
       if (this._floatBtn) this._updateFloatBtn(this._floatBtn);
       setTimeout(() => {

@@ -61,6 +61,25 @@ function _findLeafSize(node, id) {
   return null;
 }
 
+function _findLeafNode(node, id) {
+  if (!node) return null;
+  if (node.type === 'leaf') {
+    return (node.data?.views ?? []).includes(id) ? node : null;
+  }
+  if (node.type === 'branch') {
+    for (const child of (node.data ?? [])) {
+      const found = _findLeafNode(child, id);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+function _findLeafViews(node, id) {
+  const leaf = _findLeafNode(node, id);
+  return leaf ? [...(leaf.data?.views ?? [])] : null;
+}
+
 function _mergeMaterialBrowser(node) {
   if (!node) return node;
   if (node.type === 'leaf') return node;
@@ -99,6 +118,8 @@ const LayoutManager = {
   _visibility: {},
   /** Full layout JSON snapshots taken just before each panel was hidden. */
   _snapshots: {},
+  /** Current members of the bottom dock group, captured when it is hidden. */
+  _bottomDockState: null,
   /** True while we are in the middle of a restore — suppresses side effects. */
   _restoringLayout: false,
   _autoSaveTimer: null,
@@ -398,9 +419,11 @@ const LayoutManager = {
       // Save the full current layout so _showPanel can restore it exactly.
       this._snapshots[id] = this.api.toJSON();
 
-      // Build a modified snapshot that has this panel removed with its freed
-      // width given only to the center column — not the opposite side panel.
-      const hideSnapshot = this._buildHideSnapshot(id);
+      // Hide the entire dock leaf that currently contains this panel so any
+      // windows docked into the same panel follow it together.
+      const currentRoot = this._snapshots[id]?.grid?.root;
+      const groupViews = _findLeafViews(currentRoot, id) ?? [id];
+      const hideSnapshot = this._buildHideSnapshotGroup(groupViews);
 
       this._restoringLayout = true;
 
@@ -437,58 +460,56 @@ const LayoutManager = {
 
   _toggleBottomDock() {
     if (!this.api) return;
-    const anyVisible = BOTTOM_DOCK_IDS.some(id => this.api.getPanel(id));
+    const currentRoot = this.api.toJSON()?.grid?.root;
+    const bottomLeaf = _findLeafNode(currentRoot, 'assets-browser');
+    const bottomViews = (bottomLeaf?.data?.views ?? ['assets-browser']).filter(Boolean);
+    const bottomHeight = bottomLeaf?.size ?? null;
+    const anyVisible = bottomViews.some(id => this.api.getPanel(id));
     if (anyVisible) {
-      // Close the bottom tab strip directly so Dockview can expand the center
-      // viewport without rebuilding the rest of the grid.
-      this._snapshots['assets-browser'] = this.api.toJSON();
+      // Close only the panels that currently live in the bottom dock group.
+      this._bottomDockState = { views: bottomViews, height: bottomHeight };
       this._restoringLayout = true;
       try {
-        const material = this.api.getPanel('material-browser');
-        if (material) material.api.close();
-      } catch(_) {}
-      try {
-        const assets = this.api.getPanel('assets-browser');
-        if (assets) assets.api.close();
+        for (const id of bottomViews) {
+          const panel = this.api.getPanel(id);
+          if (panel) panel.api.close();
+        }
       } catch(_) {}
       this._resyncVisibility();
       this._restoringLayout = false;
       this._scheduleAutoSave();
     } else {
-      const snapshot = this._snapshots['assets-browser'];
+      const state = this._bottomDockState;
+      const views = (state?.views?.length ? state.views : ['assets-browser']).slice();
+      const bottomHeightRestore = state?.height ?? null;
       this._restoringLayout = true;
       try {
-        if (snapshot) {
-          this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
-          const savedRoot = snapshot.grid?.root;
-          if (savedRoot) {
-            const applySizes = () => {
-              try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+        const restoreOrder = ['assets-browser', ...views.filter(id => id !== 'assets-browser')];
+        for (const id of restoreOrder) {
+          if (this.api.getPanel(id)) continue;
+          const cfg = { ...PANEL_CONFIGS[id] };
+          if (cfg.position?.referencePanel && !this.api.getPanel(cfg.position.referencePanel)) {
+            delete cfg.position;
+          }
+          this.api.addPanel(cfg);
+        }
+        if (bottomHeightRestore !== null) {
+          requestAnimationFrame(() => {
+            const applyBottomHeight = () => {
+              try {
+                const assets = this.api.getPanel('assets-browser');
+                const groupApi = assets?.api?.group?.api;
+                if (groupApi) groupApi.setSize({ height: bottomHeightRestore });
+              } catch(_) {}
             };
-            const finishRestore = () => {
+            applyBottomHeight();
+            requestAnimationFrame(() => {
+              applyBottomHeight();
               this._restoringLayout = false;
               this._scheduleAutoSave();
-            };
-            requestAnimationFrame(() => {
-              applySizes();
-              requestAnimationFrame(() => {
-                applySizes();
-                finishRestore();
-              });
             });
-          } else {
-            this._restoringLayout = false;
-            this._scheduleAutoSave();
-          }
+          });
         } else {
-          const assets = this.api.getPanel('assets-browser');
-          if (!assets) {
-            this.api.addPanel({ ...PANEL_CONFIGS['assets-browser'] });
-          }
-          const material = this.api.getPanel('material-browser');
-          if (!material) {
-            this.api.addPanel({ ...PANEL_CONFIGS['material-browser'] });
-          }
           this._restoringLayout = false;
           this._scheduleAutoSave();
         }
