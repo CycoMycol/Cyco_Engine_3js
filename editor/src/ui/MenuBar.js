@@ -17,7 +17,6 @@ const PANEL_IDS = [
   { id: 'center-viewport', label: 'Center',    icon: '▌▐' },
   { id: 'properties',      label: 'Right',     icon: '▌▐' },
   { id: 'assets-browser',  label: 'Bottom',    icon: '▄'  },
-  { id: 'material-browser',label: 'Materials', icon: '▦'  },
 ];
 
 export function createMenuBar(options = {}) {
@@ -136,7 +135,8 @@ export function createMenuBar(options = {}) {
       const visible = LayoutManager.isPanelVisible(p.id);
       const btn = toggleBtns[p.id];
       btn.classList.toggle('active', visible);
-      btn.classList.toggle('panel-hidden', !visible);
+      const isBottom = p.id === 'assets-browser';
+      btn.classList.toggle('panel-hidden', isBottom ? !LayoutManager.isBottomDockVisible() : !visible);
     });
   });
 
@@ -485,13 +485,12 @@ function layoutMenu() {
   ];
 }
 
-function _toggleSubmenu() {
+  function _toggleSubmenu() {
   return [
     { label: 'Left Panel',   action: () => LayoutManager.togglePanel('scene-hierarchy'), checked: LayoutManager.isPanelVisible('scene-hierarchy') },
     { label: 'Center Panel', action: () => LayoutManager.togglePanel('center-viewport'),  checked: LayoutManager.isPanelVisible('center-viewport')  },
     { label: 'Right Panel',  action: () => LayoutManager.togglePanel('properties'),      checked: LayoutManager.isPanelVisible('properties')        },
-    { label: 'Bottom Panel', action: () => LayoutManager.togglePanel('assets-browser'),  checked: LayoutManager.isPanelVisible('assets-browser')    },
-    { label: 'Materials',    action: () => LayoutManager.togglePanel('material-browser'), checked: LayoutManager.isPanelVisible('material-browser')  },
+    { label: 'Bottom Panel', action: () => LayoutManager.togglePanel('assets-browser'),  checked: LayoutManager.isBottomDockVisible()               },
   ];
 }
 

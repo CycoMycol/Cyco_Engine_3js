@@ -20,6 +20,42 @@ import { PhysicsWorldPanel }  from './panels/PhysicsWorldPanel.js';
 import { ComponentPickerPanel } from './panels/ComponentPickerPanel.js';
 import { InputManagerPanel }  from './panels/InputManagerPanel.js';
 
+export function normalizeLayoutForCurrentVersion(layout) {
+  if (!layout) return layout;
+  const cloned = JSON.parse(JSON.stringify(layout));
+  if (cloned.grid?.root) cloned.grid.root = _mergeMaterialBrowser(cloned.grid.root);
+  return cloned;
+}
+
+function _mergeMaterialBrowser(node) {
+  if (!node) return node;
+  if (node.type === 'leaf') return node;
+  if (node.type === 'branch') {
+    const children = (node.data ?? []).map(_mergeMaterialBrowser).filter(Boolean);
+    const assetsIdx = children.findIndex(child => child.type === 'leaf' && (child.data?.views ?? []).includes('assets-browser'));
+    const materialIdx = children.findIndex(child => child.type === 'leaf' && (child.data?.views ?? []).includes('material-browser'));
+    if (assetsIdx !== -1 && materialIdx !== -1) {
+      const assets = children[assetsIdx];
+      const material = children[materialIdx];
+      const merged = {
+        type: 'leaf',
+        size: (assets.size ?? 0) + (material.size ?? 0),
+        data: {
+          ...(assets.data ?? material.data ?? {}),
+          id: assets.data?.id ?? material.data?.id,
+          views: ['assets-browser', 'material-browser'],
+          activeView: (assets.data?.activeView === 'material-browser') ? 'material-browser' : 'assets-browser',
+        },
+      };
+      const mergedChildren = children.filter((_, index) => index !== assetsIdx && index !== materialIdx);
+      mergedChildren.splice(Math.min(assetsIdx, materialIdx), 0, merged);
+      return mergedChildren.length === 1 && (node.data ?? []).length > 1 ? mergedChildren[0] : { ...node, data: mergedChildren };
+    }
+    return { ...node, data: children };
+  }
+  return node;
+}
+
 // ── Default layout snapshot ────────────────────────────────────────────────────
 // Captured from the user's preferred arrangement:
 //   Menu Bar (top, 30px) → Scene Hierarchy (left, 142px) | Viewport (270px) /
@@ -58,7 +94,7 @@ export function initLayout(container) {
   // saved layout.  NOTE: both calls share the same createComponent factory, so
   // panel init() fires once per fromJSON; _pendingOrient is re-applied before
   // the restore call.
-  api.fromJSON(DEFAULT_LAYOUT);
+  api.fromJSON(normalizeLayoutForCurrentVersion(DEFAULT_LAYOUT));
 
   return api;
 }

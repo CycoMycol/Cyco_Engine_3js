@@ -38,6 +38,58 @@ const PANEL_CONFIGS = {
   },
 };
 
+const BOTTOM_DOCK_IDS = ['assets-browser', 'material-browser'];
+
+function normalizeLayoutForCurrentVersion(layout) {
+  if (!layout) return layout;
+  const cloned = JSON.parse(JSON.stringify(layout));
+  if (cloned.grid?.root) cloned.grid.root = _mergeMaterialBrowser(cloned.grid.root);
+  return cloned;
+}
+
+function _findLeafSize(node, id) {
+  if (!node) return null;
+  if (node.type === 'leaf') {
+    return (node.data?.views ?? []).includes(id) ? node.size : null;
+  }
+  if (node.type === 'branch') {
+    for (const child of (node.data ?? [])) {
+      const found = _findLeafSize(child, id);
+      if (found !== null) return found;
+    }
+  }
+  return null;
+}
+
+function _mergeMaterialBrowser(node) {
+  if (!node) return node;
+  if (node.type === 'leaf') return node;
+  if (node.type === 'branch') {
+    const children = (node.data ?? []).map(_mergeMaterialBrowser).filter(Boolean);
+    const assetsIdx = children.findIndex(child => child.type === 'leaf' && (child.data?.views ?? []).includes('assets-browser'));
+    const materialIdx = children.findIndex(child => child.type === 'leaf' && (child.data?.views ?? []).includes('material-browser'));
+    if (assetsIdx !== -1 && materialIdx !== -1) {
+      const assets = children[assetsIdx];
+      const material = children[materialIdx];
+      const merged = {
+        type: 'leaf',
+        size: (assets.size ?? 0) + (material.size ?? 0),
+        data: {
+          ...(assets.data ?? material.data ?? {}),
+          id: assets.data?.id ?? material.data?.id,
+          views: ['assets-browser', 'material-browser'],
+          activeView: (assets.data?.activeView === 'material-browser') ? 'material-browser' : 'assets-browser',
+        },
+      };
+      const mergedChildren = children.filter((_, index) => index !== assetsIdx && index !== materialIdx);
+      mergedChildren.splice(Math.min(assetsIdx, materialIdx), 0, merged);
+      return mergedChildren.length === 1 && (node.data ?? []).length > 1 ? mergedChildren[0] : { ...node, data: mergedChildren };
+    }
+    return { ...node, data: children };
+  }
+  return node;
+}
+
 const ALL_IDS = ['scene-hierarchy', 'center-viewport', 'properties', 'assets-browser', 'material-browser'];
 const AUTO_SAVE_KEY = 'cyco-layout-current';
 
@@ -167,7 +219,7 @@ const LayoutManager = {
       if (this._defaultLayout) {
         this._setPendingOrientFromLayout(this._defaultLayout);
         this._restoringLayout = true;
-        this.api.fromJSON(this._defaultLayout);
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(this._defaultLayout));
         this._restoringLayout = false;
       }
       return;
@@ -181,7 +233,7 @@ const LayoutManager = {
       if (this._defaultLayout) {
         this._setPendingOrientFromLayout(this._defaultLayout);
         this._restoringLayout = true;
-        this.api.fromJSON(this._defaultLayout);
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(this._defaultLayout));
         this._restoringLayout = false;
       }
       return;
@@ -204,7 +256,7 @@ const LayoutManager = {
         if (this._defaultLayout) {
           this._setPendingOrientFromLayout(this._defaultLayout);
           this._restoringLayout = true;
-          this.api.fromJSON(this._defaultLayout);
+          this.api.fromJSON(normalizeLayoutForCurrentVersion(this._defaultLayout));
           this._restoringLayout = false;
         }
         return;
@@ -221,7 +273,7 @@ const LayoutManager = {
       // Set orientation hints so bar panel init() applies correct constraints during fromJSON.
       this._setPendingOrientFromLayout(layout);
       this._restoringLayout = true;
-      this.api.fromJSON(layout);
+      this.api.fromJSON(normalizeLayoutForCurrentVersion(layout));
       this._snapshots = snapshots;
       this._resyncVisibility();
       document.dispatchEvent(new CustomEvent('cyco-layout-change'));
@@ -256,7 +308,7 @@ const LayoutManager = {
         try {
           this._setPendingOrientFromLayout(this._defaultLayout);
           this._restoringLayout = true;
-          this.api.fromJSON(this._defaultLayout);
+          this.api.fromJSON(normalizeLayoutForCurrentVersion(this._defaultLayout));
           this._restoringLayout = false;
         } catch(_) { this._restoringLayout = false; }
       }
@@ -266,6 +318,11 @@ const LayoutManager = {
   /** Toggle a panel between shown and hidden. */
   togglePanel(id) {
     if (!this.api) return;
+    if (id === 'assets-browser') {
+      this._toggleBottomDock();
+      document.dispatchEvent(new CustomEvent('cyco-layout-change'));
+      return;
+    }
     const visible = this._visibility[id] ?? true;
     if (visible) {
       this._hidePanel(id);
@@ -278,6 +335,10 @@ const LayoutManager = {
   /** Returns true if the panel is currently in the layout. */
   isPanelVisible(id) {
     return this._visibility[id] ?? true;
+  },
+
+  isBottomDockVisible() {
+    return BOTTOM_DOCK_IDS.some(id => this._visibility[id] ?? true);
   },
 
   /**
@@ -303,7 +364,7 @@ const LayoutManager = {
       this._setPendingOrientFromLayout(snapshot);
 
       this._restoringLayout = true;
-      this.api.fromJSON(snapshot);
+      this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
 
       toReHide.forEach(id => {
         try {
@@ -344,18 +405,183 @@ const LayoutManager = {
       this._restoringLayout = true;
 
       if (hideSnapshot) {
-        this.api.fromJSON(hideSnapshot);
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(hideSnapshot));
       } else {
         // Fallback when snapshot manipulation is not possible
         this.api.getPanel(id).api.close();
       }
 
       this._resyncVisibility();
+      if (hideSnapshot?.grid?.root) {
+        const savedRoot = hideSnapshot.grid.root;
+        const applySizes = () => {
+          try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+        };
+        requestAnimationFrame(() => {
+          applySizes();
+          requestAnimationFrame(() => {
+            applySizes();
+            this._restoringLayout = false;
+            this._scheduleAutoSave();
+          });
+        });
+      } else {
+        this._restoringLayout = false;
+        this._scheduleAutoSave();
+      }
+    } catch(e) {
+      this._restoringLayout = false;
+      console.warn('_hidePanel error:', e);
+    }
+  },
+
+  _toggleBottomDock() {
+    if (!this.api) return;
+    const anyVisible = BOTTOM_DOCK_IDS.some(id => this.api.getPanel(id));
+    if (anyVisible) {
+      // Close the bottom tab strip directly so Dockview can expand the center
+      // viewport without rebuilding the rest of the grid.
+      this._snapshots['assets-browser'] = this.api.toJSON();
+      this._restoringLayout = true;
+      try {
+        const material = this.api.getPanel('material-browser');
+        if (material) material.api.close();
+      } catch(_) {}
+      try {
+        const assets = this.api.getPanel('assets-browser');
+        if (assets) assets.api.close();
+      } catch(_) {}
+      this._resyncVisibility();
+      this._restoringLayout = false;
+      this._scheduleAutoSave();
+    } else {
+      const snapshot = this._snapshots['assets-browser'];
+      this._restoringLayout = true;
+      try {
+        if (snapshot) {
+          this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
+          const savedRoot = snapshot.grid?.root;
+          if (savedRoot) {
+            const applySizes = () => {
+              try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+            };
+            const finishRestore = () => {
+              this._restoringLayout = false;
+              this._scheduleAutoSave();
+            };
+            requestAnimationFrame(() => {
+              applySizes();
+              requestAnimationFrame(() => {
+                applySizes();
+                finishRestore();
+              });
+            });
+          } else {
+            this._restoringLayout = false;
+            this._scheduleAutoSave();
+          }
+        } else {
+          const assets = this.api.getPanel('assets-browser');
+          if (!assets) {
+            this.api.addPanel({ ...PANEL_CONFIGS['assets-browser'] });
+          }
+          const material = this.api.getPanel('material-browser');
+          if (!material) {
+            this.api.addPanel({ ...PANEL_CONFIGS['material-browser'] });
+          }
+          this._restoringLayout = false;
+          this._scheduleAutoSave();
+        }
+      } catch(e) {
+        console.warn('_toggleBottomDock open error:', e);
+      }
+      this._resyncVisibility();
+    }
+  },
+
+  _hidePanelGroup(ids) {
+    try {
+      const visibleIds = ids.filter(id => this.api.getPanel(id));
+      if (!visibleIds.length) return;
+
+      this._snapshots['assets-browser'] = this.api.toJSON();
+      const hideSnapshot = this._buildHideSnapshotGroup(ids);
+
+      this._restoringLayout = true;
+      if (hideSnapshot) {
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(hideSnapshot));
+      } else {
+        visibleIds.forEach(id => {
+          try {
+            const p = this.api.getPanel(id);
+            if (p) p.api.close();
+          } catch(_) {}
+        });
+      }
+
+      this._resyncVisibility();
+      const savedRoot = hideSnapshot?.grid?.root ?? this._snapshots['assets-browser']?.grid?.root;
+      if (savedRoot) {
+        const applySizes = () => {
+          try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+        };
+        requestAnimationFrame(() => {
+          applySizes();
+          requestAnimationFrame(() => {
+            applySizes();
+            this._restoringLayout = false;
+            this._scheduleAutoSave();
+          });
+        });
+      } else {
+        this._restoringLayout = false;
+        this._scheduleAutoSave();
+      }
+    } catch(e) {
+      this._restoringLayout = false;
+      console.warn('_hidePanelGroup error:', e);
+    }
+  },
+
+  _showPanelGroup(ids) {
+    try {
+      const snapshot = this._snapshots['assets-browser'];
+      this._restoringLayout = true;
+
+      if (snapshot) {
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
+        const savedRoot = snapshot.grid?.root;
+        if (savedRoot) {
+          const applySizes = () => {
+            try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+          };
+          requestAnimationFrame(() => {
+            applySizes();
+            requestAnimationFrame(() => {
+              applySizes();
+              this._restoringLayout = false;
+              this._scheduleAutoSave();
+            });
+          });
+          ids.forEach(id => { this._visibility[id] = true; });
+          return;
+        }
+      } else {
+        ids.forEach(id => {
+          const cfg = { ...PANEL_CONFIGS[id] };
+          if (cfg.position?.referencePanel && !this.api.getPanel(cfg.position.referencePanel)) {
+            delete cfg.position;
+          }
+          this.api.addPanel(cfg);
+        });
+      }
+
+      ids.forEach(id => { this._visibility[id] = true; });
       this._restoringLayout = false;
       this._scheduleAutoSave();
     } catch(e) {
       this._restoringLayout = false;
-      console.warn('_hidePanel error:', e);
+      console.warn('_showPanelGroup error:', e);
     }
   },
 
@@ -371,40 +597,13 @@ const LayoutManager = {
   _buildHideSnapshot(id) {
     try {
       const snapshot = this.api.toJSON();
-      const root = snapshot?.grid?.root;
-      if (!root || root.type !== 'branch' || !Array.isArray(root.data)) return null;
-
-      // Find the leaf that corresponds to the panel being hidden.
-      const leafIdx = root.data.findIndex(node =>
-        node.type === 'leaf' &&
-        node.data?.views &&
-        node.data.views.includes(id)
-      );
-      if (leafIdx === -1) return null;
-
-      const freedWidth = root.data[leafIdx].size;
-      const oppositeId = this._OPPOSITE[id];
-
-      // Find the center column: the node that is neither the panel being hidden
-      // nor the opposite side panel. It may be a branch (center+bottom) or a leaf.
-      const centerIdx = root.data.findIndex((node, i) => {
-        if (i === leafIdx) return false;
-        if (node.type === 'leaf' && node.data?.views) {
-          if (oppositeId && node.data.views.includes(oppositeId)) return false;
-          if (node.data.views.includes(id)) return false;
-        }
-        return true;
-      });
-      if (centerIdx === -1) return null;
-
-      // Deep-clone then apply edits.
       const modified = JSON.parse(JSON.stringify(snapshot));
+      const root = modified?.grid?.root;
+      if (!root) return null;
 
-      // Give the freed column width entirely to the center column.
-      modified.grid.root.data[centerIdx].size += freedWidth;
-
-      // Remove the hidden panel's column from the grid.
-      modified.grid.root.data.splice(leafIdx, 1);
+      const removed = this._removePanelFromNode(root, id);
+      if (!removed.found || !removed.node) return null;
+      modified.grid.root = removed.node;
 
       // Remove from the panels map so fromJSON doesn't recreate it.
       if (modified.panels?.[id]) delete modified.panels[id];
@@ -419,6 +618,70 @@ const LayoutManager = {
     }
   },
 
+  _buildHideSnapshotGroup(ids) {
+    try {
+      const snapshot = this.api.toJSON();
+      const modified = JSON.parse(JSON.stringify(snapshot));
+      const root = modified?.grid?.root;
+      if (!root) return null;
+
+      const removed = this._removePanelFromNode(root, new Set(ids));
+      if (!removed.found || !removed.node) return null;
+      modified.grid.root = removed.node;
+
+      for (const id of ids) {
+        if (modified.panels?.[id]) delete modified.panels[id];
+      }
+      if (ids.includes(modified.activePanel)) delete modified.activePanel;
+      return modified;
+    } catch(e) {
+      console.warn('_buildHideSnapshotGroup error:', e);
+      return null;
+    }
+  },
+
+  _removePanelFromNode(node, ids) {
+    if (!node) return { node: null, found: false };
+    const idSet = ids instanceof Set ? ids : new Set([ids]);
+    if (node.type === 'leaf') {
+      const views = node.data?.views ?? [];
+      if (views.some(v => idSet.has(v))) return { node: null, found: true };
+      return { node, found: false };
+    }
+
+    if (node.type !== 'branch') return { node, found: false };
+
+    let found = false;
+    const children = [];
+    for (const child of (node.data ?? [])) {
+      const result = this._removePanelFromNode(child, idSet);
+      found = found || result.found;
+      if (result.node) children.push(result.node);
+    }
+
+    if (!found) return { node, found: false };
+    if (!children.length) return { node: null, found: true };
+    if (children.length === 1) {
+      if ((node.data ?? []).length > 1) {
+        return { node: { ...children[0], size: node.size }, found: true };
+      }
+      return { node: { ...node, data: children }, found: true };
+    }
+    return { node: { ...node, data: children }, found: true };
+  },
+
+  _repairLayoutSizes(layout) {
+    const root = layout?.grid?.root;
+    if (!root || !this.api) return;
+    const apply = () => {
+      try { this._applyGridSizes(root, 'VERTICAL'); } catch (_) {}
+    };
+    setTimeout(() => {
+      apply();
+      setTimeout(apply, 200);
+    }, 150);
+  },
+
   _showPanel(id) {
     try {
       if (this.api.getPanel(id)) return; // already present
@@ -429,7 +692,7 @@ const LayoutManager = {
       if (snapshot) {
         // Restore the full layout from the snapshot taken before this panel was
         // hidden. This brings it back at the exact size and position the user set.
-        this.api.fromJSON(snapshot);
+        this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
 
         // Re-hide any panels that were hidden after this snapshot was taken
         // (i.e. panels whose _visibility is still false, other than `id` itself).
@@ -440,6 +703,26 @@ const LayoutManager = {
             if (p) p.api.close();
           } catch(_) {}
         });
+
+        const savedRoot = snapshot.grid?.root;
+        if (savedRoot) {
+          this._visibility[id] = true;
+          const applySizes = () => {
+            try { this._applyGridSizes(savedRoot, 'VERTICAL'); } catch(_) {}
+          };
+          const finishRestore = () => {
+            this._restoringLayout = false;
+            this._scheduleAutoSave();
+          };
+          requestAnimationFrame(() => {
+            applySizes();
+            requestAnimationFrame(() => {
+              applySizes();
+              finishRestore();
+            });
+          });
+          return;
+        }
       } else {
         // Fallback: no snapshot — add with default dimensions
         const cfg = { ...PANEL_CONFIGS[id] };
@@ -595,7 +878,8 @@ const LayoutManager = {
       if (!layouts[name]) return;
       this._setPendingOrientFromLayout(layouts[name]);
       this._restoringLayout = true;
-      this.api.fromJSON(layouts[name]);
+      this.api.fromJSON(normalizeLayoutForCurrentVersion(layouts[name]));
+      this._repairLayoutSizes(layouts[name]);
       this._snapshots = {};
       this._resyncVisibility();
       this._restoringLayout = false;
@@ -615,7 +899,8 @@ const LayoutManager = {
     try {
       this._setPendingOrientFromLayout(this._defaultLayout);
       this._restoringLayout = true;
-      this.api.fromJSON(this._defaultLayout);
+      this.api.fromJSON(normalizeLayoutForCurrentVersion(this._defaultLayout));
+      this._repairLayoutSizes(this._defaultLayout);
       ALL_IDS.forEach(id => { this._visibility[id] = true; });
       this._snapshots = {};
       this._restoringLayout = false;
