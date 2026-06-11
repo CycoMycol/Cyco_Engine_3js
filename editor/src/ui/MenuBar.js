@@ -424,8 +424,10 @@ function fileMenu() {
   return [
     { label: 'New Project',     action: () => NewProjectDialog.open() },
     { label: 'Open Project',    action: () => _openProjectDialog() },
+    { label: 'Open Project File…', action: () => ProjectManager.openProjectFile() },
     { label: 'Recent Projects', dynamicSubmenu: _recentProjectsSubmenu },
     { separator: true },
+    { label: 'Save Project (.cyco)…', action: () => ProjectManager.saveProjectFile() },
     { label: 'Save Scene',      action: () => _saveScene() },
     { label: 'Save Scene As…',  action: () => _saveSceneAs() },
     { label: 'Load Scene…',     action: () => _loadScene() },
@@ -571,11 +573,6 @@ function helpMenu() {
 
 function _openProjectDialog() {
   const recents = ProjectManager.getRecentProjects();
-  if (recents.length === 0) {
-    // No saved projects — go straight to New Project
-    NewProjectDialog.open();
-    return;
-  }
 
   const existing = document.getElementById('ce-open-project-dlg');
   if (existing) { existing.close(); existing.remove(); }
@@ -596,6 +593,7 @@ function _openProjectDialog() {
     <div class="ce-op-list">${listHtml || '<div class="ce-op-empty">No saved projects found.</div>'}</div>
     <div class="ce-np-actions">
       <button class="ce-btn ghost" id="ce-op-cancel">Cancel</button>
+      <button class="ce-btn" id="ce-op-open-file">Open Project File…</button>
       <button class="ce-btn" id="ce-op-new">New Project…</button>
     </div>
   `;
@@ -612,6 +610,10 @@ function _openProjectDialog() {
 
   dlg.querySelector('#ce-op-cancel').addEventListener('click', () => {
     dlg.close(); dlg.remove();
+  });
+  dlg.querySelector('#ce-op-open-file').addEventListener('click', async () => {
+    dlg.close(); dlg.remove();
+    await ProjectManager.openProjectFile();
   });
   dlg.querySelector('#ce-op-new').addEventListener('click', () => {
     dlg.close(); dlg.remove();

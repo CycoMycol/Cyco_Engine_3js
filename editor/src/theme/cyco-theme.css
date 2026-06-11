@@ -1935,9 +1935,41 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
 }
 .ce-np-input:focus { border-color: var(--ce-accent-orange); }
 .ce-np-path-row { display: flex; gap: 6px; }
-.ce-np-path-input { flex: 1; }
+.ce-np-path-input {
+  flex: 1;
+  min-width: 0;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.01em;
+  padding-right: 12px;
+}
 .ce-np-browse-btn { height: 30px; padding: 0 10px; flex-shrink: 0; }
 .ce-np-path-hint { font-size: 10px; color: var(--ce-text-muted); opacity: 0.7; }
+.ce-np-save-log {
+  margin-top: 2px;
+  color: var(--ce-text-muted);
+  font-size: 10px;
+}
+.ce-np-save-log summary {
+  cursor: pointer;
+  color: var(--ce-accent-orange);
+  user-select: none;
+  width: fit-content;
+}
+.ce-np-save-log-report {
+  min-height: 72px;
+  max-height: 140px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 7px 8px;
+  background: rgba(0,0,0,0.22);
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
+  color: var(--ce-accent-orange);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
 .ce-np-checkbox-row { flex-direction: row; align-items: center; }
 .ce-np-checkbox-label {
   display: flex;
@@ -1963,7 +1995,12 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   border-radius: 9px;
 }
 .ce-np-preview-label { font-size: 11px; color: var(--ce-text-muted); white-space: nowrap; }
-.ce-np-preview-path { font-size: 11px; color: var(--ce-accent-orange); word-break: break-all; }
+.ce-np-preview-path {
+  font-size: 11px;
+  color: var(--ce-accent-orange);
+  word-break: break-all;
+  font-family: 'JetBrains Mono', monospace;
+}
 .ce-np-folder-list { display: flex; flex-direction: column; gap: 6px; }
 .ce-np-folder-list-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ce-np-folder-list-label { font-size: 10px; color: var(--ce-text-muted); text-transform: uppercase; letter-spacing: 0.06em; }

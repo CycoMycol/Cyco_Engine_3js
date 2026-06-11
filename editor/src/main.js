@@ -198,6 +198,22 @@ setTimeout(() => {
 }, 800);
 
 // Export modules to window for debugging
+async function pickDirectory(options = {}) {
+  const nativeBridge = window.__cyco_native?.pickDirectory;
+  if (typeof nativeBridge === 'function') {
+    return await nativeBridge(options);
+  }
+  if (typeof window.showDirectoryPicker === 'function') {
+    const dirHandle = await window.showDirectoryPicker(options);
+    return {
+      name: dirHandle?.name || '',
+      path: dirHandle?.path || dirHandle?.fullPath || dirHandle?.name || '',
+      handle: dirHandle,
+    };
+  }
+  return null;
+}
+
 if (typeof window !== 'undefined') {
   window.__cyco = {
     rendererManager,
@@ -210,6 +226,7 @@ if (typeof window !== 'undefined') {
     commandManager,
     viewportContextMenu,
     dockviewApi: dockApi,
+    pickDirectory,
     get cloudSystem()     { return viewportEngine.cloudSystem; },
     get cloudSystem2()    { return viewportEngine.cloudSystem2; },
     get gradientSky()     { return viewportEngine.gradientSky; },
