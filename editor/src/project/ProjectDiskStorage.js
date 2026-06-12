@@ -67,6 +67,7 @@ const ProjectDiskStorage = {
     const fileHandle = await projectDirHandle.getFileHandle(fileName, { create: true });
     this.debug('createProject:file-handle', { fileName, fileHandleName: fileHandle?.name || null });
     await this.writeJson(fileHandle, snapshot);
+    await this.writeEngineStateFile(projectDirHandle, snapshot);
     this.debug('createProject:file-written', { fileName });
 
     this._projectDirHandle = projectDirHandle;
@@ -82,11 +83,19 @@ const ProjectDiskStorage = {
       hasFileHandle: !!this._projectFileHandle,
       hasDirHandle: !!this._projectDirHandle,
       fileName: this._fileName,
+      rendererType: snapshot?.runtime?.renderer?.activeType || snapshot?.prefs?.renderer?.defaultType || null,
+      rendererClass: snapshot?.runtime?.renderer?.rendererClass || null,
+      sceneChildren: snapshot?.scene?.object?.children?.length ?? 0,
+      geometries: snapshot?.scene?.geometries?.length ?? 0,
+      materials: snapshot?.scene?.materials?.length ?? 0,
+      textures: snapshot?.scene?.textures?.length ?? 0,
+      images: snapshot?.scene?.images?.length ?? 0,
     });
     if (!snapshot) return false;
 
     if (this._projectFileHandle) {
       await this.writeJson(this._projectFileHandle, snapshot);
+      if (this._projectDirHandle) await this.writeEngineStateFile(this._projectDirHandle, snapshot);
       this.debug('writeSnapshot:file-written', { fileName: this._fileName || this._projectFileHandle?.name || null });
       return true;
     }
@@ -97,6 +106,7 @@ const ProjectDiskStorage = {
     this._projectFileHandle = fileHandle;
     this._fileName = fileName;
     await this.writeJson(fileHandle, snapshot);
+    await this.writeEngineStateFile(this._projectDirHandle, snapshot);
     this.debug('writeSnapshot:file-created-written', { fileName });
     return true;
   },
@@ -104,11 +114,27 @@ const ProjectDiskStorage = {
   async ensureFolderTree(dirHandle, tree) {
     if (!tree || typeof tree !== 'object') return;
     for (const [name, child] of Object.entries(tree)) {
+      if (this.isFileRecord(child)) continue;
       this.debug('ensureFolderTree:create-folder', { folderName: name, parentName: dirHandle?.name || null });
       const childDir = await dirHandle.getDirectoryHandle(name, { create: true });
       if (child && typeof child === 'object') {
         await this.ensureFolderTree(childDir, child);
       }
+    }
+  },
+
+  async writeEngineStateFile(projectDirHandle, snapshot) {
+    const engineState = snapshot?.engineState;
+    if (!projectDirHandle || !engineState) return false;
+    try {
+      const engineDir = await projectDirHandle.getDirectoryHandle('engine', { create: true });
+      const stateFile = await engineDir.getFileHandle('cyco-engine.json', { create: true });
+      await this.writeJson(stateFile, engineState);
+      this.debug('writeEngineStateFile:complete', { fileName: 'engine/cyco-engine.json' });
+      return true;
+    } catch (err) {
+      this.debug('writeEngineStateFile:error', { message: err?.message || String(err) });
+      return false;
     }
   },
 
@@ -144,6 +170,12 @@ const ProjectDiskStorage = {
       fileName: fileHandle?.name || null,
       projectName: value?.name || null,
       bytes: text.length,
+      rendererType: value?.runtime?.renderer?.activeType || value?.prefs?.renderer?.defaultType || null,
+      sceneChildren: value?.scene?.object?.children?.length ?? 0,
+      geometries: value?.scene?.geometries?.length ?? 0,
+      materials: value?.scene?.materials?.length ?? 0,
+      textures: value?.scene?.textures?.length ?? 0,
+      images: value?.scene?.images?.length ?? 0,
     });
     const writable = await fileHandle.createWritable();
     await writable.write(text);
@@ -153,6 +185,10 @@ const ProjectDiskStorage = {
 
   isDirectoryHandle(value) {
     return !!value && typeof value.getDirectoryHandle === 'function';
+  },
+
+  isFileRecord(value) {
+    return !!value && typeof value === 'object' && value._cycoType === 'file';
   },
 
   sanitizeName(name) {

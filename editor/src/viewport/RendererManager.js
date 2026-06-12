@@ -15,6 +15,7 @@ import * as THREE from 'three';
 import WebGPU from 'three/addons/capabilities/WebGPU.js';
 import { SVGRenderer } from 'three/addons/renderers/SVGRenderer.js';
 import { CSS3DRenderer } from 'three/addons/renderers/CSS3DRenderer.js';
+import ProjectSaveLog from '../project/ProjectSaveLog.js';
 
 export class RendererManager {
   constructor() {
@@ -33,6 +34,30 @@ export class RendererManager {
     window.addEventListener('cyco-vp-ready', this._boundOnVpReady, { once: true });
   }
 
+  _debug(step, payload = {}) {
+    ProjectSaveLog.add('RendererManager', step, payload);
+  }
+
+  _rendererSummary(renderer = this.renderer) {
+    const canvas = renderer?.domElement;
+    return {
+      activeType: this.activeType,
+      rendererClass: renderer?.constructor?.name || null,
+      isWebGLRenderer: !!renderer?.isWebGLRenderer,
+      isWebGPURenderer: !!renderer?.isWebGPURenderer,
+      hasDomElement: !!canvas,
+      canvasConnected: !!canvas?.isConnected,
+      canvasWidth: canvas?.width ?? null,
+      canvasHeight: canvas?.height ?? null,
+      cssWidth: canvas?.offsetWidth ?? null,
+      cssHeight: canvas?.offsetHeight ?? null,
+      pixelRatio: typeof renderer?.getPixelRatio === 'function' ? renderer.getPixelRatio() : null,
+      toneMapping: renderer?.toneMapping ?? null,
+      exposure: renderer?.toneMappingExposure ?? null,
+      outputColorSpace: renderer?.outputColorSpace ?? null,
+    };
+  }
+
   /**
    * Initialise the default WebGL renderer inside the given container element.
    * Must be called once from ViewportEngine.init().
@@ -48,16 +73,25 @@ export class RendererManager {
    */
   async init(container, width, height) {
     this.container = container;
+    this._debug('init:start', {
+      requestedWidth: width,
+      requestedHeight: height,
+      containerConnected: !!container?.isConnected,
+      containerId: container?.id || null,
+    });
 
     // Check preferences for default renderer type
     let prefType = 'webgpu';
+    let legacyType = null;
     try {
       const raw = localStorage.getItem('cyco-prefs');
       if (raw) {
         const prefs = JSON.parse(raw);
         if (prefs?.renderer?.defaultType) prefType = prefs.renderer.defaultType;
       }
+      legacyType = localStorage.getItem('cyco:rendererType');
     } catch (_) {}
+    this._debug('init:prefs', { prefType, legacyType });
     this.activeType = prefType;
 
     const MAX_ATTEMPTS = 3;
@@ -67,11 +101,13 @@ export class RendererManager {
       try {
         this.renderer = await this._createWebGPU(width, height);
       } catch (err) {
+        this._debug('init:webgpu-failed', { message: err?.message || String(err) });
         console.warn('[RendererManager] WebGPU init failed, falling back to WebGL:', err.message);
         this.activeType = 'webgl';
         try {
           this.renderer = this._createWebGL(width, height);
         } catch (webglErr) {
+          this._debug('init:webgl-fallback-failed', { message: webglErr?.message || String(webglErr) });
           console.error('[RendererManager] WebGL fallback also failed:', webglErr.message);
           throw webglErr; // propagate the WebGL error if both fail
         }
@@ -80,9 +116,11 @@ export class RendererManager {
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         try {
           this.renderer = this._createWebGL(width, height);
+          this._debug('init:webgl-created', { attempt });
           break; // success
         } catch (err) {
           lastErr = err;
+          this._debug('init:webgl-create-failed', { attempt, message: err?.message || String(err) });
           if (attempt < MAX_ATTEMPTS) {
             console.warn(`[RendererManager] WebGL context creation failed (attempt ${attempt}/${MAX_ATTEMPTS}), retrying in ${RETRY_DELAY_MS}ms…`, err.message);
             await new Promise(r => setTimeout(r, RETRY_DELAY_MS));
@@ -99,6 +137,7 @@ export class RendererManager {
       container.appendChild(this.renderer.domElement);
     }
     
+    this._debug('init:complete', this._rendererSummary(this.renderer));
     this._dispatch('cyco-renderer-ready', { renderer: this.renderer, type: this.activeType });
     return this.renderer;
   }
@@ -106,6 +145,7 @@ export class RendererManager {
   // ─── Private — renderer factories ─────────────────────────────────────────
 
   _createWebGL(w, h) {
+    this._debug('createWebGL:start', { width: w, height: h });
     const renderer = new THREE.WebGLRenderer({
       antialias: true,
       powerPreference: 'high-performance',
@@ -117,10 +157,12 @@ export class RendererManager {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;   // Default 1.0 — matches camera view; controlled by sky exposure slider
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this._debug('createWebGL:complete', this._rendererSummary(renderer));
     return renderer;
   }
 
   async _createWebGPU(w, h) {
+    this._debug('createWebGPU:start', { width: w, height: h });
     // Dynamic import keeps three.webgpu.min.js out of initial parse
     // WebGPURenderer is a named export (not default) in three/webgpu
     const { WebGPURenderer } = await import('three/webgpu');
@@ -132,11 +174,18 @@ export class RendererManager {
     // that ViewHelper issues (renderer.clearDepth) to trigger an MSAA resolve that
     // overwrites the previously rendered TSL scene on the canvas.
     const renderer = new WebGPURenderer({ antialias: false, forceWebGL: true, preserveDrawingBuffer: true });
+    this._debug('createWebGPU:constructed', {
+      rendererClass: renderer?.constructor?.name || null,
+      forceWebGL: true,
+      preserveDrawingBuffer: true,
+      antialias: false,
+    });
     renderer.setSize(w, h);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     await renderer.init().catch(err => {
+      this._debug('createWebGPU:init-error', { message: err?.message || String(err), stack: err?.stack || null });
       console.error('[RendererManager] WebGPU init() failed:', err);
       throw err;
     });
@@ -145,6 +194,7 @@ export class RendererManager {
     // leave alpha=0 in the canvas — which would let the previous frame bleed
     // through any semi-transparent pixels in the scene pass (ghosting / onion-skin).
     renderer.setClearColor(0x000000, 1);
+    this._debug('createWebGPU:complete', this._rendererSummary(renderer));
     return renderer;
   }
 
@@ -187,8 +237,25 @@ export class RendererManager {
   // ─── Swap ─────────────────────────────────────────────────────────────────
 
   async _onChangeRequest(event) {
-    const { type } = event.detail;
-    if (type === this.activeType) return;
+    const { type, reason } = event.detail || {};
+    this._debug('changeRequest:start', {
+      requestedType: type || null,
+      reason: reason || null,
+      activeType: this.activeType,
+      hasContainer: !!this.container,
+    });
+    if (!type) {
+      this._debug('changeRequest:skip-no-type');
+      return;
+    }
+    if (type === this.activeType) {
+      this._debug('changeRequest:skip-same-type', { type });
+      return;
+    }
+    if (!this.container) {
+      this._debug('changeRequest:skip-no-container', { type });
+      return;
+    }
 
     const { width, height } = this.container.getBoundingClientRect();
     const w = Math.max(1, Math.floor(width));
@@ -211,6 +278,7 @@ export class RendererManager {
         default:            newRenderer = this._createWebGL(w, h); break;
       }
     } catch (err) {
+      this._debug('changeRequest:create-failed', { type, message: err?.message || String(err), stack: err?.stack || null });
       console.error('[RendererManager] Failed to create renderer:', err);
       window.dispatchEvent(new CustomEvent('cyco-notify', {
         detail: { message: `Failed to switch to ${type}: ${err.message}`, level: 'error' }
@@ -222,6 +290,7 @@ export class RendererManager {
     if (!newRenderer) {
       newRenderer = this._createWebGL(w, h);
       resolvedType = 'webgl';
+      this._debug('changeRequest:fallback-webgl', { requestedType: type });
     }
 
     // Dispose old and install new
@@ -233,15 +302,22 @@ export class RendererManager {
     // Persist the selected renderer type so it survives page refreshes
     try { localStorage.setItem('cyco:rendererType', resolvedType); } catch (_) {}
 
+    this._debug('changeRequest:complete', {
+      requestedType: type,
+      resolvedType,
+      ...this._rendererSummary(newRenderer),
+    });
     this._dispatch('cyco-renderer-changed', { renderer: newRenderer, type: resolvedType });
   }
 
   _disposeActive() {
     if (!this.renderer) return;
+    this._debug('disposeActive:start', this._rendererSummary(this.renderer));
     const el = this.renderer.domElement;
     if (el && el.parentNode) el.parentNode.removeChild(el);
     if (typeof this.renderer.dispose === 'function') this.renderer.dispose();
     this.renderer = null;
+    this._debug('disposeActive:complete');
   }
 
   /** Restore the renderer type saved in localStorage (runs once after vp-ready). */
@@ -251,7 +327,13 @@ export class RendererManager {
     try {
       const saved = localStorage.getItem('cyco:rendererType');
       if (saved && saved !== this.activeType) {
-        window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: saved } }));
+        this._debug('vpReady:legacy-renderer-override', {
+          saved,
+          activeType: this.activeType,
+        });
+        window.dispatchEvent(new CustomEvent('cyco-renderer-change', { detail: { type: saved, reason: 'legacy-localStorage' } }));
+      } else {
+        this._debug('vpReady:no-legacy-override', { saved, activeType: this.activeType });
       }
     } catch (_) {}
   }
@@ -264,7 +346,10 @@ export class RendererManager {
    * @param {number} height CSS pixel height
    */
   resize(width, height) {
-    if (!this.renderer) return;
+    if (!this.renderer) {
+      this._debug('resize:skip-no-renderer', { width, height });
+      return;
+    }
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
     if (typeof this.renderer.setSize === 'function') {
@@ -273,6 +358,11 @@ export class RendererManager {
     if (typeof this.renderer.setPixelRatio === 'function') {
       this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     }
+    this._debug('resize:complete', {
+      width: w,
+      height: h,
+      ...this._rendererSummary(this.renderer),
+    });
   }
 
   // ─── Helpers ──────────────────────────────────────────────────────────────

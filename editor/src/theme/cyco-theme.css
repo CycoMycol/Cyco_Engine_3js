@@ -118,6 +118,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 0;
+  min-width: 0;
 }
 
 #menu-bar .menu-right {
@@ -125,6 +126,22 @@ html, body {
   align-items: center;
   gap: 2px;
   position: relative; /* so .ce-bar-panel-actions positions inside here, not the whole bar */
+  min-width: 0;
+}
+
+#menu-bar .ce-project-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(360px, 34vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--ce-text-muted);
+  font-size: var(--ce-font-size-menu);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 /* Logo */
@@ -157,6 +174,27 @@ html, body {
 }
 .menu-item:active {
   background: var(--ce-active-bg);
+}
+
+.ce-toast {
+  position: fixed;
+  top: 42px;
+  left: 50%;
+  transform: translate(-50%, -6px);
+  z-index: 5000;
+  padding: 7px 12px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
+  background: var(--ce-bg-raised);
+  color: var(--ce-text-primary);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+.ce-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 /* Dropdown menus */
@@ -1815,6 +1853,11 @@ dialog.ce-mini-dialog::backdrop {
   overflow: auto;
   padding: 8px;
   min-width: 0;
+}
+.ce-ab-content.is-drop-target {
+  outline: 1px solid var(--ce-accent-orange);
+  outline-offset: -3px;
+  background: color-mix(in srgb, var(--ce-accent-orange) 10%, var(--ce-bg-base));
 }
 .ce-ab-content::-webkit-scrollbar { width: 6px; height: 6px; }
 .ce-ab-content::-webkit-scrollbar-track { background: var(--ce-scrollbar-track); }

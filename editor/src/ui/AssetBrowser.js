@@ -75,6 +75,7 @@ export class AssetBrowser {
         this._refreshContentSelection();
       }
     });
+    this._initFileDrop(this._contentEl);
 
     this._refresh();
     return root;
@@ -218,7 +219,7 @@ export class AssetBrowser {
     wrap.className = 'ce-ab-tree-node';
 
     const pathStr   = pathArray.join('/');
-    const childKeys = Object.keys(children).sort();
+    const childKeys = Object.keys(children).filter(key => !ProjectManager.isFileNode(children[key])).sort();
     const hasKids   = childKeys.length > 0;
     const isRoot    = pathArray.length === 0;
     const isExpanded = isRoot ? this._expanded.has('') : this._expanded.has(pathStr);
@@ -316,11 +317,13 @@ export class AssetBrowser {
 
   _buildGridItem(name) {
     const isSel  = this._selected.has(name);
+    const node   = ProjectManager.getFolderContents(this._currentPath)[name];
+    const isFile = ProjectManager.isFileNode(node);
     const icSize = this._viewMode === 'large' ? 52 : 36;
     const item   = document.createElement('div');
     item.className = 'ce-ab-grid-item' + (isSel ? ' selected' : '');
     item.dataset.name = name;
-    item.insertAdjacentHTML('beforeend', _svgFolderLg(icSize));
+    item.insertAdjacentHTML('beforeend', isFile ? _svgFileLg(icSize, node.type) : _svgFolderLg(icSize));
     const lbl = document.createElement('span');
     lbl.className = 'ce-ab-grid-label';
     lbl.textContent = name;
@@ -333,6 +336,7 @@ export class AssetBrowser {
       this._refreshContentSelection();
     });
     item.addEventListener('dblclick', () => {
+      if (isFile) return;
       this._currentPath = [...this._currentPath, name];
       this._selected.clear();
       this._refresh();
@@ -342,13 +346,15 @@ export class AssetBrowser {
 
   _buildListItem(name) {
     const isSel = this._selected.has(name);
+    const node  = ProjectManager.getFolderContents(this._currentPath)[name];
+    const isFile = ProjectManager.isFileNode(node);
     const row   = document.createElement('div');
     row.className = 'ce-ab-list-item' + (isSel ? ' selected' : '');
     row.dataset.name = name;
     row.innerHTML = `
-      <span class="ce-ab-list-icon">${_svgFolderSm()}</span>
+      <span class="ce-ab-list-icon">${isFile ? _svgFileSm(node.type) : _svgFolderSm()}</span>
       <span class="ce-ab-list-name">${_esc(name)}</span>
-      <span class="ce-ab-list-type">Folder</span>`;
+      <span class="ce-ab-list-type">${isFile ? _esc(node.type || 'File') : 'Folder'}</span>`;
 
     row.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -357,6 +363,7 @@ export class AssetBrowser {
       this._refreshContentSelection();
     });
     row.addEventListener('dblclick', () => {
+      if (isFile) return;
       this._currentPath = [...this._currentPath, name];
       this._selected.clear();
       this._refresh();
@@ -408,6 +415,44 @@ export class AssetBrowser {
     this._renderContent();
   }
 
+  _initFileDrop(target) {
+    target.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      target.classList.add('is-drop-target');
+    });
+    target.addEventListener('dragleave', () => {
+      target.classList.remove('is-drop-target');
+    });
+    target.addEventListener('drop', async (e) => {
+      if (!e.dataTransfer?.files?.length) return;
+      e.preventDefault();
+      target.classList.remove('is-drop-target');
+      await this._importFiles([...e.dataTransfer.files]);
+    });
+  }
+
+  async _importFiles(files) {
+    const project = ProjectManager.getCurrent();
+    if (!project || !files.length) return;
+    for (const file of files) {
+      const data = await _readFileAsDataURL(file);
+      ProjectManager.importAssetFile(this._currentPath, {
+        name: file.name,
+        mimeType: file.type || '',
+        size: file.size || 0,
+        data,
+        metadata: {
+          importedAt: Date.now(),
+          source: 'asset-browser-drop',
+        },
+      });
+    }
+    this._selected.clear();
+    this._refresh();
+  }
+
   _updateViewBtns() {
     if (!this._viewBtns) return;
     Object.entries(this._viewBtns).forEach(([m, btn]) => {
@@ -449,6 +494,46 @@ function _svgFolderLg(size) {
     <path d="M2 9Q2 5 6 5L20 5 24 9 46 9Q50 9 50 13L50 36Q50 40 46 40L4 40Q0 40 0 36L0 9Z" fill="#b0977f"/>
     <path d="M0 9L24 9L20 5L6 5Q2 5 2 9Z" fill="#c8a888"/>
   </svg>`;
+}
+
+function _svgFileSm(type = 'file') {
+  const color = _fileColor(type);
+  return `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M3 1.5h6.5L13 5v9.5H3V1.5z" fill="${color}"/>
+    <path d="M9.5 1.5V5H13" fill="#ffffff" opacity=".35"/>
+  </svg>`;
+}
+
+function _svgFileLg(size, type = 'file') {
+  const color = _fileColor(type);
+  return `<svg viewBox="0 0 44 52" width="${size}" height="${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M7 2h21l9 9v39H7V2z" fill="${color}"/>
+    <path d="M28 2v9h9" fill="#ffffff" opacity=".35"/>
+    <rect x="13" y="28" width="18" height="3" rx="1.5" fill="#ffffff" opacity=".55"/>
+    <rect x="13" y="35" width="14" height="3" rx="1.5" fill="#ffffff" opacity=".4"/>
+  </svg>`;
+}
+
+function _fileColor(type = 'file') {
+  switch (type) {
+    case 'texture': return '#5fa8d3';
+    case 'audio': return '#8ac926';
+    case 'model': return '#ff9f1c';
+    case 'script': return '#9d7fea';
+    case 'font': return '#ef476f';
+    case 'material': return '#2ec4b6';
+    case 'engine-state': return '#a6a6a6';
+    default: return '#7d8597';
+  }
+}
+
+function _readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }
 
 // Toolbar icon SVGs

@@ -44,6 +44,7 @@ async function readJson(req) {
 async function ensureFolderTree(rootPath, tree) {
   if (!tree || typeof tree !== 'object') return;
   for (const [name, child] of Object.entries(tree)) {
+    if (child && typeof child === 'object' && child._cycoType === 'file') continue;
     const safeName = sanitizeName(name);
     const childPath = path.join(rootPath, safeName);
     await fs.mkdir(childPath, { recursive: true });
@@ -70,6 +71,15 @@ async function createProject(payload) {
   await fs.mkdir(projectPath, { recursive: true });
   await ensureFolderTree(projectPath, payload.tree);
   await fs.writeFile(filePath, JSON.stringify(payload.snapshot || {}, null, 2), 'utf8');
+  if (payload.snapshot?.engineState) {
+    const engineDir = path.join(projectPath, 'engine');
+    await fs.mkdir(engineDir, { recursive: true });
+    await fs.writeFile(
+      path.join(engineDir, 'cyco-engine.json'),
+      JSON.stringify(payload.snapshot.engineState, null, 2),
+      'utf8',
+    );
+  }
 
   return {
     ok: true,
@@ -78,6 +88,40 @@ async function createProject(payload) {
     filePath,
     fileName,
     folders: Object.keys(payload.tree || {}),
+  };
+}
+
+async function writeProject(payload) {
+  const filePath = path.resolve(String(payload.filePath || '').trim());
+  if (!filePath || !filePath.toLowerCase().endsWith('.cyco')) {
+    throw new Error('No valid .cyco project file path was provided.');
+  }
+
+  const projectPath = payload.projectPath
+    ? path.resolve(String(payload.projectPath))
+    : path.dirname(filePath);
+  if (!filePath.startsWith(projectPath)) {
+    throw new Error('Refusing to write a project outside its project folder.');
+  }
+
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(payload.snapshot || {}, null, 2), 'utf8');
+
+  if (payload.snapshot?.engineState) {
+    const engineDir = path.join(projectPath, 'engine');
+    await fs.mkdir(engineDir, { recursive: true });
+    await fs.writeFile(
+      path.join(engineDir, 'cyco-engine.json'),
+      JSON.stringify(payload.snapshot.engineState, null, 2),
+      'utf8',
+    );
+  }
+
+  return {
+    ok: true,
+    projectPath,
+    filePath,
+    fileName: path.basename(filePath),
   };
 }
 
@@ -150,6 +194,13 @@ const server = http.createServer(async (req, res) => {
       const payload = await readJson(req);
       const result = await createProject(payload);
       console.info('[CycoLocalSaveBridge] created project', result);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && req.url === '/write-project') {
+      const payload = await readJson(req);
+      const result = await writeProject(payload);
+      console.info('[CycoLocalSaveBridge] wrote project', result);
       return sendJson(res, 200, result);
     }
 
