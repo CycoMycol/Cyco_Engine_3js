@@ -1,47 +1,18 @@
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:start {incomingId: 'cyco-viewport-canvas', sameContainer: false, hasRenderer: false, initPending: false}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:init:start {initialWidth: 96, initialHeight: 38, containerId: 'cyco-viewport-canvas', containerConnected: true}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:init:start {requestedWidth: 96, requestedHeight: 38, containerConnected: true, containerId: 'cyco-viewport-canvas'}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:init:prefs {prefType: 'webgpu', legacyType: 'webgpu'}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:createWebGPU:start {width: 96, height: 38}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:init-started {}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:start {incomingId: 'cyco-viewport-canvas', sameContainer: false, hasRenderer: false, initPending: true}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:skip-init-pending {}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:createWebGPU:constructed {rendererClass: '$C', forceWebGL: true, preserveDrawingBuffer: true, antialias: false}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:createWebGPU:complete {activeType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasDomElement: true, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:init:complete {activeType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasDomElement: true, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:buildScene:start {width: 96, height: 38}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:buildScene:camera-created {type: 'PerspectiveCamera', fov: 90, near: 10, far: 1000000, aspect: 2.526315789473684, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:buildScene:complete {rendererType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasCanvas: true, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:init:scene-built {rendererType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasCanvas: true, …}
-ViewportEngine.js:1342 [CYCO:ENV] _setupIBL() — building RoomEnvironment IBL
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:vpReady:no-legacy-override {saved: 'webgpu', activeType: 'webgpu'}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:pipeline:setActive {active: false, changed: true, frame: 0, rendererType: 'webgpu'}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:init:complete {rendererType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasCanvas: true, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 1, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:resize:complete {width: 1, height: 1, activeType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:resize:complete {width: 1, height: 1, beforeCamera: {…}, afterCamera: {…}, viewport: {…}}
-ViewportEngine.js:1374 [CYCO:ENV] _setupIBL() done — scene.environment set  envIntensity=1
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 2, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 3, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 4, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 5, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:start {incomingId: 'cyco-viewport-canvas', sameContainer: false, hasRenderer: true, initPending: false}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:resize:complete {width: 283, height: 338, activeType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:resize:complete {width: 283, height: 338, beforeCamera: {…}, afterCamera: {…}, viewport: {…}}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:containerReady:renderer-moved {rendererType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, isWebGPURenderer: true, hasCanvas: true, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] RendererManager:resize:complete {width: 283, height: 338, activeType: 'webgpu', rendererClass: '$C', isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:resize:complete {width: 283, height: 338, beforeCamera: {…}, afterCamera: {…}, viewport: {…}}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 300, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 600, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ProjectManager:openProjectFile:start {}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 900, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 1200, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 1500, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 1800, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ProjectManager:openProjectFile:selected {fileName: 'Test.cyco', fileSize: 0, fileType: null, hasHandle: false}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ProjectDiskStorage:reset {}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ProjectManager:openProjectFile:text-loaded {fileName: 'Test.cyco', bytes: 0}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ProjectManager:openProjectFile:error {message: 'Unexpected end of JSON input', stack: 'SyntaxError: Unexpected end of JSON input\n    at J…ne_4/editor/src/project/ProjectManager.js:481:27)'}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 2100, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 2400, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
-ProjectSaveLog.js:14 [CYCO:PROJECT] ViewportEngine:frame:health {frame: 2700, rendererType: 'webgpu', rendererClass: '$C', isWebGPURenderer: true, isWebGLRenderer: false, …}
+2026-06-12 09:04:38.506 [info] Activating Codex extension
+2026-06-12 09:04:38.506 [info] [CodexMcpConnection] Spawning codex app-server
+2026-06-12 09:04:38.506 [info] [IpcRouter] I am the router
+2026-06-12 09:04:38.506 [info] [IpcRouter] I am the router
+2026-06-12 09:04:38.506 [warning] [IpcClient] Received broadcast but no handler is configured method=client-status-changed
+2026-06-12 09:04:38.506 [info] [CodexMcpConnection] Initialize received id=1
+2026-06-12 09:04:40.806 [info] [wsl] eligible distro list listResult=""
+2026-06-12 09:04:40.893 [error] Request failed conversationId=none durationMs=151 error={"code":-32603,"message":"The system cannot find the path specified. (os error 3)"} id=3d6afe96-5e01-489e-a271-b06c0938ecbc method=fs/readFile pendingCountAfter=1 timeoutMs=0
+2026-06-12 09:04:41.951 [error] Statsig: error while bootstrapping post-login client error={}
+2026-06-12 09:04:42.142 [info] Features enabled enabledFeatures="enable_request_compression, remote_compaction_v2, collaboration_modes, personality, request_rule, image_generation, image_detail_original, workspace_dependencies, guardian_approval, apply_patch_streaming_events, workspace_owner_usage_nudge, thread_tools, enable_mcp_apps, apps, plugins, tool_call_mcp_elicitation"
+2026-06-12 09:04:42.158 [info] [remote-connections/bootstrap] shared_object_synced connectionCount=0
+2026-06-12 09:04:42.159 [info] [startup][renderer] app routes mounted after 3589ms
+2026-06-12 09:04:42.179 [info] [remote-connections/bootstrap] shared_object_synced connectionCount=0
+2026-06-12 09:04:42.415 [info] Features enabled enabledFeatures="enable_request_compression, remote_compaction_v2, collaboration_modes, personality, request_rule, image_generation, image_detail_original, workspace_dependencies, guardian_approval, apply_patch_streaming_events, workspace_owner_usage_nudge, thread_tools, enable_mcp_apps, apps, plugins, tool_suggest, auth_elicitation, tool_call_mcp_elicitation"
+2026-06-12 09:04:42.577 [info] [git-repo-watcher] Starting git repo watcher
+2026-06-12 09:04:48.134 [error] [CodexMcpConnection] cli: message="2026-06-12T13:04:48.134166Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"browser\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134192Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"chrome\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134198Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"computer-use\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134203Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"documents\" marketplace=\"openai-primary-runtime\"\n2026-06-12T13:04:48.134208Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"presentations\" marketplace=\"openai-primary-runtime\"\n2026-06-12T13:04:48.134212Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"spreadsheets\" marketplace=\"openai-primary-runtime\""
+2026-06-12 09:04:48.589 [warning] [CodexMcpConnection] cli: message="codex_mcp::connection_manager: Failed to list resources for MCP server 'openai-api-key-local-confirmation': Mcp error: -32601: Method not found: resources/list"
+2026-06-12 09:04:48.589 [warning] [CodexMcpConnection] cli: message="codex_mcp::connection_manager: Failed to list resource templates for MCP server 'openai-api-key-local-confirmation': Mcp error: -32601: Method not found: resources/templates/list"

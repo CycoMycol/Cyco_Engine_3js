@@ -340,11 +340,20 @@ const NewProjectDialog = {
         }
         const location = locationInput.value.trim();
         if (!selectedDirectoryHandle && !location) {
-          this._debug('create:blocked-no-target', { location });
-          pathHint.textContent = 'Choose a writable folder with Browse, or type a full folder path for the local save bridge.';
-          pathHint.style.color = 'var(--ce-accent-orange)';
-          locationInput.focus();
-          return;
+          this._debug('create:auto-pick-target');
+          try {
+            const picked = await pickWritableDirectory();
+            selectedDirectoryHandle = picked.handle;
+            if (picked.pickedPath) setLocationValue(picked.pickedPath);
+          } catch (err) {
+            this._debug('create:auto-pick-failed', { message: err?.message || String(err), name: err?.name || '' });
+            pathHint.textContent = err?.name === 'AbortError'
+              ? 'Pick a writable folder or type a full folder path to continue.'
+              : (err?.message || 'Choose a writable folder with Browse, or type a full folder path for the local save bridge.');
+            pathHint.style.color = 'var(--ce-accent-orange)';
+            locationInput.focus();
+            return;
+          }
         }
 
         const resolvedLocation = location || selectedDirectoryHandle.name || 'Selected Folder';
