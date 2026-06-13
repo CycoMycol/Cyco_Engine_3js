@@ -1,18 +1,70 @@
-2026-06-12 09:04:38.506 [info] Activating Codex extension
-2026-06-12 09:04:38.506 [info] [CodexMcpConnection] Spawning codex app-server
-2026-06-12 09:04:38.506 [info] [IpcRouter] I am the router
-2026-06-12 09:04:38.506 [info] [IpcRouter] I am the router
-2026-06-12 09:04:38.506 [warning] [IpcClient] Received broadcast but no handler is configured method=client-status-changed
-2026-06-12 09:04:38.506 [info] [CodexMcpConnection] Initialize received id=1
-2026-06-12 09:04:40.806 [info] [wsl] eligible distro list listResult=""
-2026-06-12 09:04:40.893 [error] Request failed conversationId=none durationMs=151 error={"code":-32603,"message":"The system cannot find the path specified. (os error 3)"} id=3d6afe96-5e01-489e-a271-b06c0938ecbc method=fs/readFile pendingCountAfter=1 timeoutMs=0
-2026-06-12 09:04:41.951 [error] Statsig: error while bootstrapping post-login client error={}
-2026-06-12 09:04:42.142 [info] Features enabled enabledFeatures="enable_request_compression, remote_compaction_v2, collaboration_modes, personality, request_rule, image_generation, image_detail_original, workspace_dependencies, guardian_approval, apply_patch_streaming_events, workspace_owner_usage_nudge, thread_tools, enable_mcp_apps, apps, plugins, tool_call_mcp_elicitation"
-2026-06-12 09:04:42.158 [info] [remote-connections/bootstrap] shared_object_synced connectionCount=0
-2026-06-12 09:04:42.159 [info] [startup][renderer] app routes mounted after 3589ms
-2026-06-12 09:04:42.179 [info] [remote-connections/bootstrap] shared_object_synced connectionCount=0
-2026-06-12 09:04:42.415 [info] Features enabled enabledFeatures="enable_request_compression, remote_compaction_v2, collaboration_modes, personality, request_rule, image_generation, image_detail_original, workspace_dependencies, guardian_approval, apply_patch_streaming_events, workspace_owner_usage_nudge, thread_tools, enable_mcp_apps, apps, plugins, tool_suggest, auth_elicitation, tool_call_mcp_elicitation"
-2026-06-12 09:04:42.577 [info] [git-repo-watcher] Starting git repo watcher
-2026-06-12 09:04:48.134 [error] [CodexMcpConnection] cli: message="2026-06-12T13:04:48.134166Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"browser\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134192Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"chrome\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134198Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"computer-use\" marketplace=\"openai-bundled\"\n2026-06-12T13:04:48.134203Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"documents\" marketplace=\"openai-primary-runtime\"\n2026-06-12T13:04:48.134208Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"presentations\" marketplace=\"openai-primary-runtime\"\n2026-06-12T13:04:48.134212Z  WARN codex_core_plugins::loader: configured non-curated plugin no longer exists in discovered marketplaces during cache refresh plugin=\"spreadsheets\" marketplace=\"openai-primary-runtime\""
-2026-06-12 09:04:48.589 [warning] [CodexMcpConnection] cli: message="codex_mcp::connection_manager: Failed to list resources for MCP server 'openai-api-key-local-confirmation': Mcp error: -32601: Method not found: resources/list"
-2026-06-12 09:04:48.589 [warning] [CodexMcpConnection] cli: message="codex_mcp::connection_manager: Failed to list resource templates for MCP server 'openai-api-key-local-confirmation': Mcp error: -32601: Method not found: resources/templates/list"
+11:34:30 PM NewProject:dialog:open | hasShowDirectoryPicker=true | hasCycoPicker=true | href=file:///c%3A/Users/Cyco%20Myco/Documents/1_Game_Engines/Cyco_Engine_4/editor/index.html | isSecureContext=true | initialLocation=
+11:34:30 PM NewProject:folders:toggle | enabled=true
+11:34:30 PM NewProject:preview:update | name=(name) | location=(choose location) | createFolder=true | projectPath=(choose location)/project/
+11:34:31 PM ViewportEngine:frame:health | frame=600 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:33 PM NewProject:name:input | value=t
+11:34:33 PM NewProject:preview:update | name=t | location=(choose location) | createFolder=true | projectPath=(choose location)/t/
+11:34:33 PM ViewportEngine:frame:health | frame=900 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:33 PM NewProject:name:input | value=te
+11:34:33 PM NewProject:preview:update | name=te | location=(choose location) | createFolder=true | projectPath=(choose location)/te/
+11:34:33 PM NewProject:name:input | value=tes
+11:34:33 PM NewProject:preview:update | name=tes | location=(choose location) | createFolder=true | projectPath=(choose location)/tes/
+11:34:34 PM NewProject:name:input | value=test
+11:34:34 PM NewProject:preview:update | name=test | location=(choose location) | createFolder=true | projectPath=(choose location)/test/
+11:34:35 PM ViewportEngine:frame:health | frame=1200 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:36 PM NewProject:browse:click | currentLocation=
+11:34:36 PM NewProject:pick:start | hasBrowserPicker=true | hasLocalBridgePicker=false | useLocalBridgeFirst=false | primarySource=browser-save-file | userActivationActive=true | visibilityState=visible | hasFocus=true
+11:34:36 PM NewProject:pick:attempt | label=browser-save-file | userActivationActive=true | pickerType=function | pickerName=null | pickerSource=browser-save-file
+11:34:37 PM ViewportEngine:frame:health | frame=1500 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:38 PM NewProject:pick:pending | label=browser-save-file | elapsedMs=1501 | userActivationActive=true | visibilityState=visible | hasFocus=false
+11:34:38 PM ViewportEngine:frame:health | frame=1800 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:40 PM ViewportEngine:frame:health | frame=2100 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:42 PM ViewportEngine:frame:health | frame=2400 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:44 PM ViewportEngine:frame:health | frame=2700 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:46 PM ViewportEngine:frame:health | frame=3000 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:47 PM NewProject:pick:attempt-success | label=browser-save-file | elapsedMs=10338 | resultType=FileSystemFileHandle | resultName=test.cyco | hasHandle=true | hasWritableFileHandle=true | handlePermission=queryPermission-available | pickerSource=browser-save-file
+11:34:47 PM NewProject:location:set-programmatic | value=test.cyco
+11:34:47 PM NewProject:location:input | value=test.cyco | hasSelectedHandle=false | selectedHandleName=null
+11:34:47 PM NewProject:preview:update | name=test | location=test.cyco | createFolder=true | projectPath=test.cyco/test/
+11:34:47 PM NewProject:browse:selection-handoff | selectedLocation=test.cyco | pickedPath=test.cyco | handleName=test.cyco | locationInputValue=test.cyco | previewPath=test.cyco/test/ | hasHandle=true | pickerSource=browser-save-file
+11:34:47 PM NewProject:browse:selected | elapsedMs=10339 | pickedPath=test.cyco | handleName=test.cyco | hasHandle=true | handleType=FileSystemFileHandle | canQueryPermission=true | canRequestPermission=true | pickerSource=browser-save-file
+11:34:47 PM ViewportEngine:frame:health | frame=3300 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:49 PM ViewportEngine:frame:health | frame=3600 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:51 PM ViewportEngine:frame:health | frame=3900 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:53 PM ViewportEngine:frame:health | frame=4200 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:55 PM ViewportEngine:frame:health | frame=4500 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:57 PM ViewportEngine:frame:health | frame=4800 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:34:58 PM ViewportEngine:frame:health | frame=5100 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:00 PM ViewportEngine:frame:health | frame=5400 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:02 PM ViewportEngine:frame:health | frame=5700 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:04 PM ViewportEngine:frame:health | frame=6000 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:06 PM ViewportEngine:frame:health | frame=6300 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:07 PM ViewportEngine:frame:health | frame=6600 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:09 PM ViewportEngine:frame:health | frame=6900 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:11 PM ViewportEngine:frame:health | frame=7200 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:13 PM ViewportEngine:frame:health | frame=7500 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:15 PM ViewportEngine:frame:health | frame=7800 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:17 PM ViewportEngine:frame:health | frame=8100 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:18 PM ViewportEngine:frame:health | frame=8400 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:20 PM ViewportEngine:frame:health | frame=8700 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:22 PM ViewportEngine:frame:health | frame=9000 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:24 PM ViewportEngine:frame:health | frame=9300 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:26 PM ViewportEngine:frame:health | frame=9600 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:27 PM ViewportEngine:frame:health | frame=9900 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:29 PM ViewportEngine:frame:health | frame=10200 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:31 PM ViewportEngine:frame:health | frame=10500 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:33 PM ViewportEngine:frame:health | frame=10800 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:35 PM ViewportEngine:frame:health | frame=11100 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:37 PM ViewportEngine:frame:health | frame=11400 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:38 PM ViewportEngine:frame:health | frame=11700 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:40 PM ViewportEngine:frame:health | frame=12000 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:42 PM ViewportEngine:frame:health | frame=12300 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:44 PM ViewportEngine:frame:health | frame=12600 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:46 PM ViewportEngine:frame:health | frame=12900 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:47 PM ViewportEngine:frame:health | frame=13200 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:49 PM ViewportEngine:frame:health | frame=13500 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:51 PM ViewportEngine:frame:health | frame=13800 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:53 PM ViewportEngine:frame:health | frame=14100 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:55 PM ViewportEngine:frame:health | frame=14400 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:57 PM ViewportEngine:frame:health | frame=14700 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]
+11:35:58 PM ViewportEngine:frame:health | frame=15000 | rendererType=webgpu | rendererClass=$C | isWebGPURenderer=true | isWebGLRenderer=false | pipelineActive=false | canvasWrites=0 | sceneChildren=8 | camera=[object Object]

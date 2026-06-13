@@ -1,0 +1,29 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Cyco: Local Save Bridge",
+      "type": "shell",
+      "command": "node",
+      "args": [
+        "tools/cyco-local-save-bridge.mjs"
+      ],
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "cyco",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\[CycoLocalSaveBridge\\]",
+          "endsPattern": "listening on http://127\\.0\\.0\\.1:47623"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated"
+      }
+    }
+  ]
+}

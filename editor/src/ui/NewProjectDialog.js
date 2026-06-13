@@ -1,7 +1,6 @@
 /** NewProjectDialog.js — modal dialog for creating a new project */
 
 import ProjectManager from '../project/ProjectManager.js';
-import ProjectLocalBridgeStorage from '../project/ProjectLocalBridgeStorage.js';
 import ProjectSaveLog from '../project/ProjectSaveLog.js';
 
 const NewProjectDialog = {
@@ -30,10 +29,18 @@ const NewProjectDialog = {
             <button class="ce-btn ce-np-browse-btn" id="np-browse" title="Browse for folder">…</button>
           </div>
           <span class="ce-np-path-hint" id="np-path-hint"></span>
-          <details class="ce-np-save-log">
-            <summary>Save Log</summary>
-            <pre class="ce-np-save-log-report" id="np-save-log-report">No save log entries yet.</pre>
-          </details>
+          <div class="ce-np-save-log">
+            <div class="ce-np-save-log-head">
+              <button class="ce-btn ce-np-save-log-btn" id="np-save-log-toggle" type="button">Save Log</button>
+              <button class="ce-btn ce-np-copy-log-btn" id="np-copy-log" type="button" title="Copy log">
+                <svg class="ce-np-copy-log-icon" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+                  <path d="M5 5.5A1.5 1.5 0 0 1 6.5 4h5A1.5 1.5 0 0 1 13 5.5v5A1.5 1.5 0 0 1 11.5 12h-5A1.5 1.5 0 0 1 5 10.5v-5Zm1 0v5c0 .28.22.5.5.5h5c.28 0 .5-.22.5-.5v-5a.5.5 0 0 0-.5-.5h-5a.5.5 0 0 0-.5.5Zm-3 3A1.5 1.5 0 0 1 4.5 7h.5v1h-.5a.5.5 0 0 0-.5.5v5c0 .28.22.5.5.5h5a.5.5 0 0 0 .5-.5V13h1v.5A1.5 1.5 0 0 1 9.5 15h-5A1.5 1.5 0 0 1 3 13.5v-5Z"></path>
+                </svg>
+                <span class="ce-np-copy-log-label">Copy Log</span>
+              </button>
+            </div>
+              <pre class="ce-np-save-log-report" id="np-save-log-report">No save log entries yet.</pre>
+          </div>
         </div>
         <div class="ce-np-row ce-np-checkbox-row">
           <label class="ce-np-checkbox-label">
@@ -128,7 +135,9 @@ const NewProjectDialog = {
     const createFolderCb = dlg.querySelector('#np-create-folder');
     const previewPath    = dlg.querySelector('#np-preview-path');
     const pathHint       = dlg.querySelector('#np-path-hint');
+    const saveLogBtn     = dlg.querySelector('#np-save-log-toggle');
     const saveLogReport  = dlg.querySelector('#np-save-log-report');
+    const copyLogBtn     = dlg.querySelector('#np-copy-log');
     const createBtn      = dlg.querySelector('#np-create');
     const cancelBtn      = dlg.querySelector('#np-cancel');
     const browseBtn      = dlg.querySelector('#np-browse');
@@ -136,15 +145,85 @@ const NewProjectDialog = {
     const addFolderBtn   = dlg.querySelector('#np-add-folder');
     const chipsContainer = dlg.querySelector('#np-folder-chips');
     let selectedDirectoryHandle = null;
+    let selectedFileHandle = null;
     let isPickingDirectory = false;
+    let currentSaveLogText = ProjectSaveLog.format();
+    let copyLogResetTimer = null;
+    let saveLogOpen = false;
     ProjectSaveLog.clear();
     const unsubscribeSaveLog = ProjectSaveLog.subscribe((entries) => {
-      saveLogReport.textContent = ProjectSaveLog.format(entries);
+      currentSaveLogText = ProjectSaveLog.format(entries);
+      saveLogReport.textContent = currentSaveLogText;
     });
     dlg.__unsubscribeSaveLog = unsubscribeSaveLog;
+
+    const syncSaveLogVisibility = () => {
+      saveLogReport.hidden = !saveLogOpen;
+      saveLogBtn?.setAttribute('aria-expanded', saveLogOpen ? 'true' : 'false');
+      saveLogBtn?.classList.toggle('is-open', saveLogOpen);
+    };
+    syncSaveLogVisibility();
+
+    const setCopyLogState = (copied) => {
+      if (!copyLogBtn) return;
+      const label = copyLogBtn.querySelector('.ce-np-copy-log-label');
+      copyLogBtn.classList.toggle('is-copied', copied);
+      copyLogBtn.setAttribute('aria-pressed', copied ? 'true' : 'false');
+      if (label) label.textContent = copied ? 'Copied' : 'Copy Log';
+      copyLogBtn.title = copied ? 'Copied to clipboard' : 'Copy save log';
+      if (copyLogResetTimer) {
+        clearTimeout(copyLogResetTimer);
+        copyLogResetTimer = null;
+        dlg.__copyLogResetTimer = null;
+      }
+      if (copied) {
+        copyLogResetTimer = setTimeout(() => setCopyLogState(false), 1400);
+        dlg.__copyLogResetTimer = copyLogResetTimer;
+      }
+    };
+
+    const copySaveLog = async () => {
+      const text = currentSaveLogText || ProjectSaveLog.format();
+      if (!text) return;
+
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(text);
+        } else {
+          const temp = document.createElement('textarea');
+          temp.value = text;
+          temp.setAttribute('readonly', '');
+          temp.style.position = 'fixed';
+          temp.style.left = '-9999px';
+          temp.style.top = '-9999px';
+          document.body.appendChild(temp);
+          temp.select();
+          document.execCommand('copy');
+          temp.remove();
+        }
+        setCopyLogState(true);
+      } catch (err) {
+        this._debug('save-log:copy-error', { message: err?.message || String(err) });
+      }
+    };
+
+    copyLogBtn?.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+    });
+    copyLogBtn?.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await copySaveLog();
+    });
+
+    saveLogBtn?.addEventListener('click', () => {
+      saveLogOpen = !saveLogOpen;
+      syncSaveLogVisibility();
+    });
+
     this._debug('dialog:open', {
       hasShowDirectoryPicker: typeof window.showDirectoryPicker === 'function',
-      hasCycoPicker: typeof window.__cyco?.pickDirectory === 'function',
+      hasCycoPicker: typeof window.__cyco_native?.pickDirectory === 'function' || typeof window.__cyco?.pickDirectory === 'function',
       href: window.location?.href || '',
       isSecureContext: !!window.isSecureContext,
       initialLocation: locationInput.value,
@@ -220,68 +299,74 @@ const NewProjectDialog = {
     updatePreview();
 
     const pickWritableDirectory = async () => {
-      const pickDirectory = window.__cyco?.pickDirectory;
+      const savePicker = typeof window.showSaveFilePicker === 'function'
+        ? window.showSaveFilePicker
+        : null;
+      const primaryRunner = savePicker;
+      const primarySource = 'browser-save-file';
+      if (!primaryRunner) {
+        throw new Error('This browser cannot choose a project file. Use a Chromium browser with File System Access enabled.');
+      }
+
       this._debug('pick:start', {
-        hasCycoPicker: typeof pickDirectory === 'function',
-        hasBrowserPicker: typeof window.showDirectoryPicker === 'function',
-        hasLocalBridgePicker: true,
+        hasBrowserPicker: !!savePicker,
+        hasLocalBridgePicker: false,
+        useLocalBridgeFirst: false,
+        primarySource,
         userActivationActive: !!navigator.userActivation?.isActive,
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus(),
       });
 
-      let dirResult = null;
-      const attempts = [];
-      attempts.push(['local-bridge', async () => {
-        const result = await ProjectLocalBridgeStorage.pickFolder();
-        if (!result?.ok || !result.path) {
-          const err = new Error('Folder selection was cancelled.');
-          err.name = 'AbortError';
-          throw err;
-        }
-        return result.path;
-      }]);
-      // File pickers must be opened directly inside the click gesture.
-      if (typeof window.showDirectoryPicker === 'function') {
-        attempts.push(['browser-direct', () => window.showDirectoryPicker({ mode: 'readwrite' })]);
-      } else if (typeof pickDirectory === 'function') {
-        attempts.push(['cyco-wrapper', () => pickDirectory({ mode: 'readwrite' })]);
-      }
+      const pickStartedAt = performance.now();
+      const pendingLogTimer = setTimeout(() => {
+        this._debug('pick:pending', {
+          label: primarySource,
+          elapsedMs: Math.round(performance.now() - pickStartedAt),
+          userActivationActive: !!navigator.userActivation?.isActive,
+          visibilityState: document.visibilityState,
+          hasFocus: document.hasFocus(),
+        });
+      }, 1500);
 
-      for (const [label, runPicker] of attempts) {
-        try {
-          this._debug('pick:attempt', {
-            label,
-            userActivationActive: !!navigator.userActivation?.isActive,
-          });
-          dirResult = await runPicker();
-          this._debug('pick:attempt-success', {
-            label,
-            resultType: dirResult?.constructor?.name || typeof dirResult,
-            resultName: dirResult?.name || dirResult?.handle?.name || null,
-          });
-          break;
-        } catch (err) {
-          this._debug('pick:attempt-error', {
-            label,
-            name: err?.name || '',
-            message: err?.message || String(err),
-            userActivationActive: !!navigator.userActivation?.isActive,
-          });
-          throw err;
-        }
-      }
+      const runAttempt = async (runner, source) => {
+        if (!runner) return null;
+        this._debug('pick:attempt', {
+          label: source,
+          userActivationActive: !!navigator.userActivation?.isActive,
+          pickerType: typeof runner,
+          pickerName: runner?.name || null,
+          pickerSource: source,
+        });
+        const result = await runner();
+        const candidateHandle = result && typeof result.createWritable === 'function' ? result : result?.handle || null;
+        const pickedPath = String(candidateHandle?.name || result?.name || '');
+        this._debug('pick:attempt-success', {
+          label: source,
+          elapsedMs: Math.round(performance.now() - pickStartedAt),
+          resultType: result?.constructor?.name || typeof result,
+          resultName: pickedPath || null,
+          hasHandle: !!candidateHandle,
+          hasWritableFileHandle: typeof result?.createWritable === 'function',
+          handlePermission: candidateHandle?.queryPermission ? 'queryPermission-available' : 'queryPermission-missing',
+          pickerSource: source,
+        });
+        return { handle: candidateHandle, pickedPath, source };
+      };
 
-      if (!dirResult) throw new Error('No folder was selected.');
-      const handle = dirResult?.handle || (dirResult && typeof dirResult.getDirectoryHandle === 'function' ? dirResult : null);
-      const pickedPath = typeof dirResult === 'string'
-        ? dirResult
-        : dirResult?.path || dirResult?.fullPath || dirResult?.name || '';
-      this._debug('pick:result', {
-        resultType: dirResult?.constructor?.name || typeof dirResult,
-        pickedPath,
-        handleName: handle?.name || null,
-        hasDirectoryHandle: !!handle,
-      });
-      return { handle, pickedPath };
+      try {
+        const pickerOptions = {
+          suggestedName: `${safeProjectName(nameInput.value || 'project')}.cyco`,
+          startIn: 'documents',
+          types: [{
+            description: 'Cyco Project',
+            accept: { 'application/json': ['.cyco', '.json'] },
+          }],
+        };
+        return await runAttempt(() => primaryRunner(pickerOptions), primarySource);
+      } finally {
+        clearTimeout(pendingLogTimer);
+      }
     };
 
     browseBtn.addEventListener('click', async () => {
@@ -294,27 +379,46 @@ const NewProjectDialog = {
       browseBtn.disabled = true;
       const oldBrowseText = browseBtn.textContent;
       browseBtn.textContent = '...';
+      const browseStartedAt = performance.now();
       try {
-        const { handle, pickedPath } = await pickWritableDirectory();
-        selectedDirectoryHandle = handle;
-        if (pickedPath) setLocationValue(pickedPath);
-        this._debug('browse:selected', {
-          pickedPath,
-          handleName: selectedDirectoryHandle?.name || null,
-          hasHandle: !!selectedDirectoryHandle,
-        });
-        if (!selectedDirectoryHandle) {
-          pathHint.textContent = 'That picker only returned a path label. Pick a writable folder from the browser folder picker.';
-          pathHint.style.color = 'var(--ce-accent-orange)';
+        const picked = await pickWritableDirectory();
+        if (!picked) {
+          pathHint.textContent = 'No project file selected. You can still create the project in browser storage, or type a file path.';
+          pathHint.style.color = '';
           return;
         }
-        pathHint.textContent = 'Selected directory updated in the Location field.';
+        const { handle, pickedPath } = picked;
+        selectedDirectoryHandle = null;
+        selectedFileHandle = handle;
+        const selectedLocation = pickedPath || selectedFileHandle?.name || '';
+        if (selectedLocation) setLocationValue(selectedLocation);
+        this._debug('browse:selection-handoff', {
+          selectedLocation,
+          pickedPath,
+          handleName: selectedFileHandle?.name || null,
+          locationInputValue: locationInput.value,
+          previewPath: previewPath.textContent,
+          hasHandle: !!selectedFileHandle,
+          pickerSource: picked?.source || null,
+        });
+        this._debug('browse:selected', {
+          elapsedMs: Math.round(performance.now() - browseStartedAt),
+          pickedPath: selectedLocation,
+          handleName: selectedFileHandle?.name || null,
+          hasHandle: !!selectedFileHandle,
+          handleType: selectedFileHandle?.constructor?.name || typeof selectedFileHandle,
+          canQueryPermission: typeof selectedFileHandle?.queryPermission === 'function',
+          canRequestPermission: typeof selectedFileHandle?.requestPermission === 'function',
+          pickerSource: picked?.source || null,
+        });
+        pathHint.textContent = selectedFileHandle
+          ? 'Selected project file is ready for saving.'
+          : 'Selected project file path is ready for project creation.';
         pathHint.style.color = '';
       } catch (err) {
         this._debug('browse:error', { message: err?.message || String(err), name: err?.name || '' });
-        pathHint.textContent = err?.name === 'AbortError'
-          ? 'The folder picker did not return a folder. Type a full folder path to use the local save bridge.'
-          : (err?.message || 'Could not access that directory.');
+        const message = err?.message || String(err);
+        pathHint.textContent = message || 'Could not access that directory.';
         pathHint.style.color = 'var(--ce-accent-orange)';
       } finally {
         isPickingDirectory = false;
@@ -324,12 +428,12 @@ const NewProjectDialog = {
     });
 
     const doCreate = () => {
-      this._debug('create:button-click', {
-        rawName: nameInput.value,
-        rawLocation: locationInput.value,
-        hasHandle: !!selectedDirectoryHandle,
-        handleName: selectedDirectoryHandle?.name || null,
-      });
+        this._debug('create:button-click', {
+          rawName: nameInput.value,
+          rawLocation: locationInput.value,
+          hasHandle: !!selectedFileHandle,
+          handleName: selectedFileHandle?.name || null,
+        });
       (async () => {
         const name = nameInput.value.trim();
         if (!name) {
@@ -339,24 +443,7 @@ const NewProjectDialog = {
           return;
         }
         const location = locationInput.value.trim();
-        if (!selectedDirectoryHandle && !location) {
-          this._debug('create:auto-pick-target');
-          try {
-            const picked = await pickWritableDirectory();
-            selectedDirectoryHandle = picked.handle;
-            if (picked.pickedPath) setLocationValue(picked.pickedPath);
-          } catch (err) {
-            this._debug('create:auto-pick-failed', { message: err?.message || String(err), name: err?.name || '' });
-            pathHint.textContent = err?.name === 'AbortError'
-              ? 'Pick a writable folder or type a full folder path to continue.'
-              : (err?.message || 'Choose a writable folder with Browse, or type a full folder path for the local save bridge.');
-            pathHint.style.color = 'var(--ce-accent-orange)';
-            locationInput.focus();
-            return;
-          }
-        }
-
-        const resolvedLocation = location || selectedDirectoryHandle.name || 'Selected Folder';
+        const resolvedLocation = location || selectedFileHandle?.name || '';
         const createFolder = createFolderCb.checked;
         const useFolders = useFoldersCb.checked;
         const folders = useFolders
@@ -370,14 +457,23 @@ const NewProjectDialog = {
           createFolder,
           useFolders,
           folders,
-          handleName: selectedDirectoryHandle?.name || null,
-          hasHandle: !!selectedDirectoryHandle,
-          saveMode: selectedDirectoryHandle ? 'browser-handle' : 'local-bridge',
+          handleName: selectedFileHandle?.name || null,
+          hasHandle: !!selectedFileHandle,
+          handleType: selectedFileHandle?.constructor?.name || typeof selectedFileHandle,
+          canQueryPermission: typeof selectedFileHandle?.queryPermission === 'function',
+          canRequestPermission: typeof selectedFileHandle?.requestPermission === 'function',
+          saveMode: selectedFileHandle
+            ? 'browser-file-handle'
+            : (resolvedLocation ? 'browser-storage' : 'browser-storage'),
         });
         createBtn.disabled = true;
         createBtn.textContent = 'Creating...';
-        await ProjectManager.createOnDisk(name, resolvedLocation, createFolder, folders, selectedDirectoryHandle);
-        this._debug('create:success', { name, location: resolvedLocation });
+        const project = await ProjectManager.createOnDisk(name, resolvedLocation, createFolder, folders, null, selectedFileHandle);
+        this._debug('create:success', {
+          name,
+          location: project?.path || resolvedLocation,
+          storageMode: project?.storageMode || (selectedFileHandle ? 'browser-file-handle' : 'browser-storage'),
+        });
         this._close();
       })().catch(err => {
         this._debug('create:error', { message: err?.message || String(err), error: err });
@@ -400,6 +496,10 @@ const NewProjectDialog = {
 
   _close() {
     if (this._dialog) {
+      if (this._dialog.__copyLogResetTimer) {
+        clearTimeout(this._dialog.__copyLogResetTimer);
+        this._dialog.__copyLogResetTimer = null;
+      }
       this._dialog.__unsubscribeSaveLog?.();
       this._dialog.close();
       this._dialog.remove();

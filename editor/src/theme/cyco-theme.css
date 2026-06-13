@@ -1992,17 +1992,86 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   color: var(--ce-text-muted);
   font-size: 10px;
 }
-.ce-np-save-log summary {
-  cursor: pointer;
-  color: var(--ce-accent-orange);
-  user-select: none;
+.ce-np-save-log {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 6px;
+}
+.ce-np-save-log-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
   width: fit-content;
+  gap: 12px;
+}
+.ce-np-save-log-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-width: 0;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ce-accent-orange);
+  font-size: 10px;
+  line-height: 1;
+  box-shadow: none;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.ce-np-save-log-btn:hover,
+.ce-np-save-log-btn.is-open {
+  background: rgba(255,255,255,0.04);
+  color: var(--ce-text-primary);
+}
+.ce-np-copy-log-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ce-accent-orange);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  box-shadow: none;
+  transition: background 100ms, color 100ms, opacity 100ms;
+  position: relative;
+  z-index: 1;
+}
+.ce-np-copy-log-btn:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--ce-text-primary);
+}
+.ce-np-copy-log-icon {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+.ce-np-copy-log-btn .ce-np-copy-log-label {
+  color: var(--ce-accent-orange);
+}
+.ce-np-copy-log-btn:hover .ce-np-copy-log-label {
+  color: var(--ce-text-primary);
 }
 .ce-np-save-log-report {
   min-height: 72px;
   max-height: 140px;
   overflow: auto;
-  margin: 6px 0 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
   padding: 7px 8px;
   background: rgba(0,0,0,0.22);
   border: var(--ce-border-width) solid var(--ce-border);
