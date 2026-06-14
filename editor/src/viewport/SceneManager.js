@@ -311,7 +311,28 @@ export class SceneManager {
       return null;
     }
 
-    const json = stripEditorOnlyObjects(scene.clone(true)).toJSON();
+    // Make sure every world matrix in the live scene is up to date so the
+    // serialised JSON preserves translations, rotations, and scales set via
+    // `position.set()` / `quaternion.set()` / `scale.set()` since the last
+    // render. Without this, `Object3D.clone()` produces a clone with an
+    // identity matrix and the saved file drops the live transforms.
+    if (typeof scene.updateWorldMatrix === 'function') {
+      scene.updateWorldMatrix(true, true);
+    } else if (typeof scene.updateMatrixWorld === 'function') {
+      scene.updateMatrixWorld(true);
+    }
+
+    // Editor-only helpers (gizmos, grids, contact shadows) are filtered out
+    // by `stripEditorOnlyObjects` after the clone. We clone first so the
+    // serialized graph cannot mutate the live scene, then re-derive each
+    // cloned object's local matrix from its position / quaternion / scale
+    // so a translation that the user set via `box.position.set(…)` survives
+    // the round trip even if the live object never went through the renderer.
+    const cloned = scene.clone(true);
+    cloned.traverse((obj) => {
+      if (obj.matrixAutoUpdate !== false) obj.updateMatrix();
+    });
+    const json = stripEditorOnlyObjects(cloned).toJSON();
     const entry = this.sceneRegistry.get(this.activeSceneId);
     if (entry) {
       const meta = {

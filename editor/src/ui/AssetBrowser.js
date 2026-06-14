@@ -1,7 +1,8 @@
 /** AssetBrowser.js — PlayCanvas-style asset browser panel */
 
-import ProjectManager from '../project/ProjectManager.js';
-import { cePrompt }   from './ce-prompt.js';
+import ProjectManager       from '../project/ProjectManager.js';
+import ProjectLocalBridgeStorage from '../project/ProjectLocalBridgeStorage.js';
+import { cePrompt }         from './ce-prompt.js';
 
 const FILTER_OPTIONS = [
   { value: 'all',       label: 'All'       },
@@ -49,6 +50,7 @@ export class AssetBrowser {
     root.className = 'ce-asset-browser';
 
     root.appendChild(this._buildToolbar());
+    root.appendChild(this._buildStatusBar());
 
     const body = document.createElement('div');
     body.className = 'ce-ab-body';
@@ -67,6 +69,7 @@ export class AssetBrowser {
     body.appendChild(divider);
     body.appendChild(this._contentEl);
     root.appendChild(body);
+    root.appendChild(this._buildFooter());
 
     // Deselect on click on empty space
     this._contentEl.addEventListener('click', (e) => {
@@ -167,9 +170,98 @@ export class AssetBrowser {
     return tb;
   }
 
+  // ── Status bar (project folder + .cyco file path) ─────────────────────────
+
+  _buildStatusBar() {
+    const bar = document.createElement('div');
+    bar.className = 'ce-ab-statusbar';
+
+    const label = document.createElement('span');
+    label.className = 'ce-ab-statusbar-label';
+    label.textContent = 'PROJECT:';
+    bar.appendChild(label);
+
+    this._statusPathEl = document.createElement('span');
+    this._statusPathEl.className = 'ce-ab-statusbar-path';
+    this._statusPathEl.textContent = 'No project open';
+    this._statusPathEl.title = 'No project open';
+    bar.appendChild(this._statusPathEl);
+
+    this._statusFileEl = document.createElement('span');
+    this._statusFileEl.className = 'ce-ab-statusbar-file';
+    this._statusFileEl.textContent = '';
+    this._statusFileEl.title = 'Project file';
+    bar.appendChild(this._statusFileEl);
+
+    const refreshBtn = document.createElement('button');
+    refreshBtn.className = 'ce-ab-statusbar-refresh';
+    refreshBtn.title = 'Rescan project folder from disk';
+    refreshBtn.innerHTML = `<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+      <path d="M8 3a5 5 0 105 5h-1.5a3.5 3.5 0 11-1.025-2.474L8 7v5h5l-1.55-1.55A4.984 4.984 0 008 3z"/>
+    </svg>`;
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      try {
+        const ok = await ProjectManager.refreshFromDisk();
+        if (!ok) {
+          window.dispatchEvent(new CustomEvent('cyco-toast', {
+            detail: { message: 'No project folder is attached. Use File → New Project to pick one.' },
+          }));
+        }
+      } finally {
+        refreshBtn.disabled = false;
+      }
+    });
+    this._statusRefreshBtn = refreshBtn;
+    bar.appendChild(refreshBtn);
+
+    return bar;
+  }
+
+  // ── Footer (file count + last-saved timestamp) ─────────────────────────────
+
+  _buildFooter() {
+    const footer = document.createElement('div');
+    footer.className = 'ce-ab-footer';
+    this._footerEl = footer;
+    return footer;
+  }
+
+  _refreshStatus() {
+    if (!this._statusPathEl) return;
+    const project = ProjectManager.getCurrent();
+    if (!project) {
+      this._statusPathEl.textContent = 'No project open';
+      this._statusPathEl.title = 'No project open';
+      this._statusFileEl.textContent = '';
+      if (this._footerEl) this._footerEl.textContent = '';
+      return;
+    }
+    // Prefer the on-disk project folder (from the local save bridge)
+    // because that's the path that the asset browser reads from.
+    const diskPath = ProjectLocalBridgeStorage.getProjectPath() || project.path || '';
+    this._statusPathEl.textContent = diskPath || project.path || 'No folder attached';
+    this._statusPathEl.title = diskPath || project.path || '';
+
+    const filePath = ProjectLocalBridgeStorage.getFilePath();
+    const fileLabel = filePath ? filePath.split(/[\\/]/).pop() : '';
+    this._statusFileEl.textContent = fileLabel ? `· ${fileLabel}` : '';
+    this._statusFileEl.title = filePath || '';
+
+    if (this._footerEl) {
+      const saved = project.savedAt ? new Date(project.savedAt).toLocaleTimeString() : '';
+      const updated = project.updatedAt ? new Date(project.updatedAt).toLocaleTimeString() : '';
+      const savedTxt = saved ? `Last saved ${saved}` : 'Not saved yet';
+      const updatedTxt = updated && updated !== saved ? ` · Updated ${updated}` : '';
+      this._footerEl.textContent = `${savedTxt}${updatedTxt}`;
+      this._footerEl.title = `Saved: ${saved || '—'}\nUpdated: ${updated || '—'}`;
+    }
+  }
+
   // ── Refresh ───────────────────────────────────────────────────────────────
 
   _refresh() {
+    this._refreshStatus();
     this._renderTree();
     this._renderContent();
     this._renderPath();

@@ -31,6 +31,7 @@ const ProjectManager = {
   _sceneSaveTimer: null,
   _listenersAttached: false,
   _diskWriteSuspended: false,
+  _loadInProgress: false,
 
   _debug(step, payload = {}) {
     ProjectSaveLog.add('ProjectManager', step, payload);
@@ -44,9 +45,19 @@ const ProjectManager = {
     if (this._listenersAttached) return;
     this._listenersAttached = true;
     this._migrateLegacy();
-    window.addEventListener('cyco-scene-dirty', () => this._queueSceneSnapshot());
-    window.addEventListener('cyco-scene-loaded', () => this._queueSceneSnapshot());
+    window.addEventListener('cyco-scene-dirty', () => {
+      if (this._loadInProgress) return;
+      this._queueSceneSnapshot();
+    });
+    window.addEventListener('cyco-scene-loaded', () => {
+      if (this._loadInProgress) return;
+      this._queueSceneSnapshot();
+    });
     window.addEventListener('cyco-preferences-change', () => {
+      // Defer prefs-driven saves while a project load is in progress to
+      // prevent the saved scene from being clobbered by a still-empty
+      // live scene captured from within the same loadSnapshot call.
+      if (this._loadInProgress) return;
       if (this._project) this._save();
     });
   },
@@ -88,6 +99,7 @@ const ProjectManager = {
     this._save();
     this._addToRecents({ id, name, path: displayPath, timestamp: Date.now() });
     document.dispatchEvent(new CustomEvent('cyco-project-change', { detail: { name, path: displayPath } }));
+    this.startWatching();
     return this._project;
   },
 
@@ -106,36 +118,63 @@ const ProjectManager = {
         detail: { name: this._project.name, path: this._project.path },
       }));
       this._restoreSceneFromSnapshot(this._project.scene);
+      this.startWatching();
       return true;
     } catch { return false; }
   },
 
   /**
    * Save the current project to a .cyco file.
-   * Uses the native file picker when available; otherwise downloads a file.
+   * - If a Save-As target is attached, writes there.
+   * - Else, if a browser file picker is available, prompts the user.
+   * - Else, falls back to the local save bridge (writes to the project folder).
+   * - Else, throws an explicit error.
    */
   async saveProjectFile() {
     if (!this._project) return false;
     const snapshot = this._buildSnapshot();
-    const filename = this._projectFileName(snapshot);
 
+    // 1. A file handle was attached (e.g. via Save As → browser picker)
     if (ProjectDiskStorage.hasTarget()) {
       try {
         await ProjectDiskStorage.writeSnapshot(snapshot);
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${ProjectDiskStorage.getFileName() || 'project.cyco'}` },
+        }));
         return true;
       } catch (err) {
         console.warn('[ProjectManager] Saving to existing project file failed:', err);
       }
     }
 
+    // 2. A bridge file target was attached (Save As → local save bridge)
+    if (ProjectLocalBridgeStorage.hasTarget()) {
+      try {
+        await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
+        const fileName = this._projectFileName(snapshot);
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileName} to ${ProjectLocalBridgeStorage.getProjectPath() || 'project folder'}` },
+        }));
+        return true;
+      } catch (err) {
+        console.warn('[ProjectManager] Saving to local bridge failed:', err);
+        throw new Error(`Could not save the project file: ${err.message || err}`);
+      }
+    }
+
+    // 3. Browser File System Access API → ask the user where to put the .cyco
     if (typeof window.showSaveFilePicker === 'function') {
       try {
+        const filename = this._projectFileName(snapshot);
         const fileHandle = await window.showSaveFilePicker({
           suggestedName: filename,
           types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
         });
         ProjectDiskStorage.attachFile(fileHandle, fileHandle?.name || filename);
         await ProjectDiskStorage.writeSnapshot(snapshot);
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileHandle?.name || filename}` },
+        }));
         return true;
       } catch (err) {
         if (err?.name === 'AbortError') return false;
@@ -143,7 +182,145 @@ const ProjectManager = {
       }
     }
 
-    throw new Error('This runtime cannot save project files directly. Use a writable folder or desktop shell.');
+    // 4. Fallback: download as a file (no in-place Save possible)
+    this._downloadText(JSON.stringify(snapshot, null, 2), this._projectFileName(snapshot));
+    window.dispatchEvent(new CustomEvent('cyco-toast', {
+      detail: { message: `Downloaded ${this._projectFileName(snapshot)} (no writable project folder attached)` },
+    }));
+    return true;
+  },
+
+  /**
+   * Save As: write the .cyco into the project's picked location.
+   * @param {{ exportMode?: 'file' | 'folder' | 'zip' }} [options]
+   *   - 'file' (default): write a single .cyco into the project folder.
+   *   - 'folder': write the project as a folder of the same name containing the .cyco.
+   *   - 'zip': reserved for future (not yet implemented).
+   */
+  async saveProjectAs(options = {}) {
+    if (!this._project) {
+      throw new Error('No project is open. Create or open a project before using Save As.');
+    }
+    const exportMode = options.exportMode || 'file';
+    const snapshot = this._buildSnapshot();
+    const fileName = this._projectFileName(snapshot);
+
+    // 1. Bridge attached (project was created with the local save bridge)
+    if (ProjectLocalBridgeStorage.hasTarget()) {
+      const projectPath = ProjectLocalBridgeStorage.getProjectPath();
+      try {
+        if (exportMode === 'file') {
+          await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
+        } else if (exportMode === 'folder') {
+          await ProjectLocalBridgeStorage.exportAsFolder(snapshot);
+        } else {
+          throw new Error(`Save As mode "${exportMode}" is not supported yet.`);
+        }
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileName} → ${projectPath || 'project folder'}` },
+        }));
+        return { ok: true, fileName, projectPath, mode: exportMode };
+      } catch (err) {
+        throw new Error(`Could not Save As into the project folder: ${err.message || err}`);
+      }
+    }
+
+    // 2. Browser File System Access API
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
+        });
+        ProjectDiskStorage.reset();
+        ProjectLocalBridgeStorage.reset();
+        ProjectDiskStorage.attachFile(fileHandle, fileHandle?.name || fileName);
+        await ProjectDiskStorage.writeSnapshot(snapshot);
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileHandle?.name || fileName}` },
+        }));
+        return { ok: true, fileName: fileHandle?.name || fileName, projectPath: null, mode: exportMode };
+      } catch (err) {
+        if (err?.name === 'AbortError') return { ok: false, cancelled: true };
+        throw new Error(`Could not Save As: ${err.message || err}`);
+      }
+    }
+
+    // 3. No writable target — fall back to download
+    this._downloadText(JSON.stringify(snapshot, null, 2), fileName);
+    window.dispatchEvent(new CustomEvent('cyco-toast', {
+      detail: { message: `Downloaded ${fileName} (browse to a folder & use New Project to enable Save As)` },
+    }));
+    return { ok: true, fileName, projectPath: null, mode: 'download' };
+  },
+
+  /**
+   * Rescan the on-disk project folder and rebuild the in-memory tree from it.
+   * Requires the local save bridge to be running and have an active target.
+   * Returns true on success, false if no scan was possible.
+   */
+  async refreshFromDisk() {
+    if (!this._project) return false;
+    const projectPath = ProjectLocalBridgeStorage.getProjectPath();
+    if (!projectPath) return false;
+    if (!ProjectLocalBridgeStorage.hasTarget?.()) {
+      // No bridge target — nothing to rescan from disk
+      return false;
+    }
+    try {
+      const result = await ProjectLocalBridgeStorage.scanProject({ projectPath });
+      const tree = result?.tree;
+      if (!tree || typeof tree !== 'object') return false;
+      this._project.tree = tree;
+      this._project.updatedAt = Date.now();
+      this._save();
+      document.dispatchEvent(new CustomEvent('cyco-project-change', {
+        detail: { name: this._project.name, path: this._project.path },
+      }));
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Refreshed from ${projectPath}` },
+      }));
+      return true;
+    } catch (err) {
+      console.warn('[ProjectManager] refreshFromDisk failed:', err);
+      return false;
+    }
+  },
+
+  /**
+   * Begin watching the project folder for on-disk changes and auto-refresh
+   * the asset browser tree. No-op if the bridge is not running.
+   */
+  startWatching() {
+    if (this._watcherActive) return;
+    if (!ProjectLocalBridgeStorage.hasTarget?.()) return;
+    if (typeof ProjectLocalBridgeStorage.startWatching !== 'function') return;
+    this._watcherActive = true;
+    try {
+      ProjectLocalBridgeStorage.startWatching({
+        onChange: (event) => {
+          // Debounce: if multiple events fire in quick succession, only refresh once.
+          if (this._watchDebounceTimer) clearTimeout(this._watchDebounceTimer);
+          this._watchDebounceTimer = setTimeout(() => {
+            this._watchDebounceTimer = null;
+            this.refreshFromDisk();
+          }, 250);
+          this._debug('disk:change', event || {});
+        },
+      });
+    } catch (err) {
+      console.warn('[ProjectManager] startWatching failed:', err);
+      this._watcherActive = false;
+    }
+  },
+
+  stopWatching() {
+    if (!this._watcherActive) return;
+    this._watcherActive = false;
+    if (this._watchDebounceTimer) { clearTimeout(this._watchDebounceTimer); this._watchDebounceTimer = null; }
+    if (typeof ProjectLocalBridgeStorage.stopWatching === 'function') {
+      try { ProjectLocalBridgeStorage.stopWatching(); } catch (_) { /* noop */ }
+    }
   },
 
   /**
@@ -168,27 +345,113 @@ const ProjectManager = {
   },
 
   /**
+   * Open a .cyco project file by absolute path via the local save bridge.
+   * Used by the Open Project dialog (Recent list) and by the auto-restore
+   * flow when the editor starts up with a known recents entry.
+   */
+  async openProjectByPath(filePath) {
+    if (!filePath) return false;
+    try {
+      const response = await ProjectLocalBridgeStorage.readProject({ filePath });
+      if (!response?.ok || !response.text) {
+        throw new Error(response?.error || 'Project file could not be read.');
+      }
+      const parsed = JSON.parse(response.text);
+      ProjectDiskStorage.reset();
+      ProjectLocalBridgeStorage.reset();
+      ProjectLocalBridgeStorage.attachTarget({
+        filePath: response.filePath,
+        projectPath: response.projectPath,
+      });
+      return this.loadSnapshot(parsed, { recordRecent: true, applyPrefs: true });
+    } catch (err) {
+      console.error('[ProjectManager] openProjectByPath failed:', err);
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Could not open ${filePath}: ${err.message || err}` },
+      }));
+      return false;
+    }
+  },
+
+  /**
    * Replace the in-memory project from a snapshot object.
    * Accepts the current .cyco format and legacy localStorage payloads.
    */
   loadSnapshot(rawSnapshot, { recordRecent = true, applyPrefs = true } = {}) {
-    const snapshot = this._normalizeSnapshot(rawSnapshot);
-    this._project = snapshot;
-    if (applyPrefs && snapshot.prefs) savePrefs(snapshot.prefs);
-    if (recordRecent) {
-      this._addToRecents({
-        id: snapshot.id,
-        name: snapshot.name,
-        path: snapshot.path,
-        timestamp: Date.now(),
+    let bootstrap = null;
+    let result = false;
+    this._loadInProgress = true;
+    try {
+      const snapshot = this._normalizeSnapshot(rawSnapshot);
+      this._project = snapshot;
+      // IMPORTANT: restore the scene FIRST, before any code path that may
+      // call _save() (which would overwrite snapshot.scene with the current,
+      // not-yet-restored scene state). applyPrefs is intentionally deferred
+      // until after the restore so that the cyco-preferences-change listener
+      // sees the restored scene when it re-serializes.
+      this._restoreSceneFromSnapshot(snapshot.scene);
+      if (applyPrefs && snapshot.prefs) savePrefs(snapshot.prefs);
+      if (recordRecent) {
+        this._addToRecents({
+          id: snapshot.id,
+          name: snapshot.name,
+          path: snapshot.path,
+          timestamp: Date.now(),
+        });
+      }
+      document.dispatchEvent(new CustomEvent('cyco-project-change', {
+        detail: { name: snapshot.name, path: snapshot.path },
+      }));
+      this._save();
+      this.startWatching();
+      // Refresh the on-disk tree + capture the bootstrap for after-load.
+      this.refreshFromDisk();
+      bootstrap = snapshot.engineBootstrap;
+      result = true;
+    } finally {
+      // Always clear the load guard so subsequent cyco-scene-dirty /
+      // cyco-preferences-change events commit saves as usual. The bootstrap
+      // is intentionally NOT awaited — it runs after this function returns.
+      this._loadInProgress = false;
+    }
+    if (bootstrap) {
+      this._runEngineBootstrap(bootstrap).catch(err => {
+        console.warn('[ProjectManager] _runEngineBootstrap rejected:', err);
       });
     }
-    document.dispatchEvent(new CustomEvent('cyco-project-change', {
-      detail: { name: snapshot.name, path: snapshot.path },
-    }));
-    this._restoreSceneFromSnapshot(snapshot.scene);
-    this._save();
-    return true;
+    return result;
+  },
+
+  /**
+   * Execute a user-supplied engine bootstrap script.
+   * @param {string|object|null} bootstrap
+   *   Either a JS source string, or an object like `{ scriptPath: 'engine/bootstrap.js', source }`
+   *   for a script that lives next to the .cyco project file. The script is evaluated
+   *   in a sandbox that exposes the same helpers used by the editor.
+   */
+  async _runEngineBootstrap(bootstrap) {
+    if (!bootstrap) return;
+    let source = typeof bootstrap === 'string' ? bootstrap : (bootstrap?.source || '');
+    const scriptPath = typeof bootstrap === 'object' ? (bootstrap.scriptPath || null) : null;
+    // If the project has a scriptPath and a bridge is attached, prefer the
+    // freshest copy on disk so edits the user made externally still apply.
+    if (scriptPath && ProjectLocalBridgeStorage.hasTarget?.()) {
+      const fromDisk = await ProjectLocalBridgeStorage.readBootstrap({ scriptPath });
+      if (fromDisk && fromDisk.source) {
+        source = fromDisk.source;
+      }
+    }
+    if (!source || typeof source !== 'string') return;
+    try {
+      const fn = new Function('cyco', 'project', 'projectManager', 'sceneManager', 'objectFactory', `"use strict";\n${source}`);
+      fn(window.__cyco, this._project, this, window.__cyco?.sceneManager, window.__cyco?.objectFactory);
+      this._debug('engineBootstrap:run', { length: source.length, scriptPath });
+    } catch (err) {
+      console.warn('[ProjectManager] engineBootstrap failed:', err);
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Engine bootstrap failed: ${err?.message || err}` },
+      }));
+    }
   },
 
   /**
@@ -234,6 +497,19 @@ const ProjectManager = {
           tree: project.tree,
           snapshot,
         });
+      }
+      // The bridge may have added an engineBootstrap to the on-disk
+      // .cyco file. Mirror that bootstrap into the in-memory project
+      // so a subsequent loadSnapshot will run the script.
+      if (!ProjectDiskStorage.isDirectoryHandle(directoryHandle) && this._project) {
+        const bootstrap = await ProjectLocalBridgeStorage.readBootstrapForCreate?.();
+        if (bootstrap && bootstrap.source) {
+          this._project.engineBootstrap = {
+            source: bootstrap.source,
+            scriptPath: bootstrap.scriptPath || 'engine/bootstrap.js',
+          };
+          this._save();
+        }
       }
       this._debug('createOnDisk:disk-created', {
         projectName: project.name,
@@ -293,6 +569,47 @@ const ProjectManager = {
     this._save();
     document.dispatchEvent(new CustomEvent('cyco-project-change'));
     return true;
+  },
+
+  /** True if a tree node is a file asset (not a folder). */
+  isFileNode(node) {
+    return !!node && typeof node === 'object' && node._cycoType === 'file';
+  },
+
+  /**
+   * Add an imported asset file (e.g. dropped from the OS) to the project tree
+   * under pathArray. The file payload is stored in-memory only — it will be
+   * included in the project snapshot for Save As.
+   */
+  importAssetFile(pathArray, { name, mimeType = '', size = 0, data, metadata = {} } = {}) {
+    if (!this._project) return false;
+    const parent = this._getNodeAt(pathArray) ?? this._project.tree;
+    if (typeof parent !== 'object' || parent === null) return false;
+    const safe = String(name || 'file').trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    if (!safe) return false;
+    parent[safe] = {
+      _cycoType: 'file',
+      type: this._guessAssetType(safe, mimeType),
+      mimeType: mimeType || '',
+      size: size || 0,
+      data: data || '',
+      metadata: { ...metadata, importedAt: Date.now() },
+    };
+    this._save();
+    document.dispatchEvent(new CustomEvent('cyco-project-change'));
+    return true;
+  },
+
+  _guessAssetType(name, mimeType = '') {
+    const ext = String(name).split('.').pop()?.toLowerCase() || '';
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'hdr', 'exr', 'ktx2', 'basis'].includes(ext)) return 'texture';
+    if (['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a'].includes(ext)) return 'audio';
+    if (['glb', 'gltf', 'fbx', 'obj'].includes(ext)) return 'model';
+    if (['js', 'ts', 'mjs', 'cjs'].includes(ext)) return 'script';
+    if (['ttf', 'otf', 'woff', 'woff2'].includes(ext)) return 'font';
+    if (['mtl', 'mat'].includes(ext)) return 'material';
+    if (['cyco', 'json'].includes(ext) || mimeType.includes('json')) return 'engine-state';
+    return 'file';
   },
 
   // ── Game data CRUD ──────────────────────────────────────────────────────────
@@ -400,6 +717,11 @@ const ProjectManager = {
     const gameData = this._clone(base.gameData || EMPTY_GAME_DATA);
     const scene = base.scene ? this._clone(base.scene) : null;
     const prefs = base.prefs ? this._clone(base.prefs) : null;
+    // engineBootstrap is optional user-supplied JS that runs on project
+    // open. Stored as either a string of source or { source, scriptPath }.
+    const engineBootstrap = (base.engineBootstrap && typeof base.engineBootstrap === 'object')
+      ? this._clone(base.engineBootstrap)
+      : (typeof base.engineBootstrap === 'string' ? base.engineBootstrap : null);
 
     return {
       format: base.format || PROJECT_FILE_FORMAT,
@@ -411,6 +733,7 @@ const ProjectManager = {
       gameData,
       scene,
       prefs,
+      engineBootstrap,
       createdAt: base.createdAt || Date.now(),
       updatedAt: base.updatedAt || Date.now(),
       savedAt: base.savedAt || Date.now(),

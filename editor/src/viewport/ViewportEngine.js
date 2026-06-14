@@ -360,7 +360,8 @@ export class ViewportEngine {
 
     // Keep the editor state from pointing at disposed objects after a scene swap.
     window.__cyco?.selectionManager?.clearSelection?.();
-    window.__cyco?.transformGizmo?.detach?.();
+    const gizmo = window.__cyco?.transformGizmo;
+    gizmo?.detach?.();
 
     if (this._ambientLight) this.scene.add(this._ambientLight);
     if (this._hemisphereLight) this.scene.add(this._hemisphereLight);
@@ -392,6 +393,14 @@ export class ViewportEngine {
 
     if (this.gridHelper) {
       window.__cyco?.selectionManager?.addNonSelectable?.(this.gridHelper);
+    }
+
+    // The TransformGizmo's helper was removed when the scene was cleared
+    // (scene.clear() strips every child, including editor-only helpers).
+    // Re-attach the helper to the freshly restored scene so selection +
+    // translate/rotate/scale continue to work after a project load.
+    if (gizmo && gizmo._gizmo && gizmo._gizmo.parent !== this.scene) {
+      this.scene.add(gizmo._gizmo);
     }
   }
 

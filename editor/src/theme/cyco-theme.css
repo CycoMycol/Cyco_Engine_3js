@@ -1784,6 +1784,83 @@ dialog.ce-mini-dialog::backdrop {
 }
 .ce-ab-search-input::placeholder { color: var(--ce-text-muted); opacity: 0.6; }
 
+/* Status bar — project folder + .cyco file path */
+.ce-ab-statusbar {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  min-height: 22px;
+  background: var(--ce-bg-elevated);
+  border-bottom: var(--ce-border-width) solid var(--ce-border);
+  padding: 0 6px 0 8px;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow: hidden;
+  font-size: 10.5px;
+}
+.ce-ab-statusbar-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--ce-text-muted);
+  flex-shrink: 0;
+}
+.ce-ab-statusbar-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ce-text-primary);
+  font-family: var(--ce-font-monospace);
+}
+.ce-ab-statusbar-file {
+  color: var(--ce-text-muted);
+  font-family: var(--ce-font-monospace);
+  font-size: 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ce-ab-statusbar-refresh {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ce-text-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 100ms, color 100ms, border-color 100ms;
+}
+.ce-ab-statusbar-refresh:hover {
+  background: var(--ce-bg-raised);
+  color: var(--ce-accent-orange);
+  border-color: var(--ce-border);
+}
+.ce-ab-statusbar-refresh:disabled { opacity: 0.5; cursor: progress; }
+
+/* Footer — last-saved / updated timestamps */
+.ce-ab-footer {
+  display: flex;
+  align-items: center;
+  height: 18px;
+  min-height: 18px;
+  background: var(--ce-bg-elevated);
+  border-top: var(--ce-border-width) solid var(--ce-border);
+  padding: 0 8px;
+  color: var(--ce-text-muted);
+  font-size: 9.5px;
+  font-family: var(--ce-font-monospace);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Body */
 .ce-ab-body { display: flex; flex: 1; min-height: 0; overflow: hidden; }
 
