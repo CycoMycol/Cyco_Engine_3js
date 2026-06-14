@@ -118,6 +118,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 0;
+  min-width: 0;
 }
 
 #menu-bar .menu-right {
@@ -125,6 +126,22 @@ html, body {
   align-items: center;
   gap: 2px;
   position: relative; /* so .ce-bar-panel-actions positions inside here, not the whole bar */
+  min-width: 0;
+}
+
+#menu-bar .ce-project-title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(360px, 34vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--ce-text-muted);
+  font-size: var(--ce-font-size-menu);
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 /* Logo */
@@ -157,6 +174,27 @@ html, body {
 }
 .menu-item:active {
   background: var(--ce-active-bg);
+}
+
+.ce-toast {
+  position: fixed;
+  top: 42px;
+  left: 50%;
+  transform: translate(-50%, -6px);
+  z-index: 5000;
+  padding: 7px 12px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
+  background: var(--ce-bg-raised);
+  color: var(--ce-text-primary);
+  box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+  opacity: 0;
+  transition: opacity 160ms ease, transform 160ms ease;
+  pointer-events: none;
+}
+.ce-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
 }
 
 /* Dropdown menus */
@@ -1816,6 +1854,11 @@ dialog.ce-mini-dialog::backdrop {
   padding: 8px;
   min-width: 0;
 }
+.ce-ab-content.is-drop-target {
+  outline: 1px solid var(--ce-accent-orange);
+  outline-offset: -3px;
+  background: color-mix(in srgb, var(--ce-accent-orange) 10%, var(--ce-bg-base));
+}
 .ce-ab-content::-webkit-scrollbar { width: 6px; height: 6px; }
 .ce-ab-content::-webkit-scrollbar-track { background: var(--ce-scrollbar-track); }
 .ce-ab-content::-webkit-scrollbar-thumb { background: var(--ce-scrollbar-thumb); border-radius: 6px; border: 2px solid var(--ce-scrollbar-track); }
@@ -1949,17 +1992,86 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   color: var(--ce-text-muted);
   font-size: 10px;
 }
-.ce-np-save-log summary {
-  cursor: pointer;
-  color: var(--ce-accent-orange);
-  user-select: none;
+.ce-np-save-log {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  gap: 6px;
+}
+.ce-np-save-log-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
   width: fit-content;
+  gap: 12px;
+}
+.ce-np-save-log-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-width: 0;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ce-accent-orange);
+  font-size: 10px;
+  line-height: 1;
+  box-shadow: none;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.ce-np-save-log-btn:hover,
+.ce-np-save-log-btn.is-open {
+  background: rgba(255,255,255,0.04);
+  color: var(--ce-text-primary);
+}
+.ce-np-copy-log-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ce-accent-orange);
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+  box-shadow: none;
+  transition: background 100ms, color 100ms, opacity 100ms;
+  position: relative;
+  z-index: 1;
+}
+.ce-np-copy-log-btn:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--ce-text-primary);
+}
+.ce-np-copy-log-icon {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+.ce-np-copy-log-btn .ce-np-copy-log-label {
+  color: var(--ce-accent-orange);
+}
+.ce-np-copy-log-btn:hover .ce-np-copy-log-label {
+  color: var(--ce-text-primary);
 }
 .ce-np-save-log-report {
   min-height: 72px;
   max-height: 140px;
   overflow: auto;
-  margin: 6px 0 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin: 0;
   padding: 7px 8px;
   background: rgba(0,0,0,0.22);
   border: var(--ce-border-width) solid var(--ce-border);

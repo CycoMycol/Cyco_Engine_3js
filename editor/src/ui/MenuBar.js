@@ -100,6 +100,10 @@ export function createMenuBar(options = {}) {
   });
 
   // ── Right region ───────────────────────────────────────────────────────────
+  const projectTitle = document.createElement('div');
+  projectTitle.className = 'ce-project-title';
+  projectTitle.textContent = ProjectManager.getCurrent()?.name || 'No Project';
+
   const right = document.createElement('div');
   right.className = 'menu-right';
 
@@ -127,6 +131,7 @@ export function createMenuBar(options = {}) {
   }
 
   nav.appendChild(left);
+  nav.appendChild(projectTitle);
   nav.appendChild(right);
 
   // Sync toggle btn states when layout changes
@@ -138,6 +143,14 @@ export function createMenuBar(options = {}) {
       const isBottom = p.id === 'assets-browser';
       btn.classList.toggle('panel-hidden', isBottom ? !LayoutManager.isBottomDockVisible() : !visible);
     });
+  });
+
+  document.addEventListener('cyco-project-change', (event) => {
+    projectTitle.textContent = event.detail?.name || ProjectManager.getCurrent()?.name || 'No Project';
+  });
+
+  window.addEventListener('cyco-toast', (event) => {
+    _showToast(event.detail?.message || 'Saved');
   });
 
   // Close all dropdowns on outside click
@@ -329,6 +342,22 @@ function _closeAll() {
   document.querySelectorAll('.menu-item.open').forEach(i => i.classList.remove('open'));
 }
 
+function _showToast(message) {
+  const existing = document.querySelector('.ce-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.className = 'ce-toast';
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  requestAnimationFrame(() => toast.classList.add('show'));
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 180);
+  }, 1800);
+}
+
 // ─── Layout quick-dropdown from the ⊞ button ──────────────────────────────
 function _showLayoutDropdown(anchor) {
   // Remove existing
@@ -423,14 +452,13 @@ function _panelIcon(panelId) {
 function fileMenu() {
   return [
     { label: 'New Project',     action: () => NewProjectDialog.open() },
-    { label: 'Open Project',    action: () => _openProjectDialog() },
-    { label: 'Open Project File…', action: () => ProjectManager.openProjectFile() },
+    { label: 'Open Project',    action: () => ProjectManager.openProjectFile() },
     { label: 'Recent Projects', dynamicSubmenu: _recentProjectsSubmenu },
     { separator: true },
-    { label: 'Save Project (.cyco)…', action: () => ProjectManager.saveProjectFile() },
-    { label: 'Save Scene',      action: () => _saveScene() },
-    { label: 'Save Scene As…',  action: () => _saveSceneAs() },
-    { label: 'Load Scene…',     action: () => _loadScene() },
+    { label: 'Save',            action: () => ProjectManager.saveProjectFile() },
+    { label: 'Save As…',        action: () => ProjectManager.saveProjectAs() },
+    { label: 'Save Project as Folder…', action: () => ProjectManager.saveProjectAs({ exportMode: 'folder' }) },
+    { label: 'Save Project as ZIP…',    action: () => ProjectManager.saveProjectAs({ exportMode: 'zip' }) },
     { separator: true },
     { label: 'Export', submenu: [
       { label: 'Export GLTF (.glb)',  action: () => _exportGLTF() },

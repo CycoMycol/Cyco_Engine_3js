@@ -1,6 +1,6 @@
 /** ProjectSaveLog.js - small bounded log for New Project save diagnostics */
 
-const MAX_ENTRIES = 40;
+const MAX_ENTRIES = 200;
 
 const ProjectSaveLog = {
   _entries: [],
@@ -10,6 +10,9 @@ const ProjectSaveLog = {
     const entry = { source, step, payload, time: new Date().toLocaleTimeString() };
     this._entries.push(entry);
     if (this._entries.length > MAX_ENTRIES) this._entries.shift();
+    try {
+      console.debug(`[CYCO:PROJECT] ${source}:${step}`, payload);
+    } catch (_) {}
     for (const listener of this._listeners) listener(this.entries());
   },
 

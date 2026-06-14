@@ -30,6 +30,7 @@ import { GradientSky }     from './GradientSky.js';
 import { PhysicalSkyTSL }  from './PhysicalSkyTSL.js';
 import { ContactShadows }  from './ContactShadows.js';
 import { loadPrefs }        from '../ui/PreferencesWindow.js';
+import ProjectSaveLog       from '../project/ProjectSaveLog.js';
 
 const BACKGROUND_COLOR_KEY = 'cyco-viewport-background-color';
 
@@ -110,6 +111,7 @@ export class ViewportEngine {
     this._onCameraSnap          = this._onCameraSnap.bind(this);
     this._onContainerReady      = this._onContainerReady.bind(this);
     this._onSceneSwitch         = this._onSceneSwitch.bind(this);
+    this._onSceneLoaded         = this._onSceneLoaded.bind(this);
     this._onSkyChange           = this._onSkyChange.bind(this);
     this._onFogChange           = this._onFogChange.bind(this);
     this._onGodRaysChange       = this._onGodRaysChange.bind(this);
@@ -129,6 +131,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-vp-camera',               this._onCameraSnap);
     window.addEventListener('cyco-viewport-container-ready', this._onContainerReady);
     window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
+    window.addEventListener('cyco-scene-loaded',            this._onSceneLoaded);
     window.addEventListener('cyco-sky-change',              this._onSkyChange);
     window.addEventListener('cyco-vp-skywireframe',         this._onSkyWireframeChange.bind(this));
     window.addEventListener('cyco-fog-change',              this._onFogChange);
@@ -145,6 +148,59 @@ export class ViewportEngine {
     window.addEventListener('cyco-loading-error',           this._onLoadingError);
   }
 
+  _debug(step, payload = {}) {
+    ProjectSaveLog.add('ViewportEngine', step, payload);
+  }
+
+  _cameraSummary(camera = this.camera) {
+    if (!camera) return null;
+    const target = this.controls?.target;
+    return {
+      type: camera.type || null,
+      fov: camera.fov ?? null,
+      near: camera.near ?? null,
+      far: camera.far ?? null,
+      aspect: camera.aspect ?? null,
+      zoom: camera.zoom ?? null,
+      position: {
+        x: Number(camera.position.x.toFixed(3)),
+        y: Number(camera.position.y.toFixed(3)),
+        z: Number(camera.position.z.toFixed(3)),
+      },
+      target: target ? {
+        x: Number(target.x.toFixed(3)),
+        y: Number(target.y.toFixed(3)),
+        z: Number(target.z.toFixed(3)),
+      } : null,
+    };
+  }
+
+  _viewportSummary() {
+    const renderer = this.rendererManager?.renderer;
+    const canvas = renderer?.domElement;
+    const rect = this._container?.getBoundingClientRect?.();
+    return {
+      rendererType: this.rendererManager?.activeType || null,
+      rendererClass: renderer?.constructor?.name || null,
+      isWebGLRenderer: !!renderer?.isWebGLRenderer,
+      isWebGPURenderer: !!renderer?.isWebGPURenderer,
+      hasCanvas: !!canvas,
+      canvasConnected: !!canvas?.isConnected,
+      canvasWidth: canvas?.width ?? null,
+      canvasHeight: canvas?.height ?? null,
+      cssWidth: canvas?.offsetWidth ?? null,
+      cssHeight: canvas?.offsetHeight ?? null,
+      containerConnected: !!this._container?.isConnected,
+      containerWidth: rect ? Math.floor(rect.width) : null,
+      containerHeight: rect ? Math.floor(rect.height) : null,
+      sceneChildren: this.scene?.children?.length ?? null,
+      hasEnvironment: !!this.scene?.environment,
+      background: this.scene?.background?.constructor?.name || this.scene?.background || null,
+      pipelineActive: !!this._pipelineActive,
+      camera: this._cameraSummary(),
+    };
+  }
+
   // ─── Public API ──────────────────────────────────────────────────────────
 
   /**
@@ -157,18 +213,26 @@ export class ViewportEngine {
     let { width, height } = container.getBoundingClientRect();
     let w = Math.max(1, Math.floor(width));
     let h = Math.max(1, Math.floor(height));
+    this._debug('init:start', {
+      initialWidth: w,
+      initialHeight: h,
+      containerId: container?.id || null,
+      containerConnected: !!container?.isConnected,
+    });
 
     if (w <= 1 || h <= 1) {
       await new Promise(resolve => requestAnimationFrame(resolve));
       const rect = container.getBoundingClientRect();
       w = Math.max(1, Math.floor(rect.width));
       h = Math.max(1, Math.floor(rect.height));
+      this._debug('init:deferred-size', { width: w, height: h });
     }
 
     // Init renderer (async — retries up to 3× if context creation is blocked)
     try {
       await this.rendererManager.init(container, w, h);
     } catch (err) {
+      this._debug('init:renderer-failed', { message: err?.message || String(err), stack: err?.stack || null });
       console.error('[ViewportEngine] Failed to create renderer after all retries:', err.message);
       // Show user-visible error in the container
       const msg = document.createElement('div');
@@ -180,6 +244,7 @@ export class ViewportEngine {
     
     // Ensure the renderer was properly initialized with a DOM element
     if (!this.rendererManager.renderer) {
+      this._debug('init:renderer-missing');
       console.error('[ViewportEngine] Renderer was not properly initialized');
       const msg = document.createElement('div');
       msg.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#e07228;font-size:14px;padding:20px;text-align:center;';
@@ -192,10 +257,12 @@ export class ViewportEngine {
     if (this.rendererManager.renderer.domElement && 
         !container.contains(this.rendererManager.renderer.domElement)) {
       container.appendChild(this.rendererManager.renderer.domElement);
+      this._debug('init:canvas-attached', this._viewportSummary());
     }
 
     // Build scene + camera
     this._buildScene(w, h);
+    this._debug('init:scene-built', this._viewportSummary());
 
     // IBL — must be called after renderer + scene exist
     this._setupIBL();
@@ -261,6 +328,7 @@ export class ViewportEngine {
     window.dispatchEvent(new CustomEvent('cyco-vp-ready', {
       detail: { scene: this.scene, camera: this.camera }
     }));
+    this._debug('init:complete', this._viewportSummary());
   }
 
   /**
@@ -271,6 +339,7 @@ export class ViewportEngine {
     this.scene = newScene;
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
     this._setupIBL();
+    this._restoreSceneDecorations();
   }
 
   /** Called when SceneManager switches the active scene. */
@@ -279,6 +348,51 @@ export class ViewportEngine {
     if (!sm) return;
     const newScene = sm.getActiveScene?.();
     if (newScene) this.replaceScene(newScene);
+  }
+
+  /** Called after a scene JSON load replaces the active graph in place. */
+  _onSceneLoaded() {
+    this._restoreSceneDecorations();
+  }
+
+  _restoreSceneDecorations() {
+    if (!this.scene) return;
+
+    // Keep the editor state from pointing at disposed objects after a scene swap.
+    window.__cyco?.selectionManager?.clearSelection?.();
+    window.__cyco?.transformGizmo?.detach?.();
+
+    if (this._ambientLight) this.scene.add(this._ambientLight);
+    if (this._hemisphereLight) this.scene.add(this._hemisphereLight);
+
+    if (this.axesHelper) {
+      this.axesHelper.visible = true;
+      this.scene.add(this.axesHelper);
+      window.__cyco?.selectionManager?.addNonSelectable?.(this.axesHelper);
+    }
+
+    try {
+      const saved = JSON.parse(localStorage.getItem('cyco-grid-settings') ?? '{}');
+      const gridDefaults = {
+        divisions: 20,
+        size: 2000,
+        gridColor: '#444444',
+        centerColor: '#888888',
+        opacity: 1.0,
+        gridVisible: true,
+        axesVisible: true,
+        style: 'standard',
+        cellSize: 100,
+        checkerSize: 100,
+      };
+      this._onGridSettings({ detail: { ...gridDefaults, ...saved } });
+    } catch (_) {
+      this._onGridSettings({ detail: { gridVisible: true, axesVisible: true, size: 2000, divisions: 20, style: 'standard' } });
+    }
+
+    if (this.gridHelper) {
+      window.__cyco?.selectionManager?.addNonSelectable?.(this.gridHelper);
+    }
   }
 
   /** Apply sky to the active scene (routes between gradient / physical sky). */
@@ -836,6 +950,7 @@ export class ViewportEngine {
   _disposeGridHelper() {
     if (!this.gridHelper) return;
     if (this.scene) this.scene.remove(this.gridHelper);
+    window.__cyco?.selectionManager?.nonSelectableSet?.delete?.(this.gridHelper);
     this.gridHelper.geometry?.dispose();
     const mats = Array.isArray(this.gridHelper.material)
       ? this.gridHelper.material : [this.gridHelper.material];
@@ -892,7 +1007,9 @@ export class ViewportEngine {
         if (this._gridGen !== gen || !mesh || !this.scene) return;
         this._disposeGridHelper();   // remove any grid added between dispatch and resolve
         this.gridHelper = mesh;
+        mesh.userData._isHelper = true;
         this.scene.add(mesh);
+        window.__cyco?.selectionManager?.addNonSelectable?.(mesh);
       });
 
     } else if ((newStyle === 'checkered' || newStyle === 'checkered-infinite') && _tslOk) {
@@ -901,7 +1018,9 @@ export class ViewportEngine {
         if (this._gridGen !== gen || !mesh || !this.scene) return;
         this._disposeGridHelper();
         this.gridHelper = mesh;
+        mesh.userData._isHelper = true;
         this.scene.add(mesh);
+        window.__cyco?.selectionManager?.addNonSelectable?.(mesh);
       });
 
     } else {
@@ -1007,6 +1126,7 @@ export class ViewportEngine {
   }
 
   _buildScene(w, h) {
+    this._debug('buildScene:start', { width: w, height: h });
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(_loadDefaultBackgroundColor());
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
@@ -1016,10 +1136,13 @@ export class ViewportEngine {
     this.camera = new THREE.PerspectiveCamera(90, w / h, 10, 1000000);
     this.camera.position.set(0, 300, 500);
     this.camera.lookAt(0, 0, 0);
+    this._debug('buildScene:camera-created', this._cameraSummary());
 
     // Non-hierarchy lights (not shown in scene tree)
     this._ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
     this._hemisphereLight = new THREE.HemisphereLight(0xffffff, 0x888888, 0.4);
+    this._ambientLight.userData._isHelper = true;
+    this._hemisphereLight.userData._isHelper = true;
     this.scene.add(this._ambientLight, this._hemisphereLight);
 
     // Grid + axes (non-selectable) — use saved settings if available
@@ -1043,6 +1166,7 @@ export class ViewportEngine {
     // IBL intensity: 1.0 ensures metallic/glass materials show full reflections.
     // Directional shadows stay visible because they are multiplicative on top of IBL.
     this.scene.environmentIntensity = 1.0;
+    this._debug('buildScene:complete', this._viewportSummary());
   }
 
   _makeGrid(size, divisions) {
@@ -1562,6 +1686,7 @@ export class ViewportEngine {
   _handleResize(width, height) {
     const w = Math.max(1, Math.floor(width));
     const h = Math.max(1, Math.floor(height));
+    const before = this._cameraSummary();
 
     if (this.camera.isPerspectiveCamera) {
       this.camera.aspect = w / h;
@@ -1577,6 +1702,13 @@ export class ViewportEngine {
 
     this.rendererManager.resize(w, h);
 
+    this._debug('resize:complete', {
+      width: w,
+      height: h,
+      beforeCamera: before,
+      afterCamera: this._cameraSummary(),
+      viewport: this._viewportSummary(),
+    });
     window.dispatchEvent(new CustomEvent('cyco-vp-resize', { detail: { width: w, height: h } }));
   }
 
@@ -1795,7 +1927,19 @@ export class ViewportEngine {
 
   /** PostProcessingPipeline calls this to take over rendering for the frame. */
   setPipelineActive(active) {
+    const next = !!active;
+    const changed = this._pipelineActive !== next;
+    const shouldLog = changed || !this._pipelineDbgLogged;
     this._pipelineActive = !!active;
+    if (shouldLog) {
+      this._pipelineDbgLogged = true;
+      this._debug('pipeline:setActive', {
+        active: this._pipelineActive,
+        changed,
+        frame: this._dbgFrame || 0,
+        rendererType: this.rendererManager?.activeType || null,
+      });
+    }
   }
 
   // ─── Focus animation ──────────────────────────────────────────────────────
@@ -1947,6 +2091,7 @@ export class ViewportEngine {
   _switchToOrthoCamera() {
     const persp = this.camera;
     if (!persp?.isPerspectiveCamera) return;
+    this._debug('camera:switch-ortho:start', this._cameraSummary(persp));
     const { width: w, height: h } = this._container?.getBoundingClientRect() ?? { width: 800, height: 600 };
     const aspect = w / h;
     // Ortho half-size: match the visible height at current orbit distance
@@ -1959,12 +2104,14 @@ export class ViewportEngine {
     ortho.name = persp.name;
     ortho.userData = { ...persp.userData, _prevPerspFov: persp.fov };
     this._swapEditorCamera(ortho);
+    this._debug('camera:switch-ortho:complete', this._cameraSummary());
   }
 
   /** Swap the editor viewport camera back to a PerspectiveCamera. */
   _switchToPerspCamera() {
     const ortho = this.camera;
     if (!ortho?.isOrthographicCamera) return;
+    this._debug('camera:switch-perspective:start', this._cameraSummary(ortho));
     const { width: w, height: h } = this._container?.getBoundingClientRect() ?? { width: 800, height: 600 };
     const fov   = ortho.userData._prevPerspFov ?? 90;
     const persp = new THREE.PerspectiveCamera(fov, w / h, ortho.near, ortho.far);
@@ -1974,10 +2121,15 @@ export class ViewportEngine {
     persp.userData = { ...ortho.userData };
     delete persp.userData._prevPerspFov;
     this._swapEditorCamera(persp);
+    this._debug('camera:switch-perspective:complete', this._cameraSummary());
   }
 
   /** Replace this.camera with newCam, rewire controls, and update everything. */
   _swapEditorCamera(newCam) {
+    this._debug('camera:swap:start', {
+      from: this._cameraSummary(this.camera),
+      to: this._cameraSummary(newCam),
+    });
     this.camera = newCam;
     if (this.controls) {
       const target = this.controls.target.clone();
@@ -1992,6 +2144,7 @@ export class ViewportEngine {
     // Notify post-processing pipeline and any other camera-dependent systems.
     // PostProcessingPipeline listens and rebuilds its TSL pass() node with the new camera.
     window.dispatchEvent(new CustomEvent('cyco-editor-camera-changed', { detail: { camera: newCam } }));
+    this._debug('camera:swap:complete', this._cameraSummary());
   }
 
   // ─── Renderer swap ───────────────────────────────────────────────────────
@@ -1999,6 +2152,12 @@ export class ViewportEngine {
   _onContainerReady(event) {
     const { container } = event.detail;
     if (!container) return;
+    this._debug('containerReady:start', {
+      incomingId: container?.id || null,
+      sameContainer: this._container === container,
+      hasRenderer: !!this.rendererManager?.renderer,
+      initPending: !!this._initPending,
+    });
 
     if (this._container && !this._container.isConnected) {
       this._container = null;
@@ -2009,9 +2168,13 @@ export class ViewportEngine {
         this._initPending = true;
         this.init(container).finally(() => { this._initPending = false; });
       }
+      this._debug('containerReady:same-container', this._viewportSummary());
       return; // same element, nothing else to do
     }
-    if (this._initPending) return; // init already in progress, ignore duplicate event
+    if (this._initPending) {
+      this._debug('containerReady:skip-init-pending');
+      return; // init already in progress, ignore duplicate event
+    }
 
     // Remove placeholder label in the new container
     const lbl = container.querySelector('#cyco-viewport-placeholder-label');
@@ -2039,16 +2202,23 @@ export class ViewportEngine {
       const w = Math.max(1, Math.floor(width));
       const h = Math.max(1, Math.floor(height));
       if (w > 1 && h > 1) this._handleResize(w, h);
+      this._debug('containerReady:renderer-moved', this._viewportSummary());
       return;
     }
 
     // First-time initialisation
     this._initPending = true;
     this.init(container).finally(() => { this._initPending = false; });
+    this._debug('containerReady:init-started');
   }
 
   _onRendererChanged(event) {
     const { renderer, type } = event.detail;
+    this._debug('rendererChanged:start', {
+      type,
+      incomingClass: renderer?.constructor?.name || null,
+      viewport: this._viewportSummary(),
+    });
     // Rebuild IBL with new renderer (SVG/CSS3D renderers are skipped inside _setupIBL)
     this._setupIBL();
 
@@ -2100,6 +2270,7 @@ export class ViewportEngine {
     }
 
     // TransformControls will re-wire via its own cyco-renderer-changed listener
+    this._debug('rendererChanged:complete', this._viewportSummary());
   }
 
   // ─── Disposal ─────────────────────────────────────────────────────────────
@@ -2124,6 +2295,7 @@ export class ViewportEngine {
     window.removeEventListener('cyco-vp-camera',                this._onCameraSnap);
     window.removeEventListener('cyco-viewport-container-ready', this._onContainerReady);
     window.removeEventListener('cyco-scene-switch',             this._onSceneSwitch);
+    window.removeEventListener('cyco-scene-loaded',             this._onSceneLoaded);
     window.removeEventListener('cyco-sky-change',               this._onSkyChange);
     window.removeEventListener('cyco-fog-change',               this._onFogChange);
     window.removeEventListener('cyco-godrays-change',           this._onGodRaysChange);

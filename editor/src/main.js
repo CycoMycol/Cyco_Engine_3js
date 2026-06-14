@@ -197,19 +197,13 @@ setTimeout(() => {
   }
 }, 800);
 
-// Export modules to window for debugging
 async function pickDirectory(options = {}) {
   const nativeBridge = window.__cyco_native?.pickDirectory;
   if (typeof nativeBridge === 'function') {
-    return await nativeBridge(options);
+    return await nativeBridge({ mode: 'readwrite', ...options });
   }
   if (typeof window.showDirectoryPicker === 'function') {
-    const dirHandle = await window.showDirectoryPicker(options);
-    return {
-      name: dirHandle?.name || '',
-      path: dirHandle?.path || dirHandle?.fullPath || dirHandle?.name || '',
-      handle: dirHandle,
-    };
+    return await window.showDirectoryPicker({ mode: 'readwrite', ...options });
   }
   return null;
 }

@@ -16,10 +16,88 @@
  */
 
 import * as THREE from 'three';
+import * as THREE_WEBGPU from 'three/webgpu';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
+import ProjectSaveLog from '../project/ProjectSaveLog.js';
 
 let _nextId = 1;
 const uid = () => `obj_${_nextId++}`;
+
+const NODE_MATERIALS = Object.fromEntries(
+  Object.entries(THREE_WEBGPU).filter(([name, value]) => name.endsWith('Material') && typeof value === 'function')
+);
+
+const NODE_MATERIAL_FALLBACKS = {
+  NodeMaterial: 'MeshStandardMaterial',
+  MeshBasicNodeMaterial: 'MeshBasicMaterial',
+  MeshLambertNodeMaterial: 'MeshLambertMaterial',
+  MeshPhongNodeMaterial: 'MeshPhongMaterial',
+  MeshStandardNodeMaterial: 'MeshStandardMaterial',
+  MeshPhysicalNodeMaterial: 'MeshPhysicalMaterial',
+  MeshToonNodeMaterial: 'MeshToonMaterial',
+  MeshNormalNodeMaterial: 'MeshNormalMaterial',
+  MeshMatcapNodeMaterial: 'MeshMatcapMaterial',
+  PointsNodeMaterial: 'PointsMaterial',
+  SpriteNodeMaterial: 'SpriteMaterial',
+  LineBasicNodeMaterial: 'LineBasicMaterial',
+  LineDashedNodeMaterial: 'LineDashedMaterial',
+  ShadowNodeMaterial: 'ShadowMaterial',
+};
+
+function hasNodeMaterials(json) {
+  return !!json?.materials?.some(material => material?.type && (
+    material.type in NODE_MATERIALS ||
+    material.type in NODE_MATERIAL_FALLBACKS ||
+    material.type.endsWith('NodeMaterial')
+  ));
+}
+
+function makeObjectLoader(json) {
+  if (!hasNodeMaterials(json)) return new THREE.ObjectLoader();
+  return new THREE_WEBGPU.NodeObjectLoader().setNodeMaterials(NODE_MATERIALS);
+}
+
+function cloneJSON(json) {
+  return JSON.parse(JSON.stringify(json));
+}
+
+function isEditorOnlyObject(obj) {
+  if (!obj) return false;
+  if (obj.userData?._isGizmo) return true;
+  if (obj.userData?._isHelper) return true;
+  if (obj.userData?._editorOnly) return true;
+  if (obj.name === 'Main Grid') return true;
+  if (typeof obj.name === 'string' && obj.name.startsWith('__cyco_')) return true;
+  if (obj.type === 'GridHelper' || obj.type === 'AxesHelper') return true;
+  return false;
+}
+
+function stripEditorOnlyObjects(root) {
+  if (!root?.traverse) return root;
+  const doomed = [];
+  root.traverse((obj) => {
+    if (obj !== root && isEditorOnlyObject(obj)) doomed.push(obj);
+  });
+  for (const obj of doomed) {
+    obj.parent?.remove(obj);
+  }
+  return root;
+}
+
+function downgradeNodeMaterials(json) {
+  const safe = cloneJSON(json);
+  for (const material of safe.materials ?? []) {
+    const fallbackType = NODE_MATERIAL_FALLBACKS[material.type] ?? (
+      material.type?.endsWith('NodeMaterial') ? 'MeshStandardMaterial' : null
+    );
+    if (!fallbackType) continue;
+    material.type = fallbackType;
+    delete material.inputNodes;
+    delete material.nodes;
+  }
+  delete safe.nodes;
+  return safe;
+}
 
 export class SceneManager {
   constructor() {
@@ -107,7 +185,7 @@ export class SceneManager {
     const entry = this.sceneRegistry.get(id);
     if (!entry) return null;
     const json  = entry.scene.toJSON();
-    const clone = new THREE.ObjectLoader().parse(json);
+    const clone = this._parseSceneJSON(json, 'duplicateScene');
     const newId = `scene_${Date.now()}`;
     this.registerScene(newId, clone, { name: entry.name + ' Copy' });
     return newId;
@@ -226,9 +304,14 @@ export class SceneManager {
    */
   serializeActiveScene() {
     const scene = this.getActiveScene();
-    if (!scene) return null;
+    if (!scene) {
+      ProjectSaveLog.add('SceneManager', 'serializeActiveScene:skip-no-scene', {
+        activeSceneId: this.activeSceneId,
+      });
+      return null;
+    }
 
-    const json = scene.toJSON();
+    const json = stripEditorOnlyObjects(scene.clone(true)).toJSON();
     const entry = this.sceneRegistry.get(this.activeSceneId);
     if (entry) {
       const meta = {
@@ -240,6 +323,19 @@ export class SceneManager {
       json.object.userData = json.object.userData || {};
       json.object.userData.physicsSettings = meta;
     }
+    ProjectSaveLog.add('SceneManager', 'serializeActiveScene:complete', {
+      activeSceneId: this.activeSceneId,
+      sceneChildren: scene.children.length,
+      jsonChildren: json?.object?.children?.length ?? 0,
+      geometries: json?.geometries?.length ?? 0,
+      materials: json?.materials?.length ?? 0,
+      textures: json?.textures?.length ?? 0,
+      images: json?.images?.length ?? 0,
+      jsonBytes: (() => {
+        try { return JSON.stringify(json).length; }
+        catch (_) { return -1; }
+      })(),
+    });
     return json;
   }
 
@@ -249,7 +345,37 @@ export class SceneManager {
    * @returns {THREE.Scene}
    */
   deserializeScene(json) {
-    return new THREE.ObjectLoader().parse(json);
+    return this._parseSceneJSON(json, 'deserializeScene');
+  }
+
+  _parseSceneJSON(json, context = 'parseSceneJSON') {
+    const useNodeLoader = hasNodeMaterials(json);
+    try {
+      const loader = makeObjectLoader(json);
+      const parsed = loader.parse(json);
+      ProjectSaveLog.add('SceneManager', `${context}:parsed`, {
+        loader: useNodeLoader ? 'NodeObjectLoader' : 'ObjectLoader',
+        nodeMaterials: useNodeLoader,
+        children: parsed?.children?.length ?? 0,
+      });
+      return parsed;
+    } catch (err) {
+      if (!useNodeLoader) throw err;
+
+      ProjectSaveLog.add('SceneManager', `${context}:node-parse-error`, {
+        message: err?.message || String(err),
+        stack: err?.stack || null,
+      });
+
+      const safeJson = downgradeNodeMaterials(json);
+      const parsed = new THREE.ObjectLoader().parse(safeJson);
+      ProjectSaveLog.add('SceneManager', `${context}:fallback-parsed`, {
+        loader: 'ObjectLoader',
+        downgradedNodeMaterials: true,
+        children: parsed?.children?.length ?? 0,
+      });
+      return parsed;
+    }
   }
 
   /**
@@ -259,7 +385,22 @@ export class SceneManager {
    */
   loadSceneFromJSON(json) {
     const entry = this.sceneRegistry.get(this.activeSceneId);
-    if (!entry) return;
+    if (!entry) {
+      ProjectSaveLog.add('SceneManager', 'loadSceneFromJSON:skip-no-entry', {
+        activeSceneId: this.activeSceneId,
+      });
+      return;
+    }
+    ProjectSaveLog.add('SceneManager', 'loadSceneFromJSON:start', {
+      activeSceneId: this.activeSceneId,
+      currentChildren: entry.scene?.children?.length ?? 0,
+      jsonType: json?.object?.type || null,
+      jsonChildren: json?.object?.children?.length ?? 0,
+      geometries: json?.geometries?.length ?? 0,
+      materials: json?.materials?.length ?? 0,
+      textures: json?.textures?.length ?? 0,
+      images: json?.images?.length ?? 0,
+    });
     // Apply persisted scene metadata if present
     const persistedMeta = json?.object?.userData?.physicsSettings;
     if (persistedMeta && typeof persistedMeta === 'object') {
@@ -268,11 +409,29 @@ export class SceneManager {
       entry.plane2d     = persistedMeta.plane2d     ?? entry.plane2d;
     }
 
+    window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+
     // Dispose old objects
     entry.scene.traverse(child => this._disposeNode(child));
     entry.scene.clear();
     // Parse and copy from new scene
-    const loaded = new THREE.ObjectLoader().parse(json);
+    let loaded;
+    try {
+      loaded = this._parseSceneJSON(json, 'loadSceneFromJSON');
+      ProjectSaveLog.add('SceneManager', 'loadSceneFromJSON:parsed', {
+        loadedType: loaded?.type || null,
+        loadedChildren: loaded?.children?.length ?? 0,
+        background: loaded?.background?.constructor?.name || loaded?.background || null,
+        fog: loaded?.fog?.constructor?.name || null,
+      });
+    } catch (err) {
+      ProjectSaveLog.add('SceneManager', 'loadSceneFromJSON:parse-error', {
+        message: err?.message || String(err),
+        stack: err?.stack || null,
+      });
+      throw err;
+    }
+    stripEditorOnlyObjects(loaded);
     loaded.children.slice().forEach(child => {
       loaded.remove(child);
       entry.scene.add(child);
@@ -285,6 +444,12 @@ export class SceneManager {
       window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
         detail: { object: child, parentId: 'scene_root' }
       }));
+    });
+    ProjectSaveLog.add('SceneManager', 'loadSceneFromJSON:complete', {
+      activeSceneId: this.activeSceneId,
+      finalChildren: entry.scene.children.length,
+      background: entry.scene.background?.constructor?.name || entry.scene.background || null,
+      fog: entry.scene.fog?.constructor?.name || null,
     });
     window.dispatchEvent(new CustomEvent('cyco-scene-loaded', { detail: { sceneId: this.activeSceneId } }));
   }
