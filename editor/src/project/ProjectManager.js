@@ -152,6 +152,7 @@ const ProjectManager = {
     try {
       const { file, handle } = selection;
       ProjectDiskStorage.reset();
+      ProjectLocalBridgeStorage.reset();
       if (handle) ProjectDiskStorage.attachFile(handle, file?.name || null);
       const text = await file.text();
       const parsed = JSON.parse(text);
@@ -361,11 +362,17 @@ const ProjectManager = {
 
   _queueDiskWrite() {
     if (!this._project) return;
-    if (!ProjectDiskStorage.hasTarget()) return;
+    const hasDiskTarget = ProjectDiskStorage.hasTarget();
+    const hasBridgeTarget = ProjectLocalBridgeStorage.hasTarget();
+    if (!hasDiskTarget && !hasBridgeTarget) return;
     if (this._diskWriteSuspended) return;
     if (this._diskWriteTimer) clearTimeout(this._diskWriteTimer);
     this._diskWriteTimer = setTimeout(() => {
-      ProjectDiskStorage.writeSnapshot(this._buildSnapshot()).catch(err => {
+      const snapshot = this._buildSnapshot();
+      const write = hasDiskTarget
+        ? ProjectDiskStorage.writeSnapshot(snapshot)
+        : ProjectLocalBridgeStorage.writeSnapshot(snapshot);
+      write.catch(err => {
         console.warn('[ProjectManager] Failed to write project to disk:', err);
       });
     }, 250);

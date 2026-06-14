@@ -303,12 +303,9 @@ const NewProjectDialog = {
           handleName: selectedDirectoryHandle?.name || null,
           hasHandle: !!selectedDirectoryHandle,
         });
-        if (!selectedDirectoryHandle) {
-          pathHint.textContent = 'That picker only returned a path label. Pick a writable folder from the browser folder picker.';
-          pathHint.style.color = 'var(--ce-accent-orange)';
-          return;
-        }
-        pathHint.textContent = 'Selected directory updated in the Location field.';
+        pathHint.textContent = selectedDirectoryHandle
+          ? 'Selected directory updated in the Location field.'
+          : 'Selected folder path updated in the Location field.';
         pathHint.style.color = '';
       } catch (err) {
         this._debug('browse:error', { message: err?.message || String(err), name: err?.name || '' });

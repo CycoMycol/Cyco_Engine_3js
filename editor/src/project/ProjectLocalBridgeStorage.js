@@ -5,8 +5,29 @@ import ProjectSaveLog from './ProjectSaveLog.js';
 const BRIDGE_URL = 'http://127.0.0.1:47623';
 
 const ProjectLocalBridgeStorage = {
+  _projectFilePath: null,
+  _projectPath: null,
+
   debug(step, payload = {}) {
     ProjectSaveLog.add('ProjectLocalBridgeStorage', step, payload);
+  },
+
+  reset() {
+    this._projectFilePath = null;
+    this._projectPath = null;
+  },
+
+  hasTarget() {
+    return !!this._projectFilePath;
+  },
+
+  attachTarget({ filePath = null, projectPath = null } = {}) {
+    this._projectFilePath = filePath || null;
+    this._projectPath = projectPath || null;
+    this.debug('attachTarget', {
+      filePath: this._projectFilePath,
+      projectPath: this._projectPath,
+    });
   },
 
   async createProject({ name, location, createFolder, tree, snapshot }) {
@@ -35,7 +56,24 @@ const ProjectLocalBridgeStorage = {
     });
 
     this.debug('createProject:complete', response);
+    if (response?.filePath) {
+      this.attachTarget({ filePath: response.filePath, projectPath: response.projectPath || null });
+    }
     return response;
+  },
+
+  async writeSnapshot(snapshot) {
+    if (!this._projectFilePath) return false;
+    const response = await this.fetchJson('/write-project', {
+      method: 'POST',
+      body: JSON.stringify({
+        filePath: this._projectFilePath,
+        projectPath: this._projectPath,
+        snapshot,
+      }),
+    });
+    this.debug('writeSnapshot:complete', response);
+    return !!response?.ok;
   },
 
   async pickFolder() {
