@@ -1923,20 +1923,6 @@ export class ViewportEngine {
       console.log(`%c  [SUMMARY] canvasWrites=${_totalWrites}  ${label}`, color);
       console.groupEnd();
     }
-    if (this._dbgFrame <= 5 || this._dbgFrame % 300 === 0) {
-      const renderer = this.rendererManager?.renderer;
-      this._debug('frame:health', {
-        frame: this._dbgFrame,
-        rendererType: this.rendererManager?.activeType || null,
-        rendererClass: renderer?.constructor?.name || null,
-        isWebGPURenderer: !!renderer?.isWebGPURenderer,
-        isWebGLRenderer: !!renderer?.isWebGLRenderer,
-        pipelineActive: !!this._pipelineActive,
-        canvasWrites: window._cycoDbgCanvasWrites,
-        sceneChildren: this.scene?.children?.length ?? null,
-        camera: this._cameraSummary(),
-      });
-    }
   }
 
   /** PostProcessingPipeline calls this to take over rendering for the frame. */

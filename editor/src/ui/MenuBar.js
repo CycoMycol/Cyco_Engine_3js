@@ -457,7 +457,8 @@ function fileMenu() {
     { separator: true },
     { label: 'Save',            action: () => ProjectManager.saveProjectFile() },
     { label: 'Save As…',        action: () => ProjectManager.saveProjectAs() },
-    { label: 'Save Project…',   action: () => ProjectManager.saveProjectAs() },
+    { label: 'Save Project as Folder…', action: () => ProjectManager.saveProjectAs({ exportMode: 'folder' }) },
+    { label: 'Save Project as ZIP…',    action: () => ProjectManager.saveProjectAs({ exportMode: 'zip' }) },
     { separator: true },
     { label: 'Export', submenu: [
       { label: 'Export GLTF (.glb)',  action: () => _exportGLTF() },

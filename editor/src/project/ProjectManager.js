@@ -3,12 +3,15 @@
 import { EMPTY_GAME_DATA } from '../ui/game-manager/GameDataSchemas.js';
 import { loadPrefs, savePrefs } from '../ui/PreferencesWindow.js';
 import ProjectSaveLog from './ProjectSaveLog.js';
+import { strToU8, zipSync } from '../../libs/three/addons/libs/fflate.module.js';
 
 const STORAGE_KEY_RECENTS = 'cyco-recents';
 const STORAGE_KEY_PREFIX  = 'cyco-proj-';
 const STORAGE_KEY_LEGACY  = 'cyco-project';
 const HANDLE_DB_NAME = 'cyco-project-handles';
 const HANDLE_STORE_NAME = 'handles';
+const PROJECT_DB_NAME = 'cyco-project-snapshots';
+const PROJECT_STORE_NAME = 'projects';
 const PROJECT_FILE_FORMAT = 'cyco-project';
 const PROJECT_FILE_VERSION = 2;
 const ENGINE_FOLDER_NAME = 'engine';
@@ -93,7 +96,7 @@ const ProjectManager = {
 
   async createOnDisk(name, location, createFolder, folders = null, directoryHandle = null, fileHandle = null) {
     if (this._isFileHandle(fileHandle)) {
-      return this._createWithFileHandle(name, location, folders, fileHandle);
+      return this._createWithFileHandle(name, location, createFolder, folders, fileHandle);
     }
     if (!this._isDirectoryHandle(directoryHandle)) {
       return this._createBrowserStorageProject(name, location, createFolder, folders, 'no-writable-directory');
@@ -101,7 +104,11 @@ const ProjectManager = {
     return this._createWithDirectoryHandle(name, location, createFolder, folders, directoryHandle);
   },
 
-  async _createWithFileHandle(name, location, folders = null, fileHandle = null) {
+  async createProjectAtDirectory(name, location, createFolder, folders = null, directoryHandle = null) {
+    return this._createWithDirectoryHandle(name, location, createFolder, folders, directoryHandle);
+  },
+
+  async _createWithFileHandle(name, location, createFolder, folders = null, fileHandle = null) {
     if (!this._isFileHandle(fileHandle)) {
       throw new Error('Choose a project file with Browse before creating the project.');
     }
@@ -120,7 +127,10 @@ const ProjectManager = {
     this._rootDirectoryHandle = null;
 
     const tree = this._projectTreeFromFolders(folders);
-    const projectPath = String(location || '').trim() || this._fileName;
+    const baseLocation = String(location || '').trim();
+    const projectPath = createFolder
+      ? `${baseLocation.replace(/[\\/]+$/, '')}/${safeName}`
+      : (baseLocation || this._fileName);
     this._project = this._normalizeProject({
       id: this._newId(),
       name: safeName,
@@ -223,7 +233,7 @@ const ProjectManager = {
     const snapshot = this._buildSnapshot();
     snapshot.storageMode = 'browser-storage';
     this._project = snapshot;
-    this._saveToLocalStorage(snapshot);
+    this._saveToBrowserStorage(snapshot);
     this._recordRecent(snapshot);
     this._emitProjectChange({ saveMode: 'browser-storage', reason });
     this._debug('create:browser-storage-complete', {
@@ -240,39 +250,314 @@ const ProjectManager = {
   async saveProjectFile(options = {}) {
     if (!this._project) return false;
     const saveAs = !!(options === true || options?.saveAs);
+    this._debug('save:file-click', {
+      saveAs,
+      hasFileHandle: !!this._fileHandle,
+      hasProjectDirHandle: !!this._projectDirHandle,
+      hasRootDirHandle: !!this._rootDirectoryHandle,
+      storageMode: this._project?.storageMode || null,
+    });
     if (saveAs || !this._fileHandle) {
+      this._debug('save:file-delegating-saveAs', {
+        reason: saveAs ? 'explicit-save-as' : 'missing-file-handle',
+      });
       return this.saveProjectAs();
     }
+    this._debug('save:file-write-current', {
+      fileName: this._fileName || null,
+    });
     await this._writeCurrentProject({ notify: true });
+    this._debug('save:file-complete', {
+      fileName: this._fileName || null,
+    });
     return true;
   },
 
-  async saveProjectAs() {
+  async saveProjectAs(options = {}) {
     if (!this._project) return false;
-    if (typeof window.showSaveFilePicker !== 'function') {
-      this._downloadText(JSON.stringify(this._buildSnapshot(), null, 2), this._projectFileName());
-      return true;
-    }
-
     try {
-      const fileHandle = await window.showSaveFilePicker({
-        suggestedName: this._projectFileName(),
-        types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
-      });
-      this._fileHandle = fileHandle;
-      this._fileName = fileHandle?.name || this._projectFileName();
-      this._projectDirHandle = null;
-      if (fileHandle?.name) {
-        this._project.name = fileHandle.name.replace(/\.cyco$/i, '') || this._project.name;
+      const snapshot = this._buildSnapshot();
+      const exportMode = await this._resolveSaveExportMode(options);
+      if (!exportMode) {
+        this._debug('save:cancelled-before-export');
+        return false;
       }
-      await this._writeCurrentProject({ notify: true });
-      await this._storeFileHandle(this._project.id, fileHandle);
-      this._emitProjectChange();
+      const canExportFolder = this._canExportFolder();
+      this._debug('save:start', {
+        name: snapshot?.name || null,
+        path: snapshot?.path || null,
+        storageMode: snapshot?.storageMode || null,
+        exportMode,
+        canExportFolder,
+        hasFileHandle: !!this._fileHandle,
+        hasProjectDirHandle: !!this._projectDirHandle,
+        hasRootDirHandle: !!this._rootDirectoryHandle,
+      });
+
+      if (exportMode === 'zip') {
+        const zipName = `${sanitizeName(snapshot?.name || 'project')}.zip`;
+        this._debug('save:zip-export', { fileName: zipName });
+        this._downloadBlob(this._buildProjectZip(snapshot), zipName, 'application/zip');
+        await this._saveToBrowserStorage(snapshot);
+        this._project = snapshot;
+        this._recordRecent(snapshot);
+        this._emitProjectChange({ saveMode: 'zip-export' });
+        this._notifySaved(snapshot.name);
+        this._debug('save:success', { fileName: zipName, mode: 'zip-export' });
+        return true;
+      }
+
+      const serverExport = await this._saveProjectFolderViaServer(snapshot);
+      if (serverExport?.handled) {
+        if (serverExport.cancelled) {
+          this._debug('save:abort', { message: 'Native folder picker cancelled.' });
+          return false;
+        }
+        this._project = snapshot;
+        this._project.name = serverExport.projectName;
+        this._project.path = serverExport.projectRoot;
+        this._project.storageMode = 'browser-storage';
+        this._fileHandle = null;
+        this._fileName = serverExport.fileName;
+        this._projectDirHandle = null;
+        this._rootDirectoryHandle = null;
+        await this._saveToBrowserStorage(this._project);
+        this._recordRecent(this._project);
+        this._emitProjectChange({ saveMode: 'server-folder-export' });
+        this._notifySaved(this._project.name);
+        this._debug('save:success', {
+          name: this._project.name || null,
+          fileName: serverExport.fileName,
+          mode: 'server-folder-export',
+          projectRoot: serverExport.projectRoot,
+        });
+        return true;
+      }
+      if (serverExport?.unreachable) {
+        const droppedHandle = await this._pickDirectoryByDrop();
+        if (droppedHandle) {
+          const rootHandle = await this._ensureWritableDirectory(droppedHandle);
+          await this._writeSnapshotToDirectory(rootHandle, snapshot);
+          return true;
+        }
+      }
+
+      if (!canExportFolder) {
+        this._debug('save:folder-unavailable', {
+          hasShowDirectoryPicker: typeof window.showDirectoryPicker === 'function',
+          isSecureContext: typeof window.isSecureContext === 'boolean' ? window.isSecureContext : null,
+        });
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: 'Folder export is not available here. Use ZIP export instead.', type: 'error' },
+        }));
+        return false;
+      }
+
+      const pickDirectory = window.__cyco?.pickDirectory;
+      const rootHandle = typeof pickDirectory === 'function'
+        ? await pickDirectory({ startIn: 'documents' })
+        : await window.showDirectoryPicker({ mode: 'readwrite', startIn: 'documents' });
+      await this._writeSnapshotToDirectory(rootHandle, snapshot);
       return true;
     } catch (err) {
-      if (err?.name === 'AbortError') return false;
+      if (err?.name === 'AbortError') {
+        this._debug('save:abort', { message: err?.message || 'AbortError' });
+        return false;
+      }
+      this._debug('save:error', {
+        name: this._project?.name || null,
+        message: err?.message || String(err),
+        errorName: err?.name || null,
+      });
       throw new Error(`Could not save project: ${err.message || err}`);
     }
+  },
+
+  async _resolveSaveExportMode(options = {}) {
+    const explicitMode = options && typeof options === 'object' ? options.exportMode : null;
+    if (explicitMode === 'zip' || explicitMode === 'folder') return explicitMode;
+    return await this._promptSaveExportMode();
+  },
+
+  _canExportFolder() {
+    return typeof window.__cyco?.pickDirectory === 'function'
+      || typeof window.showDirectoryPicker === 'function'
+      || this._canUseDroppedDirectoryHandle();
+  },
+
+  _canUseDroppedDirectoryHandle() {
+    return typeof window !== 'undefined'
+      && typeof DataTransferItem !== 'undefined'
+      && !!DataTransferItem.prototype?.getAsFileSystemHandle;
+  },
+
+  async _saveProjectFolderViaServer(snapshot) {
+    let hadNetworkFailure = false;
+    const origins = this._serverExportOrigins();
+    for (const origin of origins) {
+      try {
+        const response = await fetch(`${origin}/api/export-project-folder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ snapshot }),
+        });
+        if (!response.ok) {
+          this._debug('save:server-folder-export-unavailable', {
+            origin,
+            status: response.status,
+          });
+          continue;
+        }
+        const result = await response.json();
+        this._debug('save:server-folder-export-result', {
+          origin,
+          cancelled: !!result?.cancelled,
+          selectedPath: result?.selectedPath || null,
+          projectRoot: result?.projectRoot || null,
+        });
+        return {
+          handled: true,
+          cancelled: !!result?.cancelled,
+          projectName: sanitizeName(snapshot?.name || 'project'),
+          projectRoot: result?.projectRoot || null,
+          fileName: result?.projectFileName || this._projectFileName(snapshot),
+        };
+      } catch (err) {
+        hadNetworkFailure = true;
+        this._debug('save:server-folder-export-error', {
+          origin,
+          message: err?.message || String(err),
+        });
+      }
+    }
+    return { handled: false, unreachable: hadNetworkFailure };
+  },
+
+  _serverExportOrigins() {
+    const origins = [];
+    const currentOrigin = window.location?.origin || null;
+    origins.push('http://127.0.0.1:47623', 'http://localhost:47623', 'http://127.0.0.1:4173', 'http://localhost:4173');
+    if (currentOrigin && /^https?:/i.test(currentOrigin)) origins.push(currentOrigin);
+    return [...new Set(origins)];
+  },
+
+  _pickDirectoryByDrop() {
+    if (!this._canUseDroppedDirectoryHandle()) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const dlg = document.createElement('dialog');
+      dlg.className = 'ce-mini-dialog';
+      dlg.innerHTML = `
+        <div class="ce-mini-msg">Drag a destination folder into this box.</div>
+        <div class="ce-mini-msg" style="font-size:12px; opacity:0.78;">This uses a dropped folder handle instead of the normal picker.</div>
+        <div class="ce-mini-msg ce-drop-target" style="margin-top:10px; padding:18px; border:1px dashed currentColor; border-radius:8px; text-align:center;">
+          Drop folder here
+        </div>
+        <div class="ce-mini-actions">
+          <button class="ce-btn ghost ce-save-cancel">Cancel</button>
+        </div>
+      `;
+      document.body.appendChild(dlg);
+      const target = dlg.querySelector('.ce-drop-target');
+      const closeWith = (value) => {
+        dlg.close();
+        dlg.remove();
+        resolve(value);
+      };
+      dlg.querySelector('.ce-save-cancel')?.addEventListener('click', () => closeWith(null));
+      dlg.addEventListener('click', (event) => {
+        if (event.target === dlg) closeWith(null);
+      });
+      target?.addEventListener('dragover', (event) => {
+        event.preventDefault();
+      });
+      target?.addEventListener('drop', async (event) => {
+        event.preventDefault();
+        const items = [...(event.dataTransfer?.items || [])].filter((item) => item.kind === 'file');
+        const handlePromises = items.map((item) => item.getAsFileSystemHandle());
+        const handles = await Promise.all(handlePromises);
+        const dirHandle = handles.find((handle) => handle?.kind === 'directory') || null;
+        this._debug('save:drop-directory-result', {
+          handleName: dirHandle?.name || null,
+          found: !!dirHandle,
+        });
+        closeWith(dirHandle);
+      });
+      dlg.showModal();
+    });
+  },
+
+  async _writeSnapshotToDirectory(rootHandle, snapshot) {
+    this._debug('save:directory-picked', { rootName: rootHandle?.name || null });
+
+    const projectName = sanitizeName(snapshot.name || this._project?.name || 'project');
+    const projectDirHandle = await rootHandle.getDirectoryHandle(projectName, { create: true });
+    this._debug('save:project-dir-created', { projectName, projectDirName: projectDirHandle?.name || null });
+    await this._ensureFolderTree(projectDirHandle, snapshot.tree);
+    this._debug('save:tree-created', { folderCount: Object.keys(snapshot?.tree || {}).length });
+
+    const fileName = this._projectFileName(snapshot);
+    const fileHandle = await projectDirHandle.getFileHandle(fileName, { create: true });
+    this._debug('save:file-handle-created', { fileName });
+
+    const writable = await fileHandle.createWritable();
+    await writable.write(JSON.stringify(snapshot, null, 2));
+    await writable.close();
+    this._debug('save:file-written', { fileName });
+
+    this._fileHandle = fileHandle;
+    this._fileName = fileName;
+    this._projectDirHandle = projectDirHandle;
+    this._rootDirectoryHandle = rootHandle;
+    this._project = snapshot;
+    this._project.name = projectName;
+    this._project.path = `${rootHandle.name || 'Project Location'}/${projectName}`;
+    this._project.storageMode = 'browser-storage';
+
+    await this._saveToBrowserStorage(this._project);
+    await this._storeFileHandle(this._project.id, fileHandle);
+    this._recordRecent(this._project);
+    this._emitProjectChange();
+    this._notifySaved(this._project.name);
+    this._debug('save:success', { name: this._project.name || null, fileName });
+  },
+
+  _promptSaveExportMode() {
+    return new Promise((resolve) => {
+      const dlg = document.createElement('dialog');
+      const canExportFolder = this._canExportFolder();
+      dlg.className = 'ce-mini-dialog';
+      dlg.innerHTML = `
+        <div class="ce-mini-msg">Choose how to export this project.</div>
+        <div class="ce-mini-msg" style="font-size:12px; opacity:0.78; margin-top:-6px;">
+          Folder export creates <strong>${this._escapeHtml(this._project?.name || 'project')}</strong> with its project file and asset folders.
+        </div>
+        <div class="ce-mini-actions" style="justify-content:flex-start; gap:10px; flex-wrap:wrap;">
+          <button class="ce-btn primary ce-save-folder"${canExportFolder ? '' : ' disabled'}>Save Folder</button>
+          <button class="ce-btn ghost ce-save-zip">Save ZIP</button>
+          <button class="ce-btn ghost ce-save-cancel">Cancel</button>
+        </div>
+        ${canExportFolder ? '' : '<div class="ce-mini-msg" style="font-size:12px; opacity:0.72; margin-top:8px;">Folder export is unavailable in this browser context right now.</div>'}
+      `;
+      document.body.appendChild(dlg);
+
+      const closeWith = (value) => {
+        dlg.close();
+        dlg.remove();
+        resolve(value);
+      };
+
+      dlg.querySelector('.ce-save-folder')?.addEventListener('click', () => closeWith('folder'));
+      dlg.querySelector('.ce-save-zip')?.addEventListener('click', () => closeWith('zip'));
+      dlg.querySelector('.ce-save-cancel')?.addEventListener('click', () => closeWith(null));
+      dlg.addEventListener('click', (event) => {
+        if (event.target === dlg) closeWith(null);
+      });
+      dlg.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeWith(null);
+      });
+
+      dlg.showModal();
+    });
   },
 
   async openProjectFile() {
@@ -320,12 +605,12 @@ const ProjectManager = {
 
   async openById(id) {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY_PREFIX + id);
+      const raw = await this._getStoredProjectSnapshot(id) || localStorage.getItem(STORAGE_KEY_PREFIX + id);
       if (!raw) return false;
       this._fileHandle = null;
       this._projectDirHandle = null;
       this._rootDirectoryHandle = null;
-      this.loadSnapshot(JSON.parse(raw), { recordRecent: true, applyPrefs: true, writeLocal: false });
+      this.loadSnapshot(typeof raw === 'string' ? JSON.parse(raw) : raw, { recordRecent: true, applyPrefs: true, writeLocal: false });
       const handle = await this._getStoredFileHandle(id);
       if (handle) {
         this._fileHandle = handle;
@@ -515,7 +800,7 @@ const ProjectManager = {
   _saveLocalAndQueueDisk() {
     if (!this._project) return;
     this._project = this._buildSnapshot();
-    this._saveToLocalStorage(this._project);
+    this._saveToBrowserStorage(this._project);
     this._queueDiskWrite();
   },
 
@@ -542,6 +827,20 @@ const ProjectManager = {
   _saveToLocalStorage(project) {
     try { localStorage.setItem(STORAGE_KEY_PREFIX + project.id, JSON.stringify(project)); }
     catch (_) {}
+  },
+
+  _saveToBrowserStorage(project) {
+    this._saveToLocalStorage(project);
+    if (typeof indexedDB === 'undefined' || !project?.id) return;
+    this._openProjectDb().then((db) => {
+      if (!db) return;
+      const tx = db.transaction(PROJECT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(PROJECT_STORE_NAME);
+      const payload = JSON.stringify(project);
+      store.put(payload, project.id);
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => db.close();
+    }).catch(() => {});
   },
 
   _recordRecent(project) {
@@ -843,7 +1142,12 @@ const ProjectManager = {
 
   _downloadText(text, filename) {
     const blob = new Blob([text], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
+    this._downloadBlob(blob, filename, 'application/json');
+  },
+
+  _downloadBlob(blob, filename, mimeType = 'application/octet-stream') {
+    const safeBlob = blob instanceof Blob ? blob : new Blob([blob], { type: mimeType });
+    const url = URL.createObjectURL(safeBlob);
     const a = document.createElement('a');
     a.href = url;
     a.download = filename;
@@ -853,9 +1157,57 @@ const ProjectManager = {
     URL.revokeObjectURL(url);
   },
 
+  _buildProjectZip(snapshot) {
+    const projectName = sanitizeName(snapshot?.name || 'project');
+    const root = `${projectName}/`;
+    const files = {};
+
+    files[`${root}${this._projectFileName(snapshot)}`] = strToU8(JSON.stringify(snapshot, null, 2));
+    files[`${root}.cyco-export`] = new Uint8Array(0);
+
+    const tree = snapshot?.tree || {};
+    this._appendTreeToZip(files, tree, `${root}assets/`, { skipNames: new Set([ENGINE_FOLDER_NAME]) });
+
+    const engineState = snapshot?.engineState || null;
+    if (engineState) {
+      files[`${root}${ENGINE_FOLDER_NAME}/${ENGINE_STATE_FILE}`] = strToU8(JSON.stringify(engineState, null, 2));
+    }
+
+    return new Blob([zipSync(files, { level: 0 })], { type: 'application/zip' });
+  },
+
+  _appendTreeToZip(files, tree, currentPath, { skipNames = new Set() } = {}) {
+    if (!tree || typeof tree !== 'object') return;
+    const folderEntries = Object.entries(tree).filter(([name]) => !skipNames.has(name));
+    if (!folderEntries.length) {
+      files[`${currentPath}.keep`] = new Uint8Array(0);
+      return;
+    }
+
+    for (const [name, child] of folderEntries) {
+      const safeName = sanitizeName(name);
+      if (isFileNode(child)) {
+        const content = child?.data != null
+          ? strToU8(typeof child.data === 'string' ? child.data : JSON.stringify(child.data, null, 2))
+          : new Uint8Array(0);
+        files[`${currentPath}${safeName}`] = content;
+        continue;
+      }
+      this._appendTreeToZip(files, child, `${currentPath}${safeName}/`, { skipNames: new Set() });
+    }
+  },
+
   _projectFileName(snapshot = this._project) {
     const name = sanitizeName(snapshot?.name || 'project');
     return `${name}.cyco`;
+  },
+
+  _escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
   },
 
   _notifySaved(name = this._project?.name) {
@@ -889,6 +1241,32 @@ const ProjectManager = {
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => resolve(null);
+    });
+  },
+
+  _openProjectDb() {
+    if (typeof indexedDB === 'undefined') return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const request = indexedDB.open(PROJECT_DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        request.result.createObjectStore(PROJECT_STORE_NAME);
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    });
+  },
+
+  async _getStoredProjectSnapshot(id) {
+    if (!id) return null;
+    const db = await this._openProjectDb();
+    if (!db) return null;
+    return await new Promise((resolve) => {
+      const tx = db.transaction(PROJECT_STORE_NAME, 'readonly');
+      const request = tx.objectStore(PROJECT_STORE_NAME).get(id);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+      tx.oncomplete = () => db.close();
+      tx.onerror = () => db.close();
     });
   },
 

@@ -211,7 +211,7 @@ export class AssetBrowser {
       this._treeEl.appendChild(msg);
       return;
     }
-    this._treeEl.appendChild(this._buildTreeNode(project.tree, [], project.name));
+    this._treeEl.appendChild(this._buildTreeNode(project.tree, [], 'assets'));
   }
 
   _buildTreeNode(children, pathArray, displayLabel) {
