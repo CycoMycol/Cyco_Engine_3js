@@ -71,7 +71,7 @@ const NewProjectDialog = {
 
   // ── Folder chips ────────────────────────────────────────────────────────────
 
-  _defaultFolders: ['audio','fonts','materials','models','prefabs','scenes','scripts','textures'],
+  _defaultFolders: ['audio','animations','fonts','engine','fx','materials','models','prefabs','scenes','scripts','textures'],
 
   _buildChips(container) {
     container.innerHTML = '';

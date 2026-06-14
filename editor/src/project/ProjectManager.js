@@ -15,7 +15,10 @@ const PROJECT_FILE_VERSION = 1;
 // Default folder structure for every new project
 const DEFAULT_TREE = {
   audio:     {},
+  animations:{},
   fonts:     {},
+  engine:    {},
+  fx:        {},
   materials: {},
   models:    {},
   scenes:    {},
