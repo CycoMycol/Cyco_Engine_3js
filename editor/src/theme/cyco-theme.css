@@ -3662,12 +3662,12 @@ dialog.ce-fp-dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: bl
   padding: 6px 10px;
   border-bottom: var(--ce-border-width) solid var(--ce-border);
   flex-shrink: 0;
-  background: var(--ce-bg-panel);
+  background: var(--ce-bg-raised);
 }
 .ce-fp-title {
   font-size: 12px;
   font-weight: 600;
-  color: var(--ce-text-muted);
+  color: var(--ce-accent-orange);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   white-space: nowrap;
@@ -3678,7 +3678,7 @@ dialog.ce-fp-dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: bl
 .ce-fp-path-input {
   flex: 1 1 auto;
   min-width: 120px;
-  height: 22px;
+  height: 24px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   padding: 0 8px;
@@ -3743,16 +3743,16 @@ dialog.ce-fp-dialog::backdrop { background: rgba(0,0,0,0.6); backdrop-filter: bl
   margin-bottom: 2px;
 }
 .ce-fp-sidebar-addbtn {
-  width: 16px;
-  height: 16px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: transparent;
   border: var(--ce-border-width) solid transparent;
-  border-radius: 4px;
+  border-radius: 5px;
   color: var(--ce-accent-orange);
-  font-size: 11px;
+  font-size: 15px;
   cursor: pointer;
   padding: 0;
   line-height: 1;
@@ -3968,17 +3968,46 @@ input.ce-fp-search, input.ce-fp-search:-webkit-autofill {
   gap: 10px;
 }
 .ce-fp-selection { display: flex; align-items: center; gap: 5px; min-width: 0; flex: 1; }
-.ce-fp-selection-label { font-size: 10px; color: var(--ce-text-muted); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
-.ce-fp-selection-path {
-  font-size: 11px;
-  color: var(--ce-accent-orange);
-  font-family: 'JetBrains Mono', monospace;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
+.ce-fp-selection-label { font-size: 10px; color: var(--ce-accent-orange); text-transform: uppercase; letter-spacing: 0.06em; flex-shrink: 0; }
+/* The footer path input is the same .ce-fp-path-input rule above; this just
+   overrides any flex sizing when it lives in the footer. */
+.ce-fp-footer .ce-fp-path-input { flex: 1 1 auto; min-width: 0; }
 .ce-fp-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+/* Favorite sidebar item: remove button is always visible, subtle until hover */
+.ce-fp-fav-item { position: relative; padding-right: 32px; cursor: pointer; }
+.ce-fp-fav-remove {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: var(--ce-border-width) solid transparent;
+  border-radius: 5px;
+  color: var(--ce-accent-orange);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  font-family: inherit;
+  user-select: none;
+  opacity: 1;
+  transition: opacity 100ms, background 80ms, border-color 80ms, color 80ms;
+}
+.ce-fp-fav-item:hover .ce-fp-fav-remove { opacity: 1; }
+.ce-fp-fav-remove:hover,
+.ce-fp-fav-remove:focus-visible {
+  background: rgba(224, 82, 76, 0.25);
+  border-color: rgba(224, 82, 76, 0.4);
+  color: #e0524c;
+  opacity: 1;
+}
 
 /* Context menu */
 .ce-fp-contextmenu {

@@ -100,8 +100,6 @@ const FolderPickerPanel = {
     dlg.innerHTML = `
       <div class="ce-fp-header">
         <div class="ce-fp-title">${escapeHtml(title)}</div>
-        <input class="ce-fp-input ce-fp-path-input" data-role="path-input" type="text"
-               autocomplete="off" spellcheck="false" placeholder="Path">
         <div class="ce-fp-header-spacer"></div>
         <button class="ce-fp-iconbtn" data-act="refresh" title="Refresh (F5)">⟳</button>
         <button class="ce-fp-iconbtn" data-act="newfolder" title="New folder (Ctrl+N)">＋</button>
@@ -114,7 +112,7 @@ const FolderPickerPanel = {
           <div class="ce-fp-sidebar-section" data-section="favorites">
             <div class="ce-fp-sidebar-label-row">
               <div class="ce-fp-sidebar-label">Favorites</div>
-              <button class="ce-fp-sidebar-addbtn" data-act="add-favorite" title="Add current folder to favorites">＋</button>
+              <button class="ce-fp-sidebar-addbtn" data-act="add-favorite" title="Add current folder to favorites">★</button>
             </div>
             <div class="ce-fp-sidebar-list" data-list="favorites"></div>
           </div>
@@ -151,7 +149,8 @@ const FolderPickerPanel = {
       <div class="ce-fp-footer">
         <div class="ce-fp-selection">
           <span class="ce-fp-selection-label">Selected:</span>
-          <span class="ce-fp-selection-path" data-role="selected">—</span>
+          <input class="ce-fp-input ce-fp-path-input" data-role="path-input" type="text"
+                 autocomplete="off" spellcheck="false" placeholder="Path">
         </div>
         <div class="ce-fp-actions">
           <button class="ce-btn ghost" data-act="cancel">Cancel</button>
@@ -479,20 +478,9 @@ const FolderPickerPanel = {
     const favs = this._loadJSON(FAVORITES_KEY, []);
     if (favs.length) {
       for (const f of favs) {
-        const item = this._sidebarItem({
+        const item = this._favoriteSidebarItem({
           label: f.label || this._basename(f.path),
           path: f.path,
-          icon: '⭐',
-        });
-        // Allow right-click to remove from favorites
-        item.addEventListener('contextmenu', (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          this._showContextMenu(e.clientX, e.clientY, {
-            type: 'favorite',
-            path: f.path,
-            label: f.label || this._basename(f.path),
-          });
         });
         if (f.path === this._currentPath) item.classList.add('is-active');
         favList.appendChild(item);
@@ -522,6 +510,61 @@ const FolderPickerPanel = {
     el.dataset.path = path;
     el.innerHTML = `<span class="ce-fp-sidebar-icon">${icon}</span><span class="ce-fp-sidebar-label">${escapeHtml(label)}</span>`;
     el.addEventListener('click', () => this._loadFolder(path, { pushHistory: true }));
+    return el;
+  },
+
+  _favoriteSidebarItem({ label, path }) {
+    // NOTE: we use a <div role="button"> wrapper instead of a <button>
+    // because nesting <button> inside <button> is invalid HTML and Chromium
+    // flattens them, which causes click events to bubble unexpectedly.
+    const el = document.createElement('div');
+    el.className = 'ce-fp-sidebar-item ce-fp-fav-item';
+    el.dataset.path = path;
+    el.setAttribute('role', 'button');
+    el.tabIndex = 0;
+    el.innerHTML = `
+      <span class="ce-fp-sidebar-icon">⭐</span>
+      <span class="ce-fp-sidebar-label">${escapeHtml(label)}</span>
+      <span class="ce-fp-fav-remove" data-act="fav-remove"
+            role="button" tabindex="0"
+            title="Remove from favorites">×</span>
+    `;
+    const goTo = () => this._loadFolder(path, { pushHistory: true });
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-act="fav-remove"]')) return;
+      goTo();
+    });
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        if (e.target.closest('[data-act="fav-remove"]')) return;
+        e.preventDefault();
+        goTo();
+      }
+    });
+    const removeBtn = el.querySelector('[data-act="fav-remove"]');
+    removeBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      this._removeFavorite(path);
+    });
+    removeBtn.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        this._removeFavorite(path);
+      }
+    });
+    // Right-click on a favorite also gets the same context menu (rename/open/remove).
+    el.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('[data-act="fav-remove"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this._showContextMenu(e.clientX, e.clientY, {
+        type: 'favorite',
+        path,
+        label,
+      });
+    });
     return el;
   },
 
@@ -608,15 +651,15 @@ const FolderPickerPanel = {
   // ──────────────────────────────────────────────────────────────────────────
 
   _updateFooter() {
-    const sel = this._dialog.querySelector('[data-role="selected"]');
+    const input = this._dialog.querySelector('[data-role="path-input"]');
     const btn = this._dialog.querySelector('[data-act="select"]');
-    if (this._selected) {
-      sel.textContent = this._joinPath(this._currentPath || '', this._selected);
-      btn.disabled = false;
-    } else {
-      sel.textContent = this._currentPath || '—';
-      btn.disabled = true;
+    // If the user is mid-edit in the footer path input, don't stomp their text.
+    if (input && document.activeElement !== input) {
+      input.value = this._selected
+        ? this._joinPath(this._currentPath || '', this._selected)
+        : (this._currentPath || '');
     }
+    if (btn) btn.disabled = !this._selected;
   },
 
   _setStatus(text) {
