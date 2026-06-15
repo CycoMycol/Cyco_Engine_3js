@@ -6,10 +6,15 @@
 
 import http from 'node:http';
 import fs from 'node:fs/promises';
-import { watch as fsWatcher } from 'node:fs';
+import { watch as fsWatcher, existsSync as fsExistsSync, statSync as fsStatSync } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+
+// A synchronous fs facade used by the clipboard op (need to check existence
+// before naming the disambiguated target).
+const fsSync = { existsSync: fsExistsSync, statSync: fsStatSync };
 
 const HOST = '127.0.0.1';
 const PORT = 47623;
@@ -38,6 +43,212 @@ function sendJson(res, status, payload) {
 function sanitizeName(name) {
   const safe = String(name || 'project').trim().replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ');
   return safe || 'project';
+}
+
+/**
+ * Folder picker support: list drives, list a folder, create a folder.
+ * These back the in-page custom folder panel so the editor can offer a
+ * modern, browser-style picker without leaving the page or invoking a
+ * system dialog.
+ */
+
+const HIDDEN_PREFIXES_WIN = ['.', '$'];     // Windows hidden files start with .
+const RESERVED_WIN = /[\\/:*?"<>|]/g;
+
+async function listDrives() {
+  const out = [];
+  const home = os.homedir();
+
+  // Common quick-access roots. Best-effort — missing directories are dropped.
+  const quick = [
+    { kind: 'home',       label: 'Home',        path: home },
+    { kind: 'desktop',    label: 'Desktop',     path: path.join(home, 'Desktop') },
+    { kind: 'documents',  label: 'Documents',   path: path.join(home, 'Documents') },
+    { kind: 'downloads',  label: 'Downloads',   path: path.join(home, 'Downloads') },
+    { kind: 'pictures',   label: 'Pictures',    path: path.join(home, 'Pictures') },
+    { kind: 'music',      label: 'Music',       path: path.join(home, 'Music') },
+    { kind: 'videos',     label: 'Videos',      path: path.join(home, 'Videos') },
+  ];
+  for (const q of quick) {
+    try {
+      const st = await fs.stat(q.path);
+      if (st.isDirectory()) out.push({ ...q, exists: true });
+    } catch { /* skip missing */ }
+  }
+
+  // Drive letters on Windows, "/" + home on POSIX.
+  if (process.platform === 'win32') {
+    for (let code = 65; code <= 90; code += 1) {
+      const letter = String.fromCharCode(code);
+      const drive = `${letter}:\\`;
+      try {
+        await fs.readdir(drive);
+        out.push({ kind: 'drive', label: `${letter}:`, path: drive });
+      } catch { /* not mounted */ }
+    }
+  } else {
+    out.push({ kind: 'drive', label: '/', path: '/' });
+    out.push({ kind: 'home',  label: '~', path: home });
+  }
+
+  return out;
+}
+
+async function listFolder(folderPath, { showHidden = false } = {}) {
+  const resolved = path.resolve(String(folderPath || ''));
+  if (!resolved) throw new Error('No folder path was provided.');
+
+  let entries;
+  try {
+    entries = await fs.readdir(resolved, { withFileTypes: true });
+  } catch (err) {
+    const e = new Error(`Cannot read folder: ${err?.message || err}`);
+    e.status = 404;
+    throw e;
+  }
+
+  const items = [];
+  for (const entry of entries) {
+    const name = entry.name;
+    const isHidden = HIDDEN_PREFIXES_WIN.some((p) => name.startsWith(p));
+    if (isHidden && !showHidden) continue;
+
+    const full = path.join(resolved, name);
+    let stat;
+    try { stat = await fs.stat(full); } catch { continue; }
+
+    items.push({
+      name,
+      type: entry.isDirectory() ? 'dir' : 'file',
+      size: stat.size,
+      mtime: stat.mtimeMs,
+      ctime: stat.ctimeMs,
+      hidden: isHidden,
+    });
+  }
+
+  // Folders first, then files. Both groups sorted by name.
+  items.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
+
+  let parent = null;
+  if (path.dirname(resolved) !== resolved) {
+    parent = path.dirname(resolved);
+  }
+
+  return {
+    ok: true,
+    path: resolved,
+    parent,
+    items,
+    hidden: !!showHidden,
+  };
+}
+
+async function mkdirPath(parent, name) {
+  const safe = String(name || '').trim().replace(RESERVED_WIN, '-').replace(/^\.+/, '');
+  if (!safe) throw new Error('Folder name is empty or contains only invalid characters.');
+  const resolved = path.resolve(String(parent || ''));
+  if (!resolved) throw new Error('No parent path was provided.');
+  const target = path.join(resolved, safe);
+  try {
+    await fs.mkdir(target, { recursive: false });
+  } catch (err) {
+    if (err?.code === 'EEXIST') {
+      const e = new Error(`A folder named "${safe}" already exists.`);
+      e.status = 409;
+      throw e;
+    }
+    throw err;
+  }
+  return { ok: true, path: target, name: safe };
+}
+
+async function renamePath(srcPath, newName) {
+  const safe = String(newName || '').trim().replace(RESERVED_WIN, '-').replace(/^\.+/, '');
+  if (!safe) throw new Error('New name is empty or contains only invalid characters.');
+  const resolved = path.resolve(String(srcPath || ''));
+  if (!resolved) throw new Error('No source path was provided.');
+  if (resolved === path.parse(resolved).root) throw new Error('Refusing to rename a drive root.');
+  const target = path.join(path.dirname(resolved), safe);
+  if (target === resolved) return { ok: true, path: resolved, name: safe, noop: true };
+  if (fsSync.existsSync(target)) {
+    const e = new Error(`A folder named "${safe}" already exists.`);
+    e.status = 409;
+    throw e;
+  }
+  try {
+    await fs.rename(resolved, target);
+  } catch (err) {
+    if (err?.code === 'EPERM' && fsSync.existsSync(target)) {
+      const e = new Error(`A folder named "${safe}" already exists.`);
+      e.status = 409;
+      throw e;
+    }
+    throw err;
+  }
+  return { ok: true, path: target, name: safe };
+}
+
+async function deletePath(targetPath) {
+  const resolved = path.resolve(String(targetPath || ''));
+  if (!resolved) throw new Error('No path was provided.');
+  if (resolved === path.parse(resolved).root) throw new Error('Refusing to delete a drive root.');
+  const st = await fs.stat(resolved);
+  if (st.isDirectory()) {
+    await fs.rm(resolved, { recursive: true, force: false });
+  } else {
+    await fs.unlink(resolved);
+  }
+  return { ok: true, path: resolved, name: path.basename(resolved) };
+}
+
+async function clipboardOp(op, srcPath, destDir) {
+  if (!srcPath) throw new Error('No source path was provided.');
+  if (!destDir) throw new Error('No destination path was provided.');
+  if (op !== 'copy' && op !== 'cut' && op !== 'duplicate') {
+    throw new Error(`Unsupported clipboard op: ${op}`);
+  }
+  const src = path.resolve(String(srcPath));
+  const dest = path.resolve(String(destDir));
+  if (!fsSync.existsSync(src)) throw new Error(`Source does not exist: ${src}`);
+  if (src === dest) throw new Error('Source and destination are the same.');
+
+  const baseName = path.basename(src);
+  let target = path.join(dest, baseName);
+  if (src.toLowerCase() === target.toLowerCase() || fsSync.existsSync(target)) {
+    // Auto-disambiguate: name (2), name (3), …
+    const ext = path.extname(baseName);
+    const stem = baseName.slice(0, baseName.length - ext.length);
+    let i = 2;
+    while (fsSync.existsSync(path.join(dest, `${stem} (${i})${ext}`))) i += 1;
+    target = path.join(dest, `${stem} (${i})${ext}`);
+  }
+
+  // Use copy+remove for 'cut' to handle cross-volume cases robustly.
+  const effective = (op === 'cut') ? 'copy-then-remove' : op;
+  if (effective === 'duplicate' || effective === 'copy' || effective === 'copy-then-remove') {
+    await copyRecursive(src, target);
+  }
+  if (effective === 'copy-then-remove') {
+    await fs.rm(src, { recursive: true, force: false });
+  }
+  return { ok: true, path: target, name: path.basename(target), op };
+}
+
+async function copyRecursive(src, dest) {
+  const st = await fs.stat(src);
+  if (st.isDirectory()) {
+    await fs.mkdir(dest, { recursive: true });
+    const entries = await fs.readdir(src, { withFileTypes: true });
+    for (const entry of entries) {
+      await copyRecursive(path.join(src, entry.name), path.join(dest, entry.name));
+    }
+  } else {
+    await fs.copyFile(src, dest);
+  }
 }
 
 async function readJson(req) {
@@ -321,6 +532,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, name: 'cyco-local-save-bridge' });
     }
 
+    if (req.method === 'GET' && req.url === '/list-drives') {
+      const drives = await listDrives();
+      return sendJson(res, 200, { ok: true, drives });
+    }
+
+    if (req.method === 'POST' && req.url === '/list-folder') {
+      const payload = await readJson(req);
+      const result = await listFolder(payload.path, { showHidden: !!payload.showHidden });
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && req.url === '/mkdir') {
+      const payload = await readJson(req);
+      const result = await mkdirPath(payload.parent, payload.name);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && req.url === '/rename') {
+      const payload = await readJson(req);
+      const result = await renamePath(payload.path, payload.newName);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && req.url === '/delete') {
+      const payload = await readJson(req);
+      const result = await deletePath(payload.path);
+      return sendJson(res, 200, result);
+    }
+
+    if (req.method === 'POST' && req.url === '/clipboard-op') {
+      const payload = await readJson(req);
+      const result = await clipboardOp(payload.op, payload.src, payload.dest);
+      return sendJson(res, 200, result);
+    }
+
     if (req.method === 'POST' && req.url === '/pick-folder') {
       const result = await pickFolder();
       console.info('[CycoLocalSaveBridge] pick folder', result);
@@ -463,7 +709,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 404, { ok: false, error: 'Not found.' });
   } catch (err) {
     console.error('[CycoLocalSaveBridge] error', err);
-    return sendJson(res, 500, { ok: false, error: err?.message || String(err) });
+    return sendJson(res, err?.status || 500, { ok: false, error: err?.message || String(err) });
   }
 });
 

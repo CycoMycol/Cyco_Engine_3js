@@ -3,6 +3,7 @@
 import ProjectManager from '../project/ProjectManager.js';
 import ProjectLocalBridgeStorage from '../project/ProjectLocalBridgeStorage.js';
 import ProjectSaveLog from '../project/ProjectSaveLog.js';
+import FolderPickerPanel from './FolderPickerPanel.js';
 
 const NewProjectDialog = {
   _dialog: null,
@@ -220,15 +221,45 @@ const NewProjectDialog = {
     updatePreview();
 
     const pickWritableDirectory = async () => {
-      const pickDirectory = window.__cyco?.pickDirectory;
       this._debug('pick:start', {
-        hasCycoPicker: typeof pickDirectory === 'function',
+        hasInPagePanel: typeof FolderPickerPanel?.open === 'function',
         hasBrowserPicker: typeof window.showDirectoryPicker === 'function',
         hasLocalBridgePicker: true,
         userActivationActive: !!navigator.userActivation?.isActive,
       });
 
-      let dirResult = null;
+      // PRIMARY: in-page modern folder panel. Talks to the bridge via REST
+      // (no permission prompt, no system dialog). Selected synchronously
+      // inside the click handler so the user gesture is preserved.
+      try {
+        this._debug('pick:attempt', {
+          label: 'in-page-panel',
+          userActivationActive: !!navigator.userActivation?.isActive,
+        });
+        const startPath = locationInput.value.trim() || null;
+        const { path } = await FolderPickerPanel.open({
+          startPath,
+          title: 'Project Location',
+        });
+        this._debug('pick:attempt-success', { label: 'in-page-panel', path });
+        return { handle: null, pickedPath: path };
+      } catch (err) {
+        const name = err?.name || '';
+        const isCancel = name === 'AbortError' || /cancelled/i.test(err?.message || '');
+        this._debug('pick:attempt-error', {
+          label: 'in-page-panel',
+          name,
+          message: err?.message || String(err),
+        });
+        if (isCancel) {
+          // User explicitly cancelled — don't fall through to a different picker.
+          throw err;
+        }
+        // Otherwise (e.g. bridge offline) fall through to the PowerShell dialog.
+      }
+
+      // FALLBACK: bridge-launched PowerShell FolderBrowserDialog.
+      const pickDirectory = window.__cyco?.pickDirectory;
       const attempts = [];
       attempts.push(['local-bridge', async () => {
         const result = await ProjectLocalBridgeStorage.pickFolder();
@@ -239,48 +270,30 @@ const NewProjectDialog = {
         }
         return result.path;
       }]);
-      // File pickers must be opened directly inside the click gesture.
       if (typeof window.showDirectoryPicker === 'function') {
         attempts.push(['browser-direct', () => window.showDirectoryPicker({ mode: 'readwrite' })]);
       } else if (typeof pickDirectory === 'function') {
         attempts.push(['cyco-wrapper', () => pickDirectory({ mode: 'readwrite' })]);
       }
 
+      let dirResult = null;
       for (const [label, runPicker] of attempts) {
         try {
-          this._debug('pick:attempt', {
-            label,
-            userActivationActive: !!navigator.userActivation?.isActive,
-          });
+          this._debug('pick:attempt', { label });
           dirResult = await runPicker();
-          this._debug('pick:attempt-success', {
-            label,
-            resultType: dirResult?.constructor?.name || typeof dirResult,
-            resultName: dirResult?.name || dirResult?.handle?.name || null,
-          });
+          this._debug('pick:attempt-success', { label, resultType: typeof dirResult });
           break;
         } catch (err) {
-          this._debug('pick:attempt-error', {
-            label,
-            name: err?.name || '',
-            message: err?.message || String(err),
-            userActivationActive: !!navigator.userActivation?.isActive,
-          });
+          this._debug('pick:attempt-error', { label, name: err?.name, message: err?.message });
           throw err;
         }
       }
-
       if (!dirResult) throw new Error('No folder was selected.');
       const handle = dirResult?.handle || (dirResult && typeof dirResult.getDirectoryHandle === 'function' ? dirResult : null);
       const pickedPath = typeof dirResult === 'string'
         ? dirResult
         : dirResult?.path || dirResult?.fullPath || dirResult?.name || '';
-      this._debug('pick:result', {
-        resultType: dirResult?.constructor?.name || typeof dirResult,
-        pickedPath,
-        handleName: handle?.name || null,
-        hasDirectoryHandle: !!handle,
-      });
+      this._debug('pick:result', { pickedPath });
       return { handle, pickedPath };
     };
 
