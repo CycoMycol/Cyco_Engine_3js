@@ -6,6 +6,9 @@
       "type": "shell",
       "command": "tools\\start-cyco-local-save-bridge.cmd",
       "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
       "problemMatcher": {
         "owner": "cyco",
         "pattern": {
@@ -18,7 +21,7 @@
         }
       },
       "presentation": {
-        "reveal": "always",
+        "reveal": "silent",
         "panel": "dedicated"
       }
     }

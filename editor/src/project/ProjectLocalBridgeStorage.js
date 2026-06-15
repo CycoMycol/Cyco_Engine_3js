@@ -213,9 +213,47 @@ const ProjectLocalBridgeStorage = {
 
   async pickFolder() {
     this.debug('pickFolder:start');
+    // Give the bridge a moment to come up if the editor just opened and the
+    // task is still warming. We retry the connection check a few times before
+    // failing the pick.
+    await this._waitForBridge({ attempts: 3, delayMs: 400 });
     const response = await this.fetchJson('/pick-folder', { method: 'POST' }, { timeoutMs: 5 * 60 * 1000 });
     this.debug('pickFolder:complete', response);
     return response;
+  },
+
+  /**
+   * Probe the bridge health endpoint. Returns true if it answers.
+   */
+  async isBridgeAvailable({ timeoutMs = 800 } = {}) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${BRIDGE_URL}/health`, { signal: controller.signal });
+      if (!response.ok) return false;
+      const payload = await response.json().catch(() => ({}));
+      return payload?.ok === true;
+    } catch (_) {
+      return false;
+    } finally {
+      clearTimeout(timer);
+    }
+  },
+
+  /**
+   * Poll the bridge health endpoint until it responds (or attempts are used up).
+   * Returns true if the bridge came up, false if it never answered.
+   */
+  async _waitForBridge({ attempts = 3, delayMs = 400 } = {}) {
+    for (let i = 0; i < attempts; i += 1) {
+      if (await this.isBridgeAvailable()) {
+        if (i > 0) this.debug('waitForBridge:ready', { attempts: i + 1 });
+        return true;
+      }
+      this.debug('waitForBridge:retry', { attempt: i + 1, attempts });
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+    return false;
   },
 
   async fetchJson(path, options = {}, { timeoutMs = 3500 } = {}) {
