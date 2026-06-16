@@ -103,8 +103,13 @@ export class RightPanel extends BasePanel {
   // ── Event handlers ─────────────────────────────────────────────────────────
 
   _onSelect(e) {
-    const { type, object } = e.detail ?? {};
-    this._mount(type, object);
+    const { type, object, objects } = e.detail ?? {};
+    const arr = Array.isArray(objects) ? objects : (object ? [object] : []);
+    if (arr.length > 1) {
+      this._showMultiSelect(arr);
+      return;
+    }
+    this._mount(type, object ?? null);
   }
 
   _onDeselect() {
@@ -114,6 +119,93 @@ export class RightPanel extends BasePanel {
   _onShow(e) {
     const { type } = e.detail ?? {};
     this._mount(type, null);
+  }
+
+  // ── Multi-select summary ──────────────────────────────────────────────────
+
+  _showMultiSelect(objects) {
+    this._disposeCurrentComponent();
+    if (!this._contentEl) return;
+    this._contentEl.innerHTML = '';
+
+    const wrap = document.createElement('div');
+    wrap.className = 'ce-props-multi';
+    wrap.innerHTML = `
+      <div class="ce-props-multi-header">
+        <div class="ce-props-multi-count">${objects.length}</div>
+        <div class="ce-props-multi-label">objects selected</div>
+      </div>
+      <div class="ce-props-multi-hint">
+        Use the viewport gizmo to move, rotate, or scale all selected objects at once.
+      </div>
+      <div class="ce-props-multi-actions">
+        <button class="ce-btn ghost ce-props-multi-group">Group Selected</button>
+        <button class="ce-btn primary ce-props-multi-prefab">Create Prefab</button>
+        <button class="ce-btn ghost danger ce-props-multi-delete">Delete All</button>
+      </div>
+      <div class="ce-props-multi-list"></div>
+    `;
+    this._contentEl.appendChild(wrap);
+
+    // Action buttons
+    wrap.querySelector('.ce-props-multi-group').addEventListener('click', () => {
+      // Group via hierarchy panel
+      window.dispatchEvent(new CustomEvent('cyco-action', { detail: 'hierarchy-group' }));
+    });
+    wrap.querySelector('.ce-props-multi-prefab').addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+        detail: { objects }
+      }));
+    });
+    wrap.querySelector('.ce-props-multi-delete').addEventListener('click', () => {
+      const cm = window.__cyco?.commandManager;
+      if (!cm) return;
+      for (const obj of objects) {
+        const cycoId = obj.userData?.cycoId;
+        if (!cycoId) continue;
+        const parent = obj.parent;
+        const idx    = parent?.children.indexOf(obj) ?? 0;
+        cm.execute({
+          name: `Delete ${obj.name || cycoId}`,
+          _obj: obj, _parent: parent, _idx: idx,
+          do()   { window.dispatchEvent(new CustomEvent('cyco-hierarchy-remove-obj', { detail: { cycoId: this._obj.userData.cycoId } })); },
+          undo() { window.dispatchEvent(new CustomEvent('cyco-hierarchy-restore-obj', { detail: { object: this._obj, parent: this._parent, index: this._idx } })); },
+        });
+      }
+      window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+    });
+
+    // Per-object list (compact, click to single-select)
+    const list = wrap.querySelector('.ce-props-multi-list');
+    for (const obj of objects) {
+      const row = document.createElement('div');
+      row.className = 'ce-props-multi-row';
+      const type = this._inferType(obj);
+      const icon = type === 'light' ? '◉'
+                 : type === 'camera' ? '◧'
+                 : type === 'mesh' ? '◆'
+                 : '◇';
+      row.innerHTML = `<span class="ce-props-multi-icon">${icon}</span><span class="ce-props-multi-name"></span>`;
+      row.querySelector('.ce-props-multi-name').textContent = obj.name || obj.userData?.cycoId || '(unnamed)';
+      row.title = 'Click to focus this object';
+      row.addEventListener('click', () => {
+        window.dispatchEvent(new CustomEvent('cyco-select-node', {
+          detail: { object: obj, objects: [obj], type }
+        }));
+      });
+      list.appendChild(row);
+    }
+  }
+
+  _inferType(obj) {
+    if (!obj) return 'object';
+    if (obj.isLight)         return 'light';
+    if (obj.isCamera)        return 'camera';
+    if (obj.isInstancedMesh) return 'instanced';
+    if (obj.isMesh)          return 'mesh';
+    if (obj.isGroup)         return 'group';
+    if (obj.isLOD)           return 'lod';
+    return 'object';
   }
 
   // ── Mount / unmount ────────────────────────────────────────────────────────

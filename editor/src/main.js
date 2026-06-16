@@ -43,6 +43,7 @@ import { PhysicsEditHelper }      from './viewport/PhysicsEditHelper.js';
 import { InputManager }           from './viewport/InputManager.js';
 import { ViewportStats }          from './viewport/ViewportStats.js';
 import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
+import { PrefabManager }          from './viewport/PrefabManager.js';
 import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
 import { loadPrefs }                from './ui/PreferencesWindow.js';
 
@@ -140,6 +141,9 @@ const postPipeline          = new PostProcessingPipeline(viewportEngine); // esl
 const gameRuntime           = new GameRuntime(viewportEngine, sceneManager, selectionManager, transformGizmo); // eslint-disable-line no-unused-vars
 const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-disable-line no-unused-vars
 
+// Prefab system (multi-select → save as prefab, drag from asset browser to instantiate)
+const prefabManager         = new PrefabManager(sceneManager, ProjectManager); // eslint-disable-line no-unused-vars
+
 // ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
 // event dispatched by CenterPanel when its canvas div is inserted into the DOM.
 // No manual init() call needed here.
@@ -219,6 +223,7 @@ if (typeof window !== 'undefined') {
     prefs,
     commandManager,
     viewportContextMenu,
+    prefabManager,
     dockviewApi: dockApi,
     pickDirectory,
     get cloudSystem()     { return viewportEngine.cloudSystem; },

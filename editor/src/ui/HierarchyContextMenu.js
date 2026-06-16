@@ -133,6 +133,8 @@ export function showHierarchyMenu(e, onAction, hasTarget = false, isScene = fals
       { label: 'Group Selected', action: 'group' },
       { separator: true },
       { label: 'Duplicate',      action: 'duplicate' },
+      { label: 'Create Prefab',  action: 'create-prefab' },
+      { separator: true },
       { label: 'Delete',         action: 'delete', danger: true },
     ];
   } else if (hasTarget) {

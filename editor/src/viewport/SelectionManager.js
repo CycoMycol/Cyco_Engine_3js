@@ -87,10 +87,69 @@ export class SelectionManager {
     this.selected.clear();
     this._setHoveredObject(null); // also clear hover outline
     window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+    window.dispatchEvent(new CustomEvent('cyco-selection-changed', {
+      detail: { objects: [], primary: null, type: null }
+    }));
   }
   selectObject(object) {
     if (!object || this.selected.has(object)) return;
     this._selectObject(object);
+  }
+
+  /**
+   * Public API — replace the entire selection with the given list of objects.
+   * Filters out duplicates and non-selectable objects, then dispatches
+   * `cyco-select-node` and `cyco-selection-changed`.
+   * @param {THREE.Object3D[]} objects
+   */
+  setSelectedObjects(objects) {
+    const arr = Array.isArray(objects) ? objects : [objects];
+    const clean = arr.filter(o =>
+      o && !this.nonSelectableSet.has(o) && !o.userData?._isGizmo
+    );
+    this.clearSelection();
+    for (const o of clean) this.selected.add(o);
+    this._dispatchSelection();
+  }
+
+  /**
+   * Public API — append an object to the current selection (Ctrl+click).
+   */
+  addToSelection(object) {
+    if (!object || this.selected.has(object)) return;
+    this._selectObject(object);
+  }
+
+  /**
+   * Public API — remove an object from the current selection.
+   */
+  removeFromSelection(object) {
+    if (!object || !this.selected.has(object)) return;
+    this.selected.delete(object);
+    this._dispatchSelection();
+  }
+
+  /**
+   * Public API — toggle an object's membership in the current selection.
+   */
+  toggleInSelection(object) {
+    if (!object) return;
+    if (this.selected.has(object)) {
+      this.selected.delete(object);
+      this._dispatchSelection();
+    } else {
+      this._selectObject(object);
+    }
+  }
+
+  /** Read the current selection as an array (snapshot). */
+  getSelectedObjects() {
+    return [...this.selected];
+  }
+
+  /** True if there are 2+ selected objects. */
+  isMultiSelection() {
+    return this.selected.size > 1;
   }
   // ─── Initialisation ───────────────────────────────────────────────────────
 
@@ -161,14 +220,18 @@ export class SelectionManager {
     if (!this._active) return;
 
     if (event.buttons & 1) {
-      // Left button held — marquee drag only when Shift is held; otherwise orbit handles it
+      // Left button held — gizmo owns its own drag, so skip
       if (this._gizmoDragging) return;
-      if (!event.shiftKey) return; // plain drag = orbit (OrbitControls owns it)
+      // For a plain left-drag we want the marquee to win over OrbitControls.
+      // We signal that intent by setting a CSS class on the canvas; OrbitControls
+      // is disabled while a marquee is in progress.
       const dx = event.clientX - this._pointerDown.x;
       const dy = event.clientY - this._pointerDown.y;
       if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {
         this._isDragging = true;
         if (this._selectionHelper) this._selectionHelper.enabled = true;
+        // Disable orbit while the user is actively marquee-selecting
+        if (this.engine.controls) this.engine.controls.enabled = false;
       }
       if (this._isDragging && this._selectionBox) {
         const ndc = this._toNDC(event);
@@ -240,6 +303,9 @@ export class SelectionManager {
       this._finishMarquee(event);
     } else {
       this._finishClick(event);
+      // Safety net — if a user only just-tapped the canvas (no drag, no click
+      // hit), make sure orbit is not left disabled.
+      if (this.engine.controls) this.engine.controls.enabled = true;
     }
   }
 
@@ -254,14 +320,31 @@ export class SelectionManager {
       .intersectObjects(scene.children, true)
       .filter(h => !this._isNonSelectable(h.object));
 
+    const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
+
     if (hits.length > 0) {
-      // Multi-select with Shift/Ctrl; otherwise replace selection
-      if (!event.shiftKey && !event.ctrlKey) {
-        this.clearSelection();
+      const hitObj = hits[0].object;
+      if (additive) {
+        // Toggle: if already selected, deselect; otherwise add
+        if (this.selected.has(hitObj)) {
+          this.selected.delete(hitObj);
+          this._dispatchSelection();
+        } else {
+          this._selectObject(hitObj);
+        }
+      } else {
+        // Plain click on an object that's NOT in the current selection → replace
+        // Plain click on an object that IS in the current selection → keep
+        // (lets the user click on a selected sub-object without losing the
+        // multi-selection).
+        if (!this.selected.has(hitObj)) {
+          this.clearSelection();
+          this._selectObject(hitObj);
+        }
       }
-      this._selectObject(hits[0].object);
     } else {
-      if (!event.shiftKey && !event.ctrlKey) {
+      // Clicked empty space: clear unless additive
+      if (!additive) {
         this.clearSelection();
         // Clicking empty space: show environment properties.
         // Tool mode is intentionally NOT changed — user stays on whatever tool they had.
@@ -278,8 +361,11 @@ export class SelectionManager {
       .select()
       .filter(obj => !this._isNonSelectable(obj));
 
-    if (!event.shiftKey && !event.ctrlKey) this.clearSelection();
+    const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
+    if (!additive) this.clearSelection();
     objects.forEach(obj => this._selectObject(obj));
+    // Re-enable orbit (disabled while the user was marquee-dragging)
+    if (this.engine.controls) this.engine.controls.enabled = true;
   }
 
   // ─── Selection helpers ────────────────────────────────────────────────────
@@ -297,8 +383,13 @@ export class SelectionManager {
     const arr  = [...this.selected];
     const obj  = arr[arr.length - 1] ?? null;
     const type = obj ? this._inferType(obj) : null;
+    // Dispatch both the legacy single-object event (for the gizmo, properties
+    // panel, hierarchy, etc.) and a multi-aware one.
     window.dispatchEvent(new CustomEvent('cyco-select-node', {
       detail: { object: obj, objects: arr, type }
+    }));
+    window.dispatchEvent(new CustomEvent('cyco-selection-changed', {
+      detail: { objects: arr, primary: obj, type }
     }));
   }
 

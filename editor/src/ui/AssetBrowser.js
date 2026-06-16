@@ -411,10 +411,12 @@ export class AssetBrowser {
     const isSel  = this._selected.has(name);
     const node   = ProjectManager.getFolderContents(this._currentPath)[name];
     const isFile = ProjectManager.isFileNode(node);
+    const isPrefab = isFile && node.type === 'prefab';
     const icSize = this._viewMode === 'large' ? 52 : 36;
     const item   = document.createElement('div');
-    item.className = 'ce-ab-grid-item' + (isSel ? ' selected' : '');
+    item.className = 'ce-ab-grid-item' + (isSel ? ' selected' : '') + (isPrefab ? ' is-prefab' : '');
     item.dataset.name = name;
+    if (isPrefab) item.draggable = true;
     item.insertAdjacentHTML('beforeend', isFile ? _svgFileLg(icSize, node.type) : _svgFolderLg(icSize));
     const lbl = document.createElement('span');
     lbl.className = 'ce-ab-grid-label';
@@ -433,6 +435,15 @@ export class AssetBrowser {
       this._selected.clear();
       this._refresh();
     });
+    if (isPrefab) {
+      item.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('application/x-cyco-prefab', name);
+        e.dataTransfer.setData('text/plain', name);
+        item.classList.add('is-dragging');
+      });
+      item.addEventListener('dragend', () => item.classList.remove('is-dragging'));
+    }
     return item;
   }
 
@@ -440,13 +451,15 @@ export class AssetBrowser {
     const isSel = this._selected.has(name);
     const node  = ProjectManager.getFolderContents(this._currentPath)[name];
     const isFile = ProjectManager.isFileNode(node);
+    const isPrefab = isFile && node.type === 'prefab';
     const row   = document.createElement('div');
-    row.className = 'ce-ab-list-item' + (isSel ? ' selected' : '');
+    row.className = 'ce-ab-list-item' + (isSel ? ' selected' : '') + (isPrefab ? ' is-prefab' : '');
     row.dataset.name = name;
     row.innerHTML = `
       <span class="ce-ab-list-icon">${isFile ? _svgFileSm(node.type) : _svgFolderSm()}</span>
       <span class="ce-ab-list-name">${_esc(name)}</span>
       <span class="ce-ab-list-type">${isFile ? _esc(node.type || 'File') : 'Folder'}</span>`;
+    if (isPrefab) row.draggable = true;
 
     row.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -460,6 +473,15 @@ export class AssetBrowser {
       this._selected.clear();
       this._refresh();
     });
+    if (isPrefab) {
+      row.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'copy';
+        e.dataTransfer.setData('application/x-cyco-prefab', name);
+        e.dataTransfer.setData('text/plain', name);
+        row.classList.add('is-dragging');
+      });
+      row.addEventListener('dragend', () => row.classList.remove('is-dragging'));
+    }
     return row;
   }
 

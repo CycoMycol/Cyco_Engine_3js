@@ -21,6 +21,7 @@ const DEFAULT_TREE = {
   fx:        {},
   materials: {},
   models:    {},
+  prefabs:   {},
   scenes:    {},
   scripts:   {},
   textures:  {},
@@ -628,6 +629,52 @@ const ProjectManager = {
     return true;
   },
 
+  /**
+   * Save a prefab definition (a serialised Object3D group + metadata) into the
+   * project's `prefabs/` folder. The payload is stored as a JSON string so it
+   * round-trips through the existing snapshot mechanism.
+   *
+   * @param {string} name  The prefab file name (no extension).
+   * @param {object} json  The serialised object graph (THREE.Object3D.toJSON()).
+   * @returns {string|null}  The final asset name (with .cyprefab), or null on failure.
+   */
+  savePrefab(name, json) {
+    if (!this._project) return null;
+    const safe = String(name || 'Prefab').trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    if (!safe) return null;
+    if (!this._getNodeAt(['prefabs'])) this.addFolder([], 'prefabs');
+    const parent = this._getNodeAt(['prefabs']);
+    if (!parent) return null;
+    const fileName = `${safe}.cyprefab`;
+    parent[fileName] = {
+      _cycoType: 'file',
+      type: 'prefab',
+      mimeType: 'application/json',
+      size: 0,
+      data: JSON.stringify(json),
+      metadata: {
+        createdAt: Date.now(),
+        source: 'create-prefab',
+        prefabName: safe,
+      },
+    };
+    this._save();
+    document.dispatchEvent(new CustomEvent('cyco-project-change'));
+    return fileName;
+  },
+
+  /**
+   * Read a stored prefab's JSON graph. Returns null if not found.
+   * @param {string} fileName  The asset name as it appears in the prefabs folder.
+   */
+  loadPrefab(fileName) {
+    if (!this._project || !fileName) return null;
+    const node = this._getNodeAt(['prefabs', fileName]);
+    if (!node || !this.isFileNode(node)) return null;
+    try { return JSON.parse(node.data || 'null'); }
+    catch (_) { return null; }
+  },
+
   _guessAssetType(name, mimeType = '') {
     const ext = String(name).split('.').pop()?.toLowerCase() || '';
     if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'hdr', 'exr', 'ktx2', 'basis'].includes(ext)) return 'texture';
@@ -636,6 +683,7 @@ const ProjectManager = {
     if (['js', 'ts', 'mjs', 'cjs'].includes(ext)) return 'script';
     if (['ttf', 'otf', 'woff', 'woff2'].includes(ext)) return 'font';
     if (['mtl', 'mat'].includes(ext)) return 'material';
+    if (ext === 'cyprefab') return 'prefab';
     if (['cyco', 'json'].includes(ext) || mimeType.includes('json')) return 'engine-state';
     return 'file';
   },

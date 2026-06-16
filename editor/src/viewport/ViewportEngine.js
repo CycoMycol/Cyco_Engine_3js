@@ -1685,10 +1685,65 @@ export class ViewportEngine {
       const hit = hits.find(h => !h.object.userData._isGizmo && h.object.type !== 'GridHelper' && h.object.type !== 'AxesHelper')?.object ?? null;
 
       window.dispatchEvent(new CustomEvent('cyco-vp-contextmenu', {
-        detail: { x: e.clientX, y: e.clientY, hit }
+        detail: {
+          x: e.clientX,
+          y: e.clientY,
+          hit,
+          // Pass the current selection set so the context menu can offer
+          // multi-object actions (group, create prefab, etc.) when more than
+          // one object is selected.
+          selected: window.__cyco?.selectionManager
+            ? [...window.__cyco.selectionManager.selected]
+            : (hit ? [hit] : []),
+        }
       }));
     };
     document.addEventListener('contextmenu', this._onContextMenu);
+
+    // ── Prefab drag-and-drop ───────────────────────────────────────────────
+    // Accept `application/x-cyco-prefab` MIME-type drops anywhere on the
+    // viewport canvas. The drop position is converted to a world-space point
+    // on a ground plane (y=0) for the most common authoring workflow.
+    const canvas2 = this.rendererManager.renderer?.domElement;
+    this._onDragOver = (e) => {
+      const types = e.dataTransfer?.types;
+      if (!types) return;
+      if (Array.from(types).includes('application/x-cyco-prefab')) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        canvas2?.classList?.add('is-prefab-drop-target');
+      }
+    };
+    this._onDragLeave = () => {
+      canvas2?.classList?.remove('is-prefab-drop-target');
+    };
+    this._onDrop = (e) => {
+      const fileName = e.dataTransfer?.getData('application/x-cyco-prefab');
+      if (!fileName) return;
+      e.preventDefault();
+      canvas2?.classList?.remove('is-prefab-drop-target');
+      // Compute the world-space drop point: project the cursor onto a
+      // horizontal plane at y = 0 (or onto the first hit object, falling
+      // back to the origin).
+      const rect = canvas2.getBoundingClientRect();
+      const ndcX = ((e.clientX - rect.left) / rect.width)  * 2 - 1;
+      const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+      const planeHit = new THREE.Vector3();
+      const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      let worldPos = null;
+      if (raycaster.ray.intersectPlane(groundPlane, planeHit)) {
+        worldPos = { x: planeHit.x, y: planeHit.y, z: planeHit.z };
+      }
+      window.dispatchEvent(new CustomEvent('cyco-instantiate-prefab', {
+        detail: { fileName, worldPos }
+      }));
+    };
+    canvas2.addEventListener('dragover',  this._onDragOver);
+    canvas2.addEventListener('dragleave', this._onDragLeave);
+    canvas2.addEventListener('drop',      this._onDrop);
+
     this._contextMenuContainer = container;
   }
 

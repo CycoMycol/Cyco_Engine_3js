@@ -1448,6 +1448,155 @@ dialog.ce-mini-dialog::backdrop {
   gap: 8px;
 }
 
+/* ─── Prefab dialog ────────────────────────────────────────────────────── */
+dialog.ce-prefab-dialog {
+  min-width: 380px;
+}
+.ce-prefab-dialog .ce-mini-msg { margin-bottom: 8px; }
+.ce-prefab-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ce-text-primary);
+  margin-bottom: 6px;
+}
+.ce-prefab-dialog-sub {
+  font-size: 12px;
+  color: var(--ce-text-muted);
+  line-height: 1.4;
+}
+.ce-prefab-dialog-sub code {
+  background: var(--ce-bg-base);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--ce-accent-orange);
+}
+.ce-prefab-dialog-hint {
+  font-size: 11px;
+  color: var(--ce-text-muted);
+  margin-top: -8px;
+  margin-bottom: 14px;
+}
+.ce-prefab-dialog-filename {
+  font-family: var(--ce-font-mono);
+  color: var(--ce-accent-orange);
+}
+
+/* ─── Viewport drop target ─────────────────────────────────────────────── */
+.is-prefab-drop-target {
+  outline: 2px dashed var(--ce-accent-orange);
+  outline-offset: -4px;
+  cursor: copy !important;
+}
+
+/* ─── Asset browser prefab items ───────────────────────────────────────── */
+.ce-ab-grid-item.is-prefab,
+.ce-ab-list-item.is-prefab {
+  cursor: grab;
+}
+.ce-ab-grid-item.is-prefab:hover,
+.ce-ab-list-item.is-prefab:hover {
+  background: color-mix(in srgb, var(--ce-accent-orange) 12%, var(--ce-bg-raised));
+  border-color: color-mix(in srgb, var(--ce-accent-orange) 40%, var(--ce-border));
+}
+.ce-ab-grid-item.is-dragging,
+.ce-ab-list-item.is-dragging {
+  opacity: 0.55;
+}
+
+/* ─── Multi-select properties panel ───────────────────────────────────── */
+.ce-props-multi {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 12px;
+}
+.ce-props-multi-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--ce-bg-raised);
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 8px;
+}
+.ce-props-multi-count {
+  font-family: var(--ce-font-mono);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ce-accent-orange);
+  line-height: 1;
+}
+.ce-props-multi-label {
+  font-size: 12px;
+  color: var(--ce-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.ce-props-multi-hint {
+  font-size: 11px;
+  color: var(--ce-text-muted);
+  line-height: 1.5;
+  padding: 0 4px;
+}
+.ce-props-multi-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ce-props-multi-actions .ce-btn {
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  background: var(--ce-bg-raised);
+  color: var(--ce-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: filter 80ms, background 80ms;
+}
+.ce-props-multi-actions .ce-btn:hover { filter: brightness(1.15); }
+.ce-props-multi-actions .ce-btn.primary {
+  background: var(--ce-accent-orange);
+  color: #fff;
+  border-color: var(--ce-accent-orange);
+}
+.ce-props-multi-actions .ce-btn.danger { color: #e05050; }
+.ce-props-multi-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  border-top: var(--ce-border-width) solid var(--ce-border);
+  padding-top: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.ce-props-multi-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ce-text-primary);
+}
+.ce-props-multi-row:hover { background: var(--ce-bg-raised); }
+.ce-props-multi-icon {
+  font-size: 14px;
+  color: var(--ce-accent-orange);
+  width: 14px;
+  text-align: center;
+}
+.ce-props-multi-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ─── Custom Color Picker Popup ─────────────────────────────────────────── */
 .ce-color-picker {
   position: fixed;

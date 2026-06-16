@@ -229,15 +229,41 @@ export class LeftPanel extends BasePanel {
       this._renderTree();
     });
 
+    // Allow the viewport context menu's "Group Selected" entry to delegate
+    // to the hierarchy's group implementation.
+    window.addEventListener('cyco-action', (e) => {
+      if (e.detail === 'hierarchy-group') this._group();
+    });
+
     // ── Sync viewport selection → hierarchy highlight ─────────────────────
     window.addEventListener('cyco-select-node', (e) => {
-      const cycoId = e.detail?.object?.userData?.cycoId;
-      if (!cycoId) return;
-      // Only sync if this object is in our nodes (i.e., not from our own dispatch)
-      if (!this._nodes.some(n => n.id === cycoId)) return;
+      const objects = Array.isArray(e.detail?.objects)
+        ? e.detail.objects
+        : (e.detail?.object ? [e.detail.object] : []);
+      // Only sync if at least one of the selected objects is in our nodes
+      const cycoIds = objects
+        .map(o => o?.userData?.cycoId)
+        .filter(id => id && this._nodes.some(n => n.id === id));
+      if (cycoIds.length === 0) return;
       this._selectedIds.clear();
-      this._selectedIds.add(cycoId);
-      this._lastClickId = cycoId;
+      for (const id of cycoIds) this._selectedIds.add(id);
+      this._lastClickId = cycoIds[cycoIds.length - 1];
+      this._renderTree();
+    });
+
+    window.addEventListener('cyco-selection-changed', (e) => {
+      const objects = Array.isArray(e.detail?.objects) ? e.detail.objects : [];
+      const cycoIds = objects
+        .map(o => o?.userData?.cycoId)
+        .filter(id => id && this._nodes.some(n => n.id === id));
+      if (cycoIds.length === 0) {
+        this._selectedIds.clear();
+        this._renderTree();
+        return;
+      }
+      this._selectedIds.clear();
+      for (const id of cycoIds) this._selectedIds.add(id);
+      this._lastClickId = cycoIds[cycoIds.length - 1];
       this._renderTree();
     });
 
@@ -305,6 +331,7 @@ export class LeftPanel extends BasePanel {
     if (action === 'duplicate') { this._duplicate();      return; }
     if (action === 'delete')    { this._deleteSelected(); return; }
     if (action === 'group')     { this._group();          return; }
+    if (action === 'create-prefab') { this._createPrefabFromSelection(); return; }
 
     const def = OBJECT_DEFAULTS[action];
     if (!def) return;
@@ -378,6 +405,20 @@ export class LeftPanel extends BasePanel {
     collect(id);
     this._nodes = this._nodes.filter(n => !toDelete.has(n.id));
     toDelete.forEach(d => this._selectedIds.delete(d));
+  }
+
+  _createPrefabFromSelection() {
+    const sm = window.__cyco?.sceneManager;
+    if (!sm) return;
+    const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
+    if (ids.length === 0) return;
+    const objects = ids
+      .map(id => sm._findById(id))
+      .filter(o => o && !o.userData?._isGizmo);
+    if (objects.length === 0) return;
+    window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+      detail: { objects }
+    }));
   }
 
   _group() {
@@ -750,15 +791,27 @@ export class LeftPanel extends BasePanel {
 
         // Dispatch selection to engine + right panel
         const sm = window.__cyco?.sceneManager;
-        if (sm && node.id !== 'root') {
-          const obj = sm._findById(node.id);
-          if (obj) {
-            let selType = node.type;
-            if (obj.isLight)                          selType = 'light';
-            else if (obj.isCamera)                    selType = 'camera';
-            else if (obj.isMesh || obj.isLine || obj.isPoints) selType = 'mesh';
+        if (sm) {
+          // Collect all selected three.js objects (skip the synthetic 'root' id)
+          const objects = [];
+          let lastType = node.type;
+          for (const id of this._selectedIds) {
+            if (id === 'root') continue;
+            const obj = sm._findById(id);
+            if (!obj) continue;
+            objects.push(obj);
+            if (id === node.id) {
+              if (obj.isLight)         lastType = 'light';
+              else if (obj.isCamera)   lastType = 'camera';
+              else if (obj.isMesh || obj.isLine || obj.isPoints) lastType = 'mesh';
+            }
+          }
+          if (objects.length === 0) {
+            window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+          } else {
+            const last = objects[objects.length - 1];
             window.dispatchEvent(new CustomEvent('cyco-select-node', {
-              detail: { object: obj, type: selType }
+              detail: { object: last, objects, type: lastType }
             }));
           }
         } else if (node.id === 'root') {

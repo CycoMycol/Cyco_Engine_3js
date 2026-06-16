@@ -222,7 +222,35 @@ export class SceneManager {
       detail: { object, parentId: parent?.userData.cycoId ?? 'scene_root' }
     }));
   }
+  /**
+   * Add an already-constructed object tree to the active scene (or a parent)
+   * and dispatch the same `cyco-hierarchy-add` event that addObject() does.
+   * Used by PrefabManager.instantiate() and by the prefab drop handler so the
+   * hierarchy panel always refreshes, even when the caller already attached
+   * the tree to a parent.
+   */
+  _broadcastHierarchyAdd(object, parent = null) {
+    if (!object) return;
+    // Re-stamp any cycoIds the loader left blank so the hierarchy + properties
+    // panel can address each node individually.
+    object.traverse(child => {
+      if (!child.userData) child.userData = {};
+      if (!child.userData.cycoId) child.userData.cycoId = uid();
+    });
+    this._markDirty();
+    window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
+      detail: {
+        object,
+        parentId: parent?.userData?.cycoId ?? object.parent?.userData?.cycoId ?? 'scene_root'
+      }
+    }));
+  }
 
+  /**
+   * Public alias for the file-private makeObjectLoader() so the PrefabManager
+   * can reuse the node-material-aware loader pipeline.
+   */
+  _makeObjectLoaderForJson(json) { return makeObjectLoader(json); }
   /**
    * Remove object by cycoId from the active scene.
    * @param {string} cycoId

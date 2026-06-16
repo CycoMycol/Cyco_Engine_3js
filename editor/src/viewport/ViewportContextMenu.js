@@ -36,6 +36,7 @@ export class ViewportContextMenu {
     this._menu    = null;
     this._submenu = null;
     this._hitObj  = null;
+    this._selected = null;
 
     this._onContextMenu = this._onContextMenu.bind(this);
     this._onDismiss     = this._onDismiss.bind(this);
@@ -46,9 +47,10 @@ export class ViewportContextMenu {
   // ─── Event handlers ───────────────────────────────────────────────────────
 
   _onContextMenu(event) {
-    const { x, y, hit } = event.detail ?? {};
+    const { x, y, hit, selected } = event.detail ?? {};
     this._hitObj = hit ?? null;
-    this._show(x, y, hit);
+    this._selected = Array.isArray(selected) ? selected : null;
+    this._show(x, y, hit, this._selected);
   }
 
   _onDismiss(event) {
@@ -59,7 +61,7 @@ export class ViewportContextMenu {
 
   // ─── Build + show ─────────────────────────────────────────────────────────
 
-  _show(x, y, hit) {
+  _show(x, y, hit, selected) {
     this._hide(); // remove any previous
 
     const menu = document.createElement('div');
@@ -80,7 +82,10 @@ export class ViewportContextMenu {
       user-select: none;
     `;
 
-    // Add Object (with submenu)
+    const isMulti = Array.isArray(selected) && selected.length > 1;
+    const selArr  = isMulti ? selected.filter(o => o && !o.userData?._isGizmo) : [];
+
+    // Add Object (with submenu) — always available
     menu.appendChild(this._makeSubmenuItem('Add Object ▶', ADD_ITEMS, (type) => {
       this._hide();
       window.dispatchEvent(new CustomEvent('cyco-add-object', { detail: { objectType: type } }));
@@ -93,7 +98,46 @@ export class ViewportContextMenu {
     }));
     menu.appendChild(this._makeSeparator());
 
-    if (hit) {
+    if (isMulti) {
+      // ── Multi-select context items ────────────────────────────────────────
+      menu.appendChild(this._makeItem(`Focus Selection  (${selArr.length})`, () => {
+        this._hide();
+        const primary = selArr[selArr.length - 1];
+        window.dispatchEvent(new CustomEvent('cyco-rvp-focus', { detail: { object: primary } }));
+      }));
+      menu.appendChild(this._makeSeparator());
+      menu.appendChild(this._makeItem('Group Selected', () => {
+        this._hide();
+        // Re-use the hierarchy panel's _group() by dispatching the action
+        window.dispatchEvent(new CustomEvent('cyco-action', { detail: 'hierarchy-group' }));
+      }));
+      menu.appendChild(this._makeItem('Create Prefab', () => {
+        this._hide();
+        window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+          detail: { objects: selArr }
+        }));
+      }));
+      menu.appendChild(this._makeSeparator());
+      menu.appendChild(this._makeItem(`Delete ${selArr.length} objects`, () => {
+        this._hide();
+        const cm = window.__cyco?.commandManager;
+        if (cm) {
+          for (const obj of selArr) {
+            const cycoId = obj.userData?.cycoId;
+            if (!cycoId) continue;
+            const parent = obj.parent;
+            const idx    = parent?.children.indexOf(obj) ?? 0;
+            cm.execute({
+              name: `Delete ${obj.name || cycoId}`,
+              _obj: obj, _parent: parent, _idx: idx,
+              do()   { window.dispatchEvent(new CustomEvent('cyco-hierarchy-remove-obj', { detail: { cycoId: this._obj.userData.cycoId } })); },
+              undo() { window.dispatchEvent(new CustomEvent('cyco-hierarchy-restore-obj', { detail: { object: this._obj, parent: this._parent, index: this._idx } })); },
+            });
+          }
+          window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+        }
+      }, true));
+    } else if (hit) {
       // Focus
       menu.appendChild(this._makeItem('Focus', () => {
         this._hide();

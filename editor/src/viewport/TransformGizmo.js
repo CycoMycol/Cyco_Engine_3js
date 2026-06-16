@@ -17,6 +17,22 @@ export class TransformGizmo {
     this._gizmo   = null;
     this._controls = null;
 
+    // Multi-selection state. When the selection contains 2+ objects, the gizmo
+    // attaches to a hidden `_multiGroup` Object3D positioned at the centroid
+    // of the selection, and every selected object follows the same delta.
+    // `_multiMode` is the pivot strategy:
+    //   'group'    → all selected objects move as one; pivot = group centroid
+    //   'individual' → gizmo attaches to a virtual "primary"; each object is
+    //                  transformed relative to its own pivot while keeping the
+    //                  group centroid fixed.
+    this._multiGroup    = null;
+    this._multiTargets  = [];   // Array<Object3D> the gizmo is currently driving
+    this._multiMode     = 'group';
+    this._multiCentroid = new THREE.Vector3();
+    this._multiPivots   = [];   // original world positions when transform began
+    this._multiRots     = [];   // original world quaternions
+    this._multiScales   = [];   // original world scales
+
     this._boxGroup      = null;
     this._boxHandles    = [];
     this._boxVolume     = null;
@@ -107,6 +123,10 @@ export class TransformGizmo {
       if (this._boxActive && this._targetObject) {
         this._updateBoxGizmo();
       }
+      // Live-update multi-targets as the gizmo drags
+      if (this._multiTargets.length >= 2 && this._matrixBefore) {
+        this._applyMultiFromCurrentGroup();
+      }
     });
 
     tc.addEventListener('mouseDown', () => {
@@ -114,6 +134,8 @@ export class TransformGizmo {
       const orbit = this.engine.controls;
       if (orbit) orbit.enabled = false;
       if (this._targetObject) this._matrixBefore = this._targetObject.matrix.clone();
+      // Capture the per-target world transforms for multi-select transform undo
+      this._captureMultiPivots();
       window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
     });
 
@@ -125,13 +147,44 @@ export class TransformGizmo {
         const before = this._matrixBefore;
         const after  = this._targetObject.matrix.clone();
         const obj    = this._targetObject;
-        window.dispatchEvent(new CustomEvent('cyco-command-execute', {
-          detail: {
-            name: `Transform ${obj.name}`,
-            do()   { obj.matrix.copy(after); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
-            undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
-          }
-        }));
+        // If we're driving a multi-select, apply the group delta to every target
+        if (this._multiTargets.length >= 2) {
+          const targets = this._multiTargets.slice();
+          const pivots  = this._multiPivots.slice();
+          const rots    = this._multiRots.slice();
+          const scales  = this._multiScales.slice();
+          const beforeMatrices = pivots.map(p => p.clone());
+          // Re-apply pivot positions to undo current (post-drag) world changes
+          this._applyMultiMatricesFromGroupDelta(before, after);
+          const afterMatrices = this._multiTargets.map(o => o.matrix.clone());
+          window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+            detail: {
+              name: `Transform ${targets.length} objects`,
+              do() {
+                for (let i = 0; i < targets.length; i++) {
+                  targets[i].matrix.copy(afterMatrices[i]);
+                  targets[i].matrix.decompose(targets[i].position, targets[i].quaternion, targets[i].scale);
+                }
+              },
+              undo() {
+                for (let i = 0; i < targets.length; i++) {
+                  targets[i].matrix.copy(beforeMatrices[i]);
+                  targets[i].matrix.decompose(targets[i].position, targets[i].quaternion, targets[i].scale);
+                }
+              },
+            }
+          }));
+          // Refresh the centroid so the gizmo follows the new center
+          this._recomputeMultiCentroid();
+        } else {
+          window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+            detail: {
+              name: `Transform ${obj.name}`,
+              do()   { obj.matrix.copy(after); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+              undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+            }
+          }));
+        }
       }
       if (this._boxActive && this._targetObject) {
         this._updateBoxGizmo();
@@ -309,6 +362,9 @@ export class TransformGizmo {
       this._tc.setMode(this._mode);
       this._gizmo.visible = true;
       this._tc.enabled = true;
+      // Always re-attach to whichever object is currently driving the gizmo
+      // (the virtual group for multi-select, or the single target otherwise)
+      try { this._tc.attach(this._targetObject); } catch (_) {}
       this._showBox();
       this._setBoxModeVisibility('outline');
     } else {
@@ -328,6 +384,10 @@ export class TransformGizmo {
       this._applyMode();
       return;
     }
+    // If we're in multi-select mode, single-attach is a no-op — the multi
+    // group is the target. Caller should use _attachToMulti() if it really
+    // wants to switch the selection.
+    if (this._multiTargets.length >= 2 && obj) return;
     this._targetObject = obj;
     if (this._mode === 'universal' || this._mode === 'select') {
       if (obj) {
@@ -352,6 +412,7 @@ export class TransformGizmo {
   _detachAll() {
     if (this._physicsEdit) return;
     this._targetObject = null;
+    this._multiTargets = [];
     if (this._tc) this._tc.detach();
     this._hideBox();
   }
@@ -789,30 +850,111 @@ export class TransformGizmo {
   _onEditorCamChanged() { this._build(); }
 
   _onSelectNode(event) {
-    const { object } = event.detail;
-    if (!object || object.userData.cycoLocked) { this.detach(); return; }
+    const objects = Array.isArray(event.detail?.objects)
+      ? event.detail.objects.filter(Boolean)
+      : (event.detail?.object ? [event.detail.object] : []);
+    const object = objects[objects.length - 1] ?? null;
+
+    // Respect per-object lock
+    if (object && object.userData.cycoLocked) { this.detach(); return; }
+    if (objects.length > 0 && objects.every(o => o.userData?.cycoLocked)) { this.detach(); return; }
+
     if (this._physicsEdit) {
       this._physicsOwner = object;
-      this._physicsProxy = object.userData?._physicsEditProxy ?? null;
+      this._physicsProxy = object?.userData?._physicsEditProxy ?? null;
       this._physicsTemporaryOutline = !this._physicsProxy;
       this._targetObject = this._physicsProxy || object;
       this._mode = 'universal';
       this._applyMode();
       return;
     }
-    this._attachTo(object);
+
+    // ── Multi-select: drive a virtual group object ─────────────────────────
+    const locked = objects.filter(o => !o.userData?.cycoLocked);
+    if (locked.length >= 2) {
+      this._attachToMulti(locked);
+      return;
+    }
+    // Single select — drop the multi-group
+    this._destroyMultiGroup();
+    this._attachTo(object ?? null);
+  }
+
+  _attachToMulti(objects) {
+    if (!Array.isArray(objects) || objects.length < 2) {
+      this._attachTo(objects[0] ?? null);
+      return;
+    }
+    // Build (or refresh) the virtual group object that the gizmo attaches to
+    if (!this._multiGroup) {
+      this._multiGroup = new THREE.Group();
+      this._multiGroup.name = '__cyco_multi_gizmo_target__';
+      this._multiGroup.userData._isGizmo = true;
+      this.engine.scene?.add(this._multiGroup);
+    }
+    this._multiTargets = objects.slice();
+
+    // Compute the centroid of all selected objects' world positions
+    this._recomputeMultiCentroid();
+
+    this._targetObject = this._multiGroup;
+    this._applyMode();
+    if (this._mode !== 'select' && this._mode !== 'universal' && this._tc) {
+      this._tc.attach(this._multiGroup);
+    }
+  }
+
+  _destroyMultiGroup() {
+    if (this._multiGroup?.parent) this._multiGroup.parent.remove(this._multiGroup);
+    this._multiGroup = null;
+    this._multiTargets = [];
+    this._multiCentroid.set(0, 0, 0);
+    this._multiPivots = [];
+    this._multiRots = [];
+    this._multiScales = [];
+  }
+
+  _recomputeMultiCentroid() {
+    const objs = this._multiTargets;
+    if (!objs || objs.length === 0) {
+      this._multiCentroid.set(0, 0, 0);
+      return;
+    }
+    const v = new THREE.Vector3();
+    for (const obj of objs) {
+      v.add(obj.getWorldPosition(new THREE.Vector3()));
+    }
+    v.multiplyScalar(1 / objs.length);
+    this._multiCentroid.copy(v);
+    // Snap the virtual group to the centroid so the gizmo appears at center
+    this._multiGroup.position.copy(v);
+    this._multiGroup.quaternion.identity();
+    this._multiGroup.scale.set(1, 1, 1);
+    this._multiGroup.updateMatrixWorld(true);
   }
 
   _onDeselectAll() {
     this.detach();
     this._hideBox();
+    this._destroyMultiGroup();
   }
 
   _onHierarchyRemove(e) {
     const { objectId } = e.detail ?? {};
-    if (objectId && this._targetObject?.userData?.cycoId === objectId) {
+    if (!objectId) return;
+    if (this._targetObject?.userData?.cycoId === objectId) {
       this.detach();
       this._hideBox();
+    }
+    // Drop the multi-group if any of its targets was deleted
+    if (this._multiTargets.length > 0) {
+      this._multiTargets = this._multiTargets.filter(o => o.userData?.cycoId !== objectId);
+      if (this._multiTargets.length < 2) {
+        this._destroyMultiGroup();
+        this._attachTo(this._multiTargets[0] ?? null);
+      } else {
+        this._recomputeMultiCentroid();
+      }
     }
   }
 
@@ -1232,6 +1374,90 @@ export class TransformGizmo {
   }
 
   suspend() { this.detach(); }
+
+  // ─── Multi-select transform helpers ──────────────────────────────────────
+
+  /**
+   * Capture the current world-space pivot (position, rotation, scale) of each
+   * multi-select target at the start of a transform drag. Used for live delta
+   * computation and for undo snapshots.
+   */
+  _captureMultiPivots() {
+    if (this._multiTargets.length < 2) {
+      this._multiPivots = [];
+      this._multiRots = [];
+      this._multiScales = [];
+      return;
+    }
+    this._multiPivots = this._multiTargets.map(o => o.getWorldPosition(new THREE.Vector3()));
+    this._multiRots   = this._multiTargets.map(o => o.getWorldQuaternion(new THREE.Quaternion()));
+    this._multiScales = this._multiTargets.map(o => o.getWorldScale(new THREE.Vector3()));
+  }
+
+  /**
+   * Apply the gizmo's current delta (relative to `_matrixBefore`) to every
+   * multi-select target. Called from the `change` event while dragging.
+   */
+  _applyMultiFromCurrentGroup() {
+    if (!this._matrixBefore || this._multiTargets.length < 2) return;
+    const after = this._targetObject.matrix.clone();
+    this._applyMultiMatricesFromGroupDelta(this._matrixBefore, after);
+    // Recompute the centroid so the gizmo's drag handle stays centered
+    this._recomputeMultiCentroid();
+  }
+
+  /**
+   * For every multi-select target, compute its post-transform world matrix by
+   * applying the group delta (groupAfter * inverse(groupBefore)) to its
+   * pre-drag world matrix, then decompose back into local space.
+   */
+  _applyMultiMatricesFromGroupDelta(beforeGroupMatrix, afterGroupMatrix) {
+    if (this._multiTargets.length < 2) return;
+    if (this._multiPivots.length !== this._multiTargets.length) return;
+    const delta = new THREE.Matrix4().copy(afterGroupMatrix).multiply(
+      new THREE.Matrix4().copy(beforeGroupMatrix).invert()
+    );
+    const newWorld = new THREE.Matrix4();
+    const parentWorldInverse = new THREE.Matrix4();
+    // Build each object's pre-drag world matrix from its captured
+    // position / rotation / scale (world-space). Then post-multiply by
+    // the group delta to get the new world matrix.
+    for (let i = 0; i < this._multiTargets.length; i++) {
+      const obj = this._multiTargets[i];
+      const pivot  = this._multiPivots[i];
+      const rot    = this._multiRots[i];
+      const scale  = this._multiScales[i];
+
+      // Compose: T(pivot) * R(rot) * S(scale)  (column-major)
+      newWorld.compose(pivot, rot, scale);
+      // Apply the group delta (post-multiply, so the delta acts in the
+      // group's local frame, which is centered at the centroid)
+      newWorld.multiply(delta);
+
+      // Convert world back to local
+      const parent = obj.parent;
+      if (parent) {
+        parent.updateMatrixWorld(true);
+        parentWorldInverse.copy(parent.matrixWorld).invert();
+        newWorld.premultiply(parentWorldInverse);
+      }
+      obj.matrix.copy(newWorld);
+      obj.matrix.decompose(obj.position, obj.quaternion, obj.scale);
+      obj.matrixAutoUpdate = true;
+    }
+  }
+
+  /**
+   * Programmatic toggle between "Group" (centroid pivot, move all together)
+   * and "Individual" (centroid pivot, but each child keeps its own offset
+   * relative to the group; rotations and scales apply per-object).
+   */
+  setMultiMode(mode) {
+    if (mode !== 'group' && mode !== 'individual') return;
+    this._multiMode = mode;
+  }
+
+  getMultiMode() { return this._multiMode; }
   restore() { if (this._targetObject && this._mode !== 'select') this._attachTo(this._targetObject); }
 
   dispose() {
