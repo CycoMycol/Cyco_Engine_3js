@@ -597,62 +597,7 @@ function helpMenu() {
   ];
 }
 
-// ─── Open Project dialog ──────────────────────────────────────────────────────
-
-function _openProjectDialog() {
-  const recents = ProjectManager.getRecentProjects();
-
-  const existing = document.getElementById('ce-open-project-dlg');
-  if (existing) { existing.close(); existing.remove(); }
-
-  const dlg = document.createElement('dialog');
-  dlg.id = 'ce-open-project-dlg';
-  dlg.className = 'ce-new-project-dialog';
-
-  const listHtml = recents.map((r, i) =>
-    `<div class="ce-op-item" data-idx="${i}">
-       <span class="ce-op-name">${_esc(r.name)}</span>
-       <span class="ce-op-path">${_esc(r.path || '')}</span>
-     </div>`
-  ).join('');
-
-  dlg.innerHTML = `
-    <div class="ce-np-title">Open Project</div>
-    <div class="ce-op-list">${listHtml || '<div class="ce-op-empty">No saved projects found.</div>'}</div>
-    <div class="ce-np-actions">
-      <button class="ce-btn ghost" id="ce-op-cancel">Cancel</button>
-      <button class="ce-btn" id="ce-op-open-file">Open Project File…</button>
-      <button class="ce-btn" id="ce-op-new">New Project…</button>
-    </div>
-  `;
-
-  document.body.appendChild(dlg);
-
-  dlg.querySelectorAll('.ce-op-item').forEach((item) => {
-    const idx = parseInt(item.dataset.idx);
-    item.addEventListener('click', () => {
-      dlg.close(); dlg.remove();
-      ProjectManager.openById(recents[idx].id);
-    });
-  });
-
-  dlg.querySelector('#ce-op-cancel').addEventListener('click', () => {
-    dlg.close(); dlg.remove();
-  });
-  dlg.querySelector('#ce-op-open-file').addEventListener('click', async () => {
-    dlg.close(); dlg.remove();
-    await ProjectManager.openProjectFile();
-  });
-  dlg.querySelector('#ce-op-new').addEventListener('click', () => {
-    dlg.close(); dlg.remove();
-    NewProjectDialog.open();
-  });
-  dlg.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { dlg.close(); dlg.remove(); }
-  });
-
-  dlg.showModal();
-}
+// ─── Recent Projects submenu ──────────────────────────────────────────────────
 
 function _recentProjectsSubmenu() {
   const recents = ProjectManager.getRecentProjects();
@@ -661,7 +606,7 @@ function _recentProjectsSubmenu() {
   }
   const items = recents.map(r => ({
     label: r.name,
-    action: () => ProjectManager.openById(r.id),
+    action: () => { ProjectManager.openById(r.id); },
   }));
   items.push({ separator: true });
   items.push({ label: 'Clear Recent…', action: () => ProjectManager.clearRecents() });

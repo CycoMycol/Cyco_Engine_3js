@@ -105,9 +105,23 @@ const ProjectManager = {
 
   /**
    * Re-open a previously created project by its stored id.
+   * Tries the local save bridge first to get the latest on-disk version of
+   * the .cyco file. Falls back to the localStorage snapshot if the bridge
+   * is unavailable or the file cannot be read.
    * Returns true on success, false if the project data is not found.
    */
-  openById(id) {
+  async openById(id) {
+    const recent = this.getRecentProjects().find(r => r.id === id);
+    const filePath = recent?.filePath
+      || (recent?.path && recent?.name ? `${recent.path}/${recent.name}.cyco` : null);
+    if (filePath && ProjectLocalBridgeStorage.isBridgeAvailable) {
+      const bridgeUp = await ProjectLocalBridgeStorage.isBridgeAvailable().catch(() => false);
+      if (bridgeUp) {
+        const ok = await this.openProjectByPath(filePath);
+        if (ok) return true;
+        // Fall through to localStorage fallback below.
+      }
+    }
     try {
       const raw = localStorage.getItem(STORAGE_KEY_PREFIX + id);
       if (!raw) return false;
@@ -118,6 +132,7 @@ const ProjectManager = {
         detail: { name: this._project.name, path: this._project.path },
       }));
       this._restoreSceneFromSnapshot(this._project.scene);
+      this._save();
       this.startWatching();
       return true;
     } catch { return false; }
@@ -258,6 +273,10 @@ const ProjectManager = {
    * Rescan the on-disk project folder and rebuild the in-memory tree from it.
    * Requires the local save bridge to be running and have an active target.
    * Returns true on success, false if no scan was possible.
+   *
+   * NOTE: This intentionally does NOT call _save(). The watcher is what calls
+   * refreshFromDisk, and _save() would write the snapshot back to disk, which
+   * the watcher would then see as another change — an infinite feedback loop.
    */
   async refreshFromDisk() {
     if (!this._project) return false;
@@ -273,12 +292,8 @@ const ProjectManager = {
       if (!tree || typeof tree !== 'object') return false;
       this._project.tree = tree;
       this._project.updatedAt = Date.now();
-      this._save();
       document.dispatchEvent(new CustomEvent('cyco-project-change', {
         detail: { name: this._project.name, path: this._project.path },
-      }));
-      window.dispatchEvent(new CustomEvent('cyco-toast', {
-        detail: { message: `Refreshed from ${projectPath}` },
       }));
       return true;
     } catch (err) {
@@ -392,10 +407,12 @@ const ProjectManager = {
       this._restoreSceneFromSnapshot(snapshot.scene);
       if (applyPrefs && snapshot.prefs) savePrefs(snapshot.prefs);
       if (recordRecent) {
+        const filePath = ProjectLocalBridgeStorage.getFilePath?.() || null;
         this._addToRecents({
           id: snapshot.id,
           name: snapshot.name,
           path: snapshot.path,
+          filePath,
           timestamp: Date.now(),
         });
       }
@@ -509,6 +526,17 @@ const ProjectManager = {
             scriptPath: bootstrap.scriptPath || 'engine/bootstrap.js',
           };
           this._save();
+        }
+        // Store the full file path in recents so openById can reload from disk.
+        const filePath = ProjectLocalBridgeStorage.getFilePath();
+        if (filePath) {
+          this._addToRecents({
+            id: this._project.id,
+            name: this._project.name,
+            path: this._project.path,
+            filePath,
+            timestamp: Date.now(),
+          });
         }
       }
       this._debug('createOnDisk:disk-created', {
@@ -758,20 +786,13 @@ const ProjectManager = {
   },
 
   async _pickProjectFile() {
-    if (typeof window.showOpenFilePicker === 'function') {
-      try {
-        const [fileHandle] = await window.showOpenFilePicker({
-          multiple: false,
-          types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
-        });
-        if (!fileHandle) return null;
-        return { file: await fileHandle.getFile(), handle: fileHandle };
-      } catch (err) {
-        if (err?.name === 'AbortError') return null;
-        console.warn('[ProjectManager] showOpenFilePicker failed, falling back to input:', err);
-      }
-    }
-
+    // Use the <input type="file"> fallback exclusively. The
+    // showOpenFilePicker (File System Access) API is unreliable in the
+    // embedded browser used to host the editor — selecting a file either
+    // throws or its read-back fails, which caused the picker to open twice
+    // (once as the native picker, once as the <input> fallback). The
+    // fallback works in every environment and is sufficient because the
+    // project file is read once and not edited in place.
     return await new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -808,9 +829,11 @@ const ProjectManager = {
     return value == null ? value : JSON.parse(JSON.stringify(value));
   },
 
-  _addToRecents({ id, name, path, timestamp }) {
+  _addToRecents({ id, name, path, filePath, timestamp }) {
     const recents = this.getRecentProjects().filter(r => r.id !== id);
-    recents.unshift({ id, name, path, timestamp });
+    const entry = { id, name, path, timestamp };
+    if (filePath) entry.filePath = filePath;
+    recents.unshift(entry);
     if (recents.length > 10) recents.length = 10;
     localStorage.setItem(STORAGE_KEY_RECENTS, JSON.stringify(recents));
   },
