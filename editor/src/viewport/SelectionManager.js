@@ -214,6 +214,18 @@ export class SelectionManager {
     if (this._selectionBox) {
       this._selectionBox.startPoint.set(ndc.x, ndc.y, 0.5);
     }
+
+    // Decide if the press landed on an existing gizmo handle / box. If so the
+    // gizmo owns the drag and OrbitControls + marquee should both stay out of
+    // the way. Otherwise (click on empty space or on an object) the marquee
+    // owns the press, so we pre-empt OrbitControls BEFORE it gets a chance to
+    // rotate the camera — the previous "wait for drag threshold" approach let
+    // OrbitControls orbit a few pixels before we cut it off, which produced
+    // visible camera jitter at the start of every marquee.
+    const hitGizmo = this._hitGizmoAt(event);
+    if (!hitGizmo && this.engine.controls) {
+      this.engine.controls.enabled = false;
+    }
   }
 
   _onPointerMove(event) {
@@ -222,16 +234,14 @@ export class SelectionManager {
     if (event.buttons & 1) {
       // Left button held — gizmo owns its own drag, so skip
       if (this._gizmoDragging) return;
-      // For a plain left-drag we want the marquee to win over OrbitControls.
-      // We signal that intent by setting a CSS class on the canvas; OrbitControls
-      // is disabled while a marquee is in progress.
+      // Marquee now owns the press (orbit was already disabled in pointerdown
+      // for non-gizmo hits). Promote the drag to "active marquee" once the
+      // pointer moves past the drag threshold.
       const dx = event.clientX - this._pointerDown.x;
       const dy = event.clientY - this._pointerDown.y;
       if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {
         this._isDragging = true;
         if (this._selectionHelper) this._selectionHelper.enabled = true;
-        // Disable orbit while the user is actively marquee-selecting
-        if (this.engine.controls) this.engine.controls.enabled = false;
       }
       if (this._isDragging && this._selectionBox) {
         const ndc = this._toNDC(event);
@@ -257,7 +267,57 @@ export class SelectionManager {
     const hits = this._raycaster
       .intersectObjects(scene.children, true)
       .filter(h => !this._isNonSelectable(h.object));
-    this._setHoveredObject(hits.length > 0 ? hits[0].object : null);
+    this._setHoveredObject(hits.length > 0 ? this._selectableAncestor(hits[0].object) : null);
+  }
+
+  /**
+   * Walk up the parent chain from a hit object to the nearest object that is
+   * itself selectable AND a "container-like" Object3D (Group / Empty / LOD /
+   * bone / prefab instance root). If none found, return the hit itself.
+   *
+   * This makes clicking a child mesh inside a group or empty select the
+   * container itself (so the gizmo and properties panel target the group the
+   * user actually clicked on) while still letting direct clicks on a mesh
+   * select the mesh.
+   */
+  _selectableAncestor(obj) {
+    if (!obj) return obj;
+    let cur = obj;
+    while (cur && cur.parent) {
+      const p = cur.parent;
+      if (p.isScene) break;
+      if (p.isGroup || p.isLOD || p.isBone || p.type === 'Object3D'
+          || (p.userData && (p.userData.cycoPrefabSource || p.userData.cycoEmptyRoot))) {
+        // Stop here — p is a selectable container, cur was its child.
+        return cur;
+      }
+      cur = p;
+    }
+    return obj;
+  }
+
+  /**
+   * Returns true when the pointerdown event landed on the gizmo helper or
+   * box-edit helper. We use this to decide whether to pre-empt OrbitControls
+   * — if the user is grabbing a gizmo handle, the gizmo owns the drag and
+   * orbit must NOT be disabled.
+   */
+  _hitGizmoAt(event) {
+    const tg = window.__cyco?.transformGizmo;
+    if (!tg) return false;
+    // The transform gizmo exposes its main Object3D via `_gizmo` and its
+    // box-edit helper via `_boxGroup`. Both have child meshes we can hit.
+    const helpers = [];
+    if (tg._gizmo)    helpers.push(tg._gizmo);
+    if (tg._boxGroup) helpers.push(tg._boxGroup);
+    if (helpers.length === 0) return false;
+
+    const ndc = this._toNDC(event);
+    const camera = this.engine.camera;
+    if (!camera) return false;
+    this._raycaster.setFromCamera(ndc, camera);
+    const hits = this._raycaster.intersectObjects(helpers, true);
+    return hits.length > 0;
   }
 
   _setHoveredObject(obj) {
@@ -295,6 +355,7 @@ export class SelectionManager {
     // canvas handler, so _gizmoDragging is still true here. Skip selection.
     if (this._gizmoDragging) {
       this._isDragging = false;
+      // Gizmo manages its own orbit on/off via dragging-changed; nothing to do.
       return;
     }
 
@@ -323,7 +384,10 @@ export class SelectionManager {
     const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
 
     if (hits.length > 0) {
-      const hitObj = hits[0].object;
+      // Promote mesh/light hits to their containing Group/Empty so the gizmo
+      // and properties panel operate on the container the user actually
+      // clicked on. This also makes the OUTLINE highlight the container.
+      const hitObj = this._selectableAncestor(hits[0].object);
       if (additive) {
         // Toggle: if already selected, deselect; otherwise add
         if (this.selected.has(hitObj)) {
@@ -351,20 +415,35 @@ export class SelectionManager {
         window.dispatchEvent(new CustomEvent('cyco-show-properties', { detail: { type: 'environment' } }));
       }
     }
+    // Always restore orbit after a left-click — pointerdown disabled it, and
+    // we want it back whether the click was a selection hit or empty space.
+    if (this.engine.controls) this.engine.controls.enabled = true;
   }
 
   _finishMarquee(event) {
     const ndc = this._toNDC(event);
     if (!this._selectionBox) return;
     this._selectionBox.endPoint.set(ndc.x, ndc.y, 0.5);
+    // Promote each raw hit to its selectable container so the marquee
+    // highlights groups/empties, not the meshes inside them. Dedup by uuid
+    // because multiple child meshes inside the same group all roll up to the
+    // same ancestor.
+    const seen = new Set();
     const objects = this._selectionBox
       .select()
-      .filter(obj => !this._isNonSelectable(obj));
+      .filter(obj => !this._isNonSelectable(obj))
+      .map(obj => this._selectableAncestor(obj))
+      .filter(obj => {
+        if (!obj || seen.has(obj.uuid)) return false;
+        seen.add(obj.uuid);
+        return true;
+      });
 
     const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
     if (!additive) this.clearSelection();
     objects.forEach(obj => this._selectObject(obj));
-    // Re-enable orbit (disabled while the user was marquee-dragging)
+    // Re-enable orbit (disabled at pointerdown while the user was
+    // marquee-dragging).
     if (this.engine.controls) this.engine.controls.enabled = true;
   }
 

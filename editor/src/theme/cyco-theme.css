@@ -1508,27 +1508,27 @@ dialog.ce-prefab-dialog {
 .ce-props-multi {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px 12px;
+  gap: 8px;
+  padding: 10px 10px 12px;
 }
 .ce-props-multi-header {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 6px;
+  padding: 4px 8px;
   background: var(--ce-bg-raised);
   border: var(--ce-border-width) solid var(--ce-border);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 .ce-props-multi-count {
   font-family: var(--ce-font-mono);
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 600;
   color: var(--ce-accent-orange);
   line-height: 1;
 }
 .ce-props-multi-label {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ce-text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
@@ -1595,6 +1595,84 @@ dialog.ce-prefab-dialog {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.ce-props-multi-pivot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 2px;
+}
+.ce-props-multi-pivot-label {
+  font-size: 11px;
+  color: var(--ce-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  min-width: 44px;
+}
+.ce-props-multi-pivot-toggle {
+  display: inline-flex;
+  flex: 1;
+  gap: 0;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--ce-bg-raised);
+}
+.ce-props-multi-pivot-toggle .ce-btn {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ce-text-primary);
+  padding: 6px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ce-props-multi-pivot-toggle .ce-btn.active {
+  background: var(--ce-accent-orange);
+  color: #fff;
+}
+.ce-props-multi-transform {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px 0;
+  border-top: var(--ce-border-width) solid var(--ce-border);
+  padding-top: 8px;
+}
+.ce-props-multi-tlabel {
+  font-size: 10px;
+  color: var(--ce-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+.ce-props-multi-row-xyz {
+  display: block;
+  width: 100%;
+}
+.ce-props-multi-xyz {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  width: 100%;
+}
+.ce-props-multi-xyz label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+  color: var(--ce-text-muted);
+}
+.ce-props-multi-xyz input {
+  width: 100%;
+  min-width: 0;
+  background: var(--ce-bg-input, #1a1a1a);
+  border: 1px solid var(--ce-border);
+  color: var(--ce-text-bright, #eee);
+  font-size: 11px;
+  padding: 2px 4px;
+  border-radius: 2px;
 }
 
 /* ─── Custom Color Picker Popup ─────────────────────────────────────────── */

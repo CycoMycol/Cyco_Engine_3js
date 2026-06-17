@@ -660,6 +660,11 @@ const ProjectManager = {
     };
     this._save();
     document.dispatchEvent(new CustomEvent('cyco-project-change'));
+    // Also fire a dedicated event so the AssetBrowser can auto-expand the
+    // new prefabs/ folder and select the file the user just created.
+    document.dispatchEvent(new CustomEvent('cyco-prefab-saved', {
+      detail: { fileName, name: safe, path: ['prefabs', fileName] }
+    }));
     return fileName;
   },
 

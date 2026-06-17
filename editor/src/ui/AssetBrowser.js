@@ -31,7 +31,9 @@ export class AssetBrowser {
     this._viewBtns  = null;
 
     this._onProjectChange = () => this._refresh();
+    this._onPrefabSaved   = (e) => this._onPrefabSaved(e);
     document.addEventListener('cyco-project-change', this._onProjectChange);
+    document.addEventListener('cyco-prefab-saved',   this._onPrefabSaved);
   }
 
   get element() {
@@ -41,6 +43,26 @@ export class AssetBrowser {
 
   destroy() {
     document.removeEventListener('cyco-project-change', this._onProjectChange);
+    document.removeEventListener('cyco-prefab-saved',   this._onPrefabSaved);
+  }
+
+  /**
+   * After a prefab is saved, expand the prefabs/ folder in the tree and
+   * navigate to it so the new .cyprefab file is immediately visible. Without
+   * this the file is in the tree but the prefabs/ chevron stays closed and
+   * the user has to click into the folder manually.
+   */
+  _onPrefabSaved(event) {
+    const path = event.detail?.path ?? ['prefabs'];
+    // Expand every ancestor so the prefabs folder is visible
+    for (let i = 0; i < path.length; i++) {
+      this._expanded.add(path.slice(0, i).join('/'));
+    }
+    // Navigate to the parent folder (e.g. ['prefabs']) and select the file
+    this._currentPath = path.slice(0, -1);
+    this._selected.clear();
+    this._selected.add(path[path.length - 1]);
+    this._refresh();
   }
 
   // ── Build skeleton ────────────────────────────────────────────────────────

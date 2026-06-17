@@ -1407,43 +1407,80 @@ export class TransformGizmo {
   }
 
   /**
-   * For every multi-select target, compute its post-transform world matrix by
-   * applying the group delta (groupAfter * inverse(groupBefore)) to its
-   * pre-drag world matrix, then decompose back into local space.
+   * For every multi-select target, compute its post-transform world matrix.
+   *
+   * Two modes:
+   *  • _multiMode === 'group' (default — "Combined"):
+   *      Apply the gizmo's delta to every target as one rigid cluster. All
+   *      objects rotate / scale / move around the shared centroid pivot.
+   *  • _multiMode === 'individual':
+   *      Translate still uses the centroid (move-as-one), but rotation and
+   *      scale are applied around each object's OWN world pivot. So each
+   *      object keeps its own centre and its own local orientation.
    */
   _applyMultiMatricesFromGroupDelta(beforeGroupMatrix, afterGroupMatrix) {
     if (this._multiTargets.length < 2) return;
     if (this._multiPivots.length !== this._multiTargets.length) return;
+
     const delta = new THREE.Matrix4().copy(afterGroupMatrix).multiply(
       new THREE.Matrix4().copy(beforeGroupMatrix).invert()
     );
+
+    // Decompose the delta once. For 'individual' mode we apply only the
+    // translation to each target's pivot and rebuild rotation/scale per
+    // object around its own centre.
+    const deltaPos  = new THREE.Vector3();
+    const deltaQuat = new THREE.Quaternion();
+    const deltaScale = new THREE.Vector3();
+    delta.decompose(deltaPos, deltaQuat, deltaScale);
+    const deltaMode = (this._multiMode === 'individual');
+
     const newWorld = new THREE.Matrix4();
     const parentWorldInverse = new THREE.Matrix4();
-    // Build each object's pre-drag world matrix from its captured
-    // position / rotation / scale (world-space). Then post-multiply by
-    // the group delta to get the new world matrix.
+
     for (let i = 0; i < this._multiTargets.length; i++) {
       const obj = this._multiTargets[i];
       const pivot  = this._multiPivots[i];
       const rot    = this._multiRots[i];
       const scale  = this._multiScales[i];
 
-      // Compose: T(pivot) * R(rot) * S(scale)  (column-major)
-      newWorld.compose(pivot, rot, scale);
-      // Apply the group delta (post-multiply, so the delta acts in the
-      // group's local frame, which is centered at the centroid)
-      newWorld.multiply(delta);
+      let newPivot, newRot, newScale;
 
-      // Convert world back to local
-      const parent = obj.parent;
-      if (parent) {
-        parent.updateMatrixWorld(true);
-        parentWorldInverse.copy(parent.matrixWorld).invert();
-        newWorld.premultiply(parentWorldInverse);
+      if (!deltaMode) {
+        // Combined pivot: post-multiply the captured world matrix by the full delta.
+        newWorld.compose(pivot, rot, scale);
+        newWorld.multiply(delta);
+        // Convert world → local
+        const parent = obj.parent;
+        if (parent) {
+          parent.updateMatrixWorld(true);
+          parentWorldInverse.copy(parent.matrixWorld).invert();
+          newWorld.premultiply(parentWorldInverse);
+        }
+        newPivot  = null; // decomposed below
+      } else {
+        // Individual pivot: apply translation to the pivot point, but rotate
+        // and scale around the object's own (newly-translated) centre.
+        newPivot = pivot.clone().add(deltaPos);
+        newRot   = rot.clone().premultiply(deltaQuat);
+        newScale = scale.clone().multiply(deltaScale);
+        newWorld.compose(newPivot, newRot, newScale);
+        const parent = obj.parent;
+        if (parent) {
+          parent.updateMatrixWorld(true);
+          parentWorldInverse.copy(parent.matrixWorld).invert();
+          newWorld.premultiply(parentWorldInverse);
+        }
       }
+
       obj.matrix.copy(newWorld);
       obj.matrix.decompose(obj.position, obj.quaternion, obj.scale);
       obj.matrixAutoUpdate = true;
+
+      if (deltaMode) {
+        // Refresh captured pivots so subsequent drags accumulate correctly.
+        this._multiPivots[i] = newPivot;
+      }
     }
   }
 

@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import { BasePanel } from './BasePanel.js';
 import { showHierarchyMenu, OBJECT_DEFAULTS } from '../ui/HierarchyContextMenu.js';
 
@@ -70,7 +71,31 @@ const FALLBACK_ICON_SVG = `<svg viewBox="0 0 14 14" width="13" height="13" xmlns
 const PROTECTED = new Set(['root']);
 
 export class LeftPanel extends BasePanel {
+  constructor() {
+    super();
+    // Bind listener handlers ONCE so the same function reference can be added
+    // and removed across multiple BasePanel.init() calls (dockview layout
+    // restore triggers init() more than once on the same instance).
+    this._onHierarchyAdd       = this._onHierarchyAdd.bind(this);
+    this._onHierarchyRemove   = this._onHierarchyRemove.bind(this);
+    this._onAction            = this._onAction.bind(this);
+    this._onViewportSelect    = this._onViewportSelect.bind(this);
+    this._onSelectionChanged  = this._onSelectionChanged.bind(this);
+    this._onDeselectAll       = this._onDeselectAll.bind(this);
+    this._onSceneSwitch       = this._onSceneSwitch.bind(this);
+    this._onVpReadySyncScene  = () => this._syncSceneLabel();
+  }
+
   _buildContent() {
+    // Guard against BasePanel.init() being called twice on the same instance
+    // (which happens during layout restore) — second call would double-register
+    // window listeners and produce duplicate hierarchy rows on every add.
+    if (this._built) {
+      // Reuse the existing root wrapper but allow a fresh render.
+      return this._root;
+    }
+    this._built = true;
+
     // ── instance state ────────────────────────────────────────────────────────
     this._nodes = [
       { id: 'root', pid: null, name: 'Scene', type: 'scene', open: true, locked: false, visible: true },
@@ -184,128 +209,167 @@ export class LeftPanel extends BasePanel {
     tree.addEventListener('dragend',   ()  => this._onDragEnd());
 
     // ── Sync Three.js scene adds → hierarchy ──────────────────────────────
-    window.addEventListener('cyco-hierarchy-add', (e) => {
-      const { object, parentId } = e.detail ?? {};
-      if (!object?.userData?.cycoId) return;
-
-      const pid = this._pendingAddPid ?? 'root';
-      this._pendingAddPid = null;
-
-      let nodeType = 'object';
-      if (object.isLight)                          nodeType = 'light';
-      else if (object.isCamera)                    nodeType = 'camera';
-      else if (object.isInstancedMesh)             nodeType = 'instanced';
-      else if (object.isLOD)                       nodeType = 'lod';
-      else if (object.isMesh || object.isLine || object.isPoints) nodeType = 'mesh';
-      else if (object.isGroup)                     nodeType = 'group';
-
-      this._nodes.push({
-        id:      object.userData.cycoId,
-        pid,
-        name:    object.name || object.type,
-        type:    nodeType,
-        open:    false,
-        locked:  false,
-        visible: true,
-      });
-
-      // Auto-select the new object
-      this._selectedIds.clear();
-      this._selectedIds.add(object.userData.cycoId);
-      this._lastClickId = object.userData.cycoId;
-      this._renderTree();
-
-      window.dispatchEvent(new CustomEvent('cyco-select-node', {
-        detail: { object, type: nodeType }
-      }));
-    });
+    window.addEventListener('cyco-hierarchy-add', this._onHierarchyAdd);
 
     // ── Sync Three.js scene removes → hierarchy ──────────────────────────
-    window.addEventListener('cyco-hierarchy-remove', (e) => {
-      const { objectId } = e.detail ?? {};
-      if (!objectId) return;
-      this._deleteNodeUI(objectId);
-      this._selectedIds.delete(objectId);
-      this._renderTree();
-    });
+    window.addEventListener('cyco-hierarchy-remove', this._onHierarchyRemove);
 
     // Allow the viewport context menu's "Group Selected" entry to delegate
     // to the hierarchy's group implementation.
-    window.addEventListener('cyco-action', (e) => {
-      if (e.detail === 'hierarchy-group') this._group();
-    });
+    window.addEventListener('cyco-action', this._onAction);
 
     // ── Sync viewport selection → hierarchy highlight ─────────────────────
-    window.addEventListener('cyco-select-node', (e) => {
-      const objects = Array.isArray(e.detail?.objects)
-        ? e.detail.objects
-        : (e.detail?.object ? [e.detail.object] : []);
-      // Only sync if at least one of the selected objects is in our nodes
-      const cycoIds = objects
-        .map(o => o?.userData?.cycoId)
-        .filter(id => id && this._nodes.some(n => n.id === id));
-      if (cycoIds.length === 0) return;
-      this._selectedIds.clear();
-      for (const id of cycoIds) this._selectedIds.add(id);
-      this._lastClickId = cycoIds[cycoIds.length - 1];
-      this._renderTree();
-    });
-
-    window.addEventListener('cyco-selection-changed', (e) => {
-      const objects = Array.isArray(e.detail?.objects) ? e.detail.objects : [];
-      const cycoIds = objects
-        .map(o => o?.userData?.cycoId)
-        .filter(id => id && this._nodes.some(n => n.id === id));
-      if (cycoIds.length === 0) {
-        this._selectedIds.clear();
-        this._renderTree();
-        return;
-      }
-      this._selectedIds.clear();
-      for (const id of cycoIds) this._selectedIds.add(id);
-      this._lastClickId = cycoIds[cycoIds.length - 1];
-      this._renderTree();
-    });
-
-    window.addEventListener('cyco-deselect-all', () => {
-      this._selectedIds.clear();
-      this._renderTree();
-    });
+    window.addEventListener('cyco-select-node', this._onViewportSelect);
+    window.addEventListener('cyco-selection-changed', this._onSelectionChanged);
+    window.addEventListener('cyco-deselect-all', this._onDeselectAll);
 
     // ── Sync external scene changes → hierarchy scene label ───────────────
-    window.addEventListener('cyco-scene-switch', (e) => {
-      const { sceneId } = e.detail ?? {};
-      if (!sceneId) return;
-      // Find scene name by ID in our map
-      for (const [name, id] of this._sceneIdMap) {
-        if (id === sceneId) {
-          this._activeScene = name;
-          // Update the scene label if visible — find it in DOM
-          const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
-          if (lbl) lbl.textContent = name;
-          break;
-        }
-      }
-    });
+    window.addEventListener('cyco-scene-switch', this._onSceneSwitch);
 
     // ── Seed initial scene ID from SceneManager on viewport ready ────────
-    const _syncSceneLabel = () => {
-      const sm = window.__cyco?.sceneManager;
-      if (!sm) return;
-      const activeId = sm.activeSceneId;
-      const activeName = sm.sceneRegistry.get(activeId)?.name ?? 'Scene';
-      this._activeScene = activeName;
-      this._scenes = [activeName];
-      this._sceneIdMap = new Map([[activeName, activeId]]);
-      const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
-      if (lbl) lbl.textContent = activeName;
-    };
-    window.addEventListener('cyco-vp-ready', _syncSceneLabel);
+    window.addEventListener('cyco-vp-ready', this._onVpReadySyncScene);
     // Also try on next frame in case cyco-vp-ready already fired
-    requestAnimationFrame(_syncSceneLabel);
+    requestAnimationFrame(this._onVpReadySyncScene);
 
     this._renderTree();
-    return wrap;
+    return this._root = wrap;
+  }
+
+  _onHierarchyAdd(e) {
+    const { object, parentId } = e.detail ?? {};
+    if (!object?.userData?.cycoId) return;
+
+    // Idempotent by id (same row added twice).
+    const existing = this._nodes.find(n => n.id === object.userData.cycoId);
+    if (existing) {
+      existing.pid   = parentId ?? existing.pid ?? 'root';
+      existing.name  = object.name || existing.name;
+      existing.type  = (object.isGroup ? 'group' : existing.type);
+      this._selectedIds.clear();
+      this._selectedIds.add(existing.id);
+      this._lastClickId = existing.id;
+      this._renderTree();
+      // Make sure the viewport gizmo attaches to the freshly-created group
+      window.dispatchEvent(new CustomEvent('cyco-select-node', {
+        detail: { object, objects: [object], type: existing.type }
+      }));
+      return;
+    }
+
+    const pid = this._pendingAddPid ?? 'root';
+    this._pendingAddPid = null;
+
+    let nodeType = 'object';
+    if (object.isLight)                          nodeType = 'light';
+    else if (object.isCamera)                    nodeType = 'camera';
+    else if (object.isInstancedMesh)             nodeType = 'instanced';
+    else if (object.isLOD)                       nodeType = 'lod';
+    else if (object.isMesh || object.isLine || object.isPoints) nodeType = 'mesh';
+    else if (object.isGroup)                     nodeType = 'group';
+
+    // Layout-restore safety net: drop any pre-existing synthetic row whose
+    // name+pid+type matches this one. The pre-existing row was inserted by
+    // LeftPanel._group() with a synthetic `'grp-' + Date.now()` id before
+    // the live cycoId was known — replace it with the real row.
+    const name = object.name || object.type;
+    this._nodes = this._nodes.filter(n =>
+      !(n.name === name && n.pid === pid && n.type === nodeType && n.id !== object.userData.cycoId)
+    );
+
+    this._nodes.push({
+      id:      object.userData.cycoId,
+      pid,
+      name,
+      type:    nodeType,
+      open:    false,
+      locked:  false,
+      visible: true,
+    });
+
+    // Auto-select the new object
+    this._selectedIds.clear();
+    this._selectedIds.add(object.userData.cycoId);
+    this._lastClickId = object.userData.cycoId;
+    this._renderTree();
+
+    window.dispatchEvent(new CustomEvent('cyco-select-node', {
+      detail: { object, type: nodeType }
+    }));
+  }
+
+  _onHierarchyRemove(e) {
+    const { objectId } = e.detail ?? {};
+    if (!objectId) return;
+    this._deleteNodeUI(objectId);
+    this._selectedIds.delete(objectId);
+    this._renderTree();
+  }
+
+  _onAction(e) {
+    if (e.detail === 'hierarchy-group') this._group();
+  }
+
+  _onViewportSelect(e) {
+    const objects = Array.isArray(e.detail?.objects)
+      ? e.detail.objects
+      : (e.detail?.object ? [e.detail.object] : []);
+    // Only sync if at least one of the selected objects is in our nodes
+    const cycoIds = objects
+      .map(o => o?.userData?.cycoId)
+      .filter(id => id && this._nodes.some(n => n.id === id));
+    if (cycoIds.length === 0) return;
+    this._selectedIds.clear();
+    for (const id of cycoIds) this._selectedIds.add(id);
+    this._lastClickId = cycoIds[cycoIds.length - 1];
+    this._renderTree();
+  }
+
+  _onSelectionChanged(e) {
+    const objects = Array.isArray(e.detail?.objects) ? e.detail.objects : [];
+    const cycoIds = objects
+      .map(o => o?.userData?.cycoId)
+      .filter(id => id && this._nodes.some(n => n.id === id));
+    if (cycoIds.length === 0) {
+      this._selectedIds.clear();
+      this._renderTree();
+      return;
+    }
+    this._selectedIds.clear();
+    for (const id of cycoIds) this._selectedIds.add(id);
+    this._lastClickId = cycoIds[cycoIds.length - 1];
+    this._renderTree();
+  }
+
+  _onDeselectAll() {
+    this._selectedIds.clear();
+    this._renderTree();
+  }
+
+  _onSceneSwitch(e) {
+    const { sceneId } = e.detail ?? {};
+    if (!sceneId) return;
+    // Find scene name by ID in our map
+    for (const [name, id] of this._sceneIdMap) {
+      if (id === sceneId) {
+        this._activeScene = name;
+        // Update the scene label if visible — find it in DOM
+        const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
+        if (lbl) lbl.textContent = name;
+        break;
+      }
+    }
+  }
+
+  _syncSceneLabel() {
+    const sm = window.__cyco?.sceneManager;
+    if (!sm) return;
+    const activeId = sm.activeSceneId;
+    const activeName = sm.sceneRegistry.get(activeId)?.name ?? 'Scene';
+    this._activeScene = activeName;
+    this._scenes = [activeName];
+    this._sceneIdMap = new Map([[activeName, activeId]]);
+    const lbl = this._tree?.closest?.('.ce-hierarchy')?.querySelector?.('.ce-hier-scene-label');
+    if (lbl) lbl.textContent = activeName;
   }
 
   // ── Action → ObjectFactory type mapping ──────────────────────────────────
@@ -426,8 +490,16 @@ export class LeftPanel extends BasePanel {
     if (ids.length === 0) return;
 
     this._groupCounter++;
-    const groupId = 'grp-' + Date.now().toString(36);
+    const groupName = `Group ${this._groupCounter}`;
 
+    // ── Resolve the actual Three.js objects and their common parent ────────
+    const sm = window.__cyco?.sceneManager;
+    const cm = window.__cyco?.commandManager;
+    const objects = sm
+      ? ids.map(id => sm._findById(id)).filter(o => o && !o.userData?._isGizmo)
+      : [];
+
+    // ── UI tree bookkeeping ────────────────────────────────────────────────
     // Use the parent of the first selected node as the group's parent
     const firstNode  = this._nodes.find(n => n.id === ids[0]);
     const groupPid   = firstNode?.pid ?? 'root';
@@ -441,13 +513,79 @@ export class LeftPanel extends BasePanel {
       return !selSet.has(node?.pid);
     });
 
-    // Insert group at the position of the first top-level node
+    // ── Create a real Three.js Group and reparent the live scene objects ──
+    let createdGroupId = null;
+    if (sm && objects.length >= 2) {
+      const groupObj = new THREE.Group();
+      groupObj.name = groupName;
+      groupObj.userData.cycoEmptyRoot = true;
+      // Pre-stamp the cycoId so the UI row we insert below can use the same
+      // id and the cyco-hierarchy-add listener recognises the row as
+      // already-present (idempotent update, not duplicate insert).
+      groupObj.userData.cycoId =
+        'grp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+
+      // Use the first object's parent as the new group's parent so the group's
+      // world transform matches the cluster's old centre. We capture world
+      // transforms first because reparenting otherwise resets to local zero.
+      const firstObj = objects[0];
+      const targetParent = firstObj.parent ?? sm.getActiveScene?.();
+      const worldPos    = new THREE.Vector3();
+      const worldQuat   = new THREE.Quaternion();
+      const worldScale  = new THREE.Vector3();
+      firstObj.getWorldPosition(worldPos);
+      firstObj.getWorldQuaternion(worldQuat);
+      firstObj.getWorldScale(worldScale);
+
+      // Add the group under the same parent as the cluster so the visible
+      // centroid stays put, then re-parent the live children.
+      if (targetParent) targetParent.add(groupObj);
+      createdGroupId = groupObj.userData.cycoId;
+
+      // Re-parent each live object under the new group, preserving world
+      // transform so the visual cluster doesn't shift.
+      for (const obj of objects) {
+        if (!obj.parent || obj === groupObj) continue;
+        const wp = new THREE.Vector3();
+        const wq = new THREE.Quaternion();
+        const ws = new THREE.Vector3();
+        obj.getWorldPosition(wp);
+        obj.getWorldQuaternion(wq);
+        obj.getWorldScale(ws);
+        obj.parent.remove(obj);
+        groupObj.add(obj);
+        // Restore world transform (now via the group's new transform)
+        groupObj.updateMatrixWorld(true);
+        const inv = new THREE.Matrix4().copy(groupObj.matrixWorld).invert();
+        const m = new THREE.Matrix4().compose(wp, wq, ws);
+        m.premultiply(inv);
+        m.decompose(obj.position, obj.quaternion, obj.scale);
+      }
+      // Place the group where the cluster used to live
+      groupObj.position.copy(worldPos);
+      groupObj.quaternion.copy(worldQuat);
+      groupObj.scale.copy(worldScale);
+      groupObj.updateMatrixWorld(true);
+      sm._markDirty?.();
+      // Broadcast AFTER the UI row is inserted so the listener takes the
+      // idempotent path (updates an existing row instead of duplicating it).
+    }
+
+    // ── Insert the UI node and re-parent UI rows ──────────────────────────
+    // Use the real groupId (cycoId of the new Three.js Group) when available
+    // so that the cyco-hierarchy-add listener below doesn't insert a duplicate.
+    const groupId = createdGroupId ?? ('grp-' + Date.now().toString(36));
+
+    // Insert the UI row immediately (using the real cycoId if we have one),
+    // then update existing top-level rows to point at it. The hierarchy-add
+    // listener will fire _broadcastHierarchyAdd below and update this row
+    // in place (no duplicate).
     const insertIdx = this._nodes.findIndex(n => n.id === topLevel[0]);
-    this._nodes.splice(insertIdx, 0, {
+    this._nodes.splice(Math.max(0, insertIdx), 0, {
       id:      groupId,
       pid:     groupPid,
-      name:    `Group ${this._groupCounter}`,
-      type:    'object',
+      name:    groupName,
+      type:    createdGroupId ? 'group' : 'object',
       open:    true,
       locked:  false,
       visible: true,
@@ -458,6 +596,13 @@ export class LeftPanel extends BasePanel {
       const node = this._nodes.find(n => n.id === id);
       if (node) node.pid = groupId;
     });
+
+    if (createdGroupId && sm) {
+      // Now broadcast — the listener will see the matching id and update
+      // the row we just inserted instead of creating a duplicate.
+      const groupObj = sm._findById(createdGroupId);
+      if (groupObj) sm._broadcastHierarchyAdd(groupObj);
+    }
 
     this._selectedIds.clear();
     this._selectedIds.add(groupId);
@@ -618,6 +763,45 @@ export class LeftPanel extends BasePanel {
   _renderTree() {
     const container = this._tree;
     container.innerHTML = '';
+
+    // De-duplicate nodes. This is a safety net for a layout-restore edge
+    // case where the same window listener can be registered twice and a
+    // single cyco-hierarchy-add ends up pushing a fallback row AND a real
+    // row for the same scene object (different ids because the fallback
+    // uses a synthetic `'grp-' + Date.now()` id). Prefer the row whose id
+    // matches a live scene object over a synthetic one.
+    if (this._nodes.length) {
+      const sm = window.__cyco?.sceneManager;
+      const liveIds = new Set();
+      if (sm) {
+        sm.getActiveScene()?.traverse(o => {
+          if (o.userData?.cycoId) liveIds.add(o.userData.cycoId);
+        });
+      }
+      const seenId   = new Set();
+      const seenKey  = new Map();   // name+pid+type → live row (preferred) or first row
+      this._nodes = this._nodes.filter(n => {
+        if (!n || !n.id) return false;
+        if (seenId.has(n.id)) return false;
+        const key = `${n.name}__${n.pid}__${n.type}`;
+        const prior = seenKey.get(key);
+        if (prior) {
+          // Drop the row whose id is NOT in the live scene (the synthetic one).
+          if (liveIds.has(n.id) && !liveIds.has(prior.id)) {
+            // Replace: filter out prior by id, then keep this
+            this._nodes = this._nodes.filter(x => x.id !== prior.id);
+            seenId.delete(prior.id);
+            seenKey.set(key, n);
+            seenId.add(n.id);
+            return true;
+          }
+          return false;
+        }
+        seenId.add(n.id);
+        seenKey.set(key, n);
+        return true;
+      });
+    }
 
     const nodes   = this._nodes;
     const openSet = new Set(nodes.filter(n => n.open).map(n => n.id));
