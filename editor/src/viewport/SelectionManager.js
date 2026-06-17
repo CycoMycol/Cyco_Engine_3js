@@ -16,7 +16,6 @@
  */
 
 import * as THREE from 'three';
-import { SelectionBox }    from 'three/addons/interactive/SelectionBox.js';
 import { SelectionHelper } from 'three/addons/interactive/SelectionHelper.js';
 
 export class SelectionManager {
@@ -46,8 +45,10 @@ export class SelectionManager {
     this._gizmoDragging  = false; // true while TransformControls is actively dragging
     this._dragThreshold  = 5; // pixels
 
-    /** @type {SelectionBox|null} */
-    this._selectionBox   = null;
+    /** @type {THREE.Vector2} Marquee start in NDC. */
+    this._marqueeStartNDC  = new THREE.Vector2();
+    /** @type {THREE.Vector2} Marquee end in NDC. */
+    this._marqueeEndNDC    = new THREE.Vector2();
     /** @type {SelectionHelper|null} */
     this._selectionHelper = null;
 
@@ -176,12 +177,75 @@ export class SelectionManager {
   }
 
   _buildSelectionBox(renderer) {
-    const camera = this.engine.camera;
-    const scene  = this.engine.scene;
-    if (!camera || !scene) return;
-    this._selectionBox    = new SelectionBox(camera, scene);
+    // The marquee is a 2D HUD overlay. We use the existing three.js
+    // SelectionHelper (which draws a div rectangle in screen space) and pair
+    // it with a custom screen-space selection routine (`_selectByScreenRect`)
+    // that projects each candidate's world position to NDC and checks whether
+    // it falls inside the marquee rectangle. This is far more reliable than
+    // the three.js SelectionBox frustum test, which only checks the bounding
+    // sphere centre against a thin cone and routinely misses objects.
     this._selectionHelper = new SelectionHelper(renderer, 'selectBox');
     this._selectionHelper.enabled = false; // only active during drag
+  }
+
+  /**
+   * HUD-style marquee selection. Walks the scene, projects each candidate's
+   * world-space centre to NDC, and keeps the ones whose NDC X/Y falls inside
+   * the marquee rectangle. Returns a deduplicated list of selectable
+   * ancestors (same promotion rules as click selection).
+   * @param {THREE.Vector2} startNDC
+   * @param {THREE.Vector2} endNDC
+   * @returns {THREE.Object3D[]}
+   */
+  _selectByScreenRect(startNDC, endNDC) {
+    const camera = this.engine.camera;
+    const scene  = this.engine.scene;
+    if (!camera || !scene) return [];
+    camera.updateMatrixWorld();
+    camera.updateProjectionMatrix();
+
+    const minX = Math.min(startNDC.x, endNDC.x);
+    const maxX = Math.max(startNDC.x, endNDC.x);
+    const minY = Math.min(startNDC.y, endNDC.y);
+    const maxY = Math.max(startNDC.y, endNDC.y);
+
+    const _wp   = new THREE.Vector3();
+    const _ndc  = new THREE.Vector3();
+    const _sel  = [];
+    let _dbgScanned = 0, _dbgHit = 0, _dbgInRect = 0;
+
+    scene.traverse(obj => {
+      _dbgScanned++;
+      if (this._isNonSelectable(obj)) return;
+      // Only meshes / lines / points / instanced meshes have a meaningful
+      // world position to project. Groups/empties are kept via the ancestor
+      // walk below.
+      if (!(obj.isMesh || obj.isLine || obj.isPoints || obj.isInstancedMesh || obj.isBatchedMesh)) return;
+      // Skip anything that has no visible geometry.
+      if (obj.isMesh && !obj.geometry?.boundingSphere) {
+        try { obj.geometry.computeBoundingSphere(); } catch (e) { /* ignore */ }
+      }
+      obj.getWorldPosition(_wp);
+      _ndc.copy(_wp).project(camera);
+      _dbgHit++;
+      // Skip objects behind the camera (NDC z > 1) or out of the NDC range.
+      if (_ndc.z < -1 || _ndc.z > 1) return;
+      if (_ndc.x < minX || _ndc.x > maxX) return;
+      if (_ndc.y < minY || _ndc.y > maxY) return;
+      _dbgInRect++;
+      const ancestor = this._selectableAncestor(obj);
+      if (ancestor && ancestor !== scene) _sel.push(ancestor);
+    });
+    this._lastMarqueeDebug = { scanned: _dbgScanned, hit: _dbgHit, inRect: _dbgInRect, picked: _sel.length };
+
+    // Deduplicate (a child mesh inside a group would otherwise push the
+    // group ancestor twice when the group has multiple children).
+    const seen = new Set();
+    return _sel.filter(o => {
+      if (!o || seen.has(o.uuid)) return false;
+      seen.add(o.uuid);
+      return true;
+    });
   }
 
   // ─── Pointer events ───────────────────────────────────────────────────────
@@ -211,9 +275,8 @@ export class SelectionManager {
     this._pointerDownOnCanvas = true; // mark that the press originated on the canvas
 
     const ndc = this._toNDC(event);
-    if (this._selectionBox) {
-      this._selectionBox.startPoint.set(ndc.x, ndc.y, 0.5);
-    }
+    this._marqueeStartNDC.set(ndc.x, ndc.y);
+    this._marqueeEndNDC.set(ndc.x, ndc.y);
 
     // Decide if the press landed on an existing gizmo handle / box. If so the
     // gizmo owns the drag and OrbitControls + marquee should both stay out of
@@ -243,10 +306,9 @@ export class SelectionManager {
         this._isDragging = true;
         if (this._selectionHelper) this._selectionHelper.enabled = true;
       }
-      if (this._isDragging && this._selectionBox) {
+      if (this._isDragging) {
         const ndc = this._toNDC(event);
-        this._selectionBox.endPoint.set(ndc.x, ndc.y, 0.5);
-        this._selectionBox.select(); // live preview
+        this._marqueeEndNDC.set(ndc.x, ndc.y);
       }
     } else {
       // No button held — hover highlight
@@ -421,23 +483,12 @@ export class SelectionManager {
   }
 
   _finishMarquee(event) {
+    // 2D HUD-style selection: project each candidate's world centre to NDC
+    // and check whether it falls inside the marquee rectangle.
     const ndc = this._toNDC(event);
-    if (!this._selectionBox) return;
-    this._selectionBox.endPoint.set(ndc.x, ndc.y, 0.5);
-    // Promote each raw hit to its selectable container so the marquee
-    // highlights groups/empties, not the meshes inside them. Dedup by uuid
-    // because multiple child meshes inside the same group all roll up to the
-    // same ancestor.
-    const seen = new Set();
-    const objects = this._selectionBox
-      .select()
-      .filter(obj => !this._isNonSelectable(obj))
-      .map(obj => this._selectableAncestor(obj))
-      .filter(obj => {
-        if (!obj || seen.has(obj.uuid)) return false;
-        seen.add(obj.uuid);
-        return true;
-      });
+    this._marqueeEndNDC.set(ndc.x, ndc.y);
+
+    const objects = this._selectByScreenRect(this._marqueeStartNDC, this._marqueeEndNDC);
 
     const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
     if (!additive) this.clearSelection();
