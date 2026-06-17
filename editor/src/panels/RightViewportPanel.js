@@ -106,15 +106,15 @@ export class RightViewportPanel extends BasePanel {
     // 'individual' (centroid pivot, but each child keeps its own offset)
     this._multiModeBtn = _toolBtn(
       '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3" fill="currentColor"/><circle cx="5" cy="6" r="1.8"/><circle cx="19" cy="6" r="1.8"/><circle cx="5" cy="18" r="1.8"/><circle cx="19" cy="18" r="1.8"/></svg>',
-      'Multi-Select Pivot: Group',
+      'Multi-Select Pivot: Combined',
       () => {
         this._multiMode = this._multiMode === 'group' ? 'individual' : 'group';
-        this._multiModeBtn.title = `Multi-Select Pivot: ${this._multiMode === 'group' ? 'Group' : 'Individual'}`;
+        this._multiModeBtn.title = `Multi-Select Pivot: ${this._multiMode === 'group' ? 'Combined' : 'Individual'}`;
         this._multiModeBtn.classList.toggle('active', this._multiMode === 'individual');
         const tg = window.__cyco?.transformGizmo;
         if (tg?.setMultiMode) tg.setMultiMode(this._multiMode);
-        window.dispatchEvent(new CustomEvent('cyco-toast', {
-          detail: { message: `Multi-select pivot: ${this._multiMode}` }
+        window.dispatchEvent(new CustomEvent('cyco-multi-pivot-change', {
+          detail: { mode: this._multiMode }
         }));
       }
     );

@@ -872,6 +872,15 @@ export class TransformGizmo {
     // ── Multi-select: drive a virtual group object ─────────────────────────
     const locked = objects.filter(o => !o.userData?.cycoLocked);
     if (locked.length >= 2) {
+      if (this._multiMode === 'individual') {
+        // Individual pivot: gizmo on first selected object, pivot markers on the rest.
+        this._destroyMultiGroup();
+        this._multiTargets = locked.slice();
+        this._attachTo(locked[0]);
+        this._updatePivotIndicators(locked);
+        return;
+      }
+      this._hidePivotIndicators();
       this._attachToMulti(locked);
       return;
     }
@@ -912,6 +921,90 @@ export class TransformGizmo {
     this._multiPivots = [];
     this._multiRots = [];
     this._multiScales = [];
+    this._hidePivotIndicators();
+  }
+
+  /**
+   * Individual-pivot mode: show a small 3-axis crosshair on every
+   * multi-selected object EXCEPT the one the gizmo is attached to
+   * (the first selected).  This makes it obvious that the gizmo
+   * only controls the primary object, but rotation/scale still applies
+   * to every selected object around its own centre.
+   */
+  _updatePivotIndicators(objects) {
+    this._hidePivotIndicators();
+    if (!Array.isArray(objects) || objects.length < 2) return;
+    if (this._multiMode !== 'individual') return;
+    const scene = this.engine?.scene;
+    if (!scene) return;
+
+    this._pivotIndicators = [];
+    // skip index 0 — the gizmo already sits on it
+    for (let i = 1; i < objects.length; i++) {
+      const obj = objects[i];
+      if (!obj) continue;
+      const marker = this._buildPivotMarker();
+      // Position the marker at the object's world position so the indicator
+      // visually represents the per-object pivot.
+      obj.getWorldPosition(marker.position);
+      marker.userData._target = obj;
+      scene.add(marker);
+      this._pivotIndicators.push(marker);
+    }
+  }
+
+  _buildPivotMarker() {
+    const g = new THREE.Group();
+    g.name = '__cyco_pivot_indicator__';
+    g.userData._isGizmo = true;
+    const len = 0.18;
+    const mat = (hex) => new THREE.LineBasicMaterial({
+      color: hex,
+      depthTest: false,
+      depthWrite: false,
+      transparent: true,
+      opacity: 0.85,
+      toneMapped: false,
+    });
+    const xAxis = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(-len, 0, 0), new THREE.Vector3(len, 0, 0),
+    ]);
+    const yAxis = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, -len, 0), new THREE.Vector3(0, len, 0),
+    ]);
+    const zAxis = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, -len), new THREE.Vector3(0, 0, len),
+    ]);
+    const xLine = new THREE.Line(xAxis, mat(0xff4040));
+    const yLine = new THREE.Line(yAxis, mat(0x40ff40));
+    const zLine = new THREE.Line(zAxis, mat(0x4080ff));
+    // Make the marker always face the camera (billboard behaviour isn't critical,
+    // but at least render it on top of everything else).
+    xLine.renderOrder = yLine.renderOrder = zLine.renderOrder = 9999;
+    g.add(xLine); g.add(yLine); g.add(zLine);
+    // Tiny centre sphere
+    const dot = new THREE.Mesh(
+      new THREE.SphereGeometry(0.025, 8, 8),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd060, depthTest: false, transparent: true,
+        opacity: 0.95, toneMapped: false,
+      }),
+    );
+    dot.renderOrder = 9999;
+    g.add(dot);
+    return g;
+  }
+
+  _hidePivotIndicators() {
+    if (!this._pivotIndicators) return;
+    for (const m of this._pivotIndicators) {
+      m.parent?.remove(m);
+      m.traverse?.((c) => {
+        if (c.geometry) c.geometry.dispose?.();
+        if (c.material) c.material.dispose?.();
+      });
+    }
+    this._pivotIndicators = [];
   }
 
   _recomputeMultiCentroid() {
@@ -952,6 +1045,10 @@ export class TransformGizmo {
       if (this._multiTargets.length < 2) {
         this._destroyMultiGroup();
         this._attachTo(this._multiTargets[0] ?? null);
+      } else if (this._multiMode === 'individual') {
+        // Refresh pivot markers for the new (still multi) selection.
+        this._attachTo(this._multiTargets[0]);
+        this._updatePivotIndicators(this._multiTargets);
       } else {
         this._recomputeMultiCentroid();
       }
@@ -1402,8 +1499,11 @@ export class TransformGizmo {
     if (!this._matrixBefore || this._multiTargets.length < 2) return;
     const after = this._targetObject.matrix.clone();
     this._applyMultiMatricesFromGroupDelta(this._matrixBefore, after);
-    // Recompute the centroid so the gizmo's drag handle stays centered
-    this._recomputeMultiCentroid();
+    // Recompute the centroid so the gizmo's drag handle stays centered.
+    // In individual mode the gizmo is on the first selected object, so the
+    // "centroid" used for the toolbar status indicator still tracks the
+    // actual selection centre.
+    if (this._multiMode !== 'individual') this._recomputeMultiCentroid();
   }
 
   /**
@@ -1414,9 +1514,11 @@ export class TransformGizmo {
    *      Apply the gizmo's delta to every target as one rigid cluster. All
    *      objects rotate / scale / move around the shared centroid pivot.
    *  • _multiMode === 'individual':
-   *      Translate still uses the centroid (move-as-one), but rotation and
-   *      scale are applied around each object's OWN world pivot. So each
-   *      object keeps its own centre and its own local orientation.
+   *      Translate still uses the gizmo's translation delta (move-as-one),
+   *      but rotation and scale are applied around each object's OWN world
+   *      pivot. So each object keeps its own centre and its own local
+   *      orientation. The gizmo target (the first selected object) is left
+   *      alone — the gizmo's transform controls already drove it directly.
    */
   _applyMultiMatricesFromGroupDelta(beforeGroupMatrix, afterGroupMatrix) {
     if (this._multiTargets.length < 2) return;
@@ -1443,6 +1545,11 @@ export class TransformGizmo {
       const pivot  = this._multiPivots[i];
       const rot    = this._multiRots[i];
       const scale  = this._multiScales[i];
+
+      // In individual mode the gizmo itself has already transformed index 0
+      // (the primary selected object). Re-applying the delta would double-move
+      // it, so skip the per-target transform for the gizmo's own target.
+      if (deltaMode && i === 0) continue;
 
       let newPivot, newRot, newScale;
 
@@ -1486,12 +1593,33 @@ export class TransformGizmo {
 
   /**
    * Programmatic toggle between "Group" (centroid pivot, move all together)
-   * and "Individual" (centroid pivot, but each child keeps its own offset
-   * relative to the group; rotations and scales apply per-object).
+   * and "Individual" (gizmo attaches to first selected object; rotations and
+   * scales apply per-object around each object's own pivot).
    */
   setMultiMode(mode) {
     if (mode !== 'group' && mode !== 'individual') return;
+    if (this._multiMode === mode) return;
     this._multiMode = mode;
+    // Rebuild gizmo target for the new pivot strategy.
+    if (this._multiTargets && this._multiTargets.length >= 2) {
+      // Snapshot before destroying so we still know which objects to attach / mark.
+      const targets = this._multiTargets.slice();
+      if (mode === 'individual') {
+        // Attach gizmo to first selected object; show small pivot markers on the rest.
+        this._destroyMultiGroup();
+        // Temporarily clear so _attachTo's multi-guard doesn't block the
+        // single-object attach. Restore immediately after so the multi
+        // set is intact for drag / scale / rotate propagation.
+        this._multiTargets = [];
+        this._attachTo(targets[0]);
+        this._multiTargets = targets;
+        this._updatePivotIndicators(targets);
+      } else {
+        // Combined: rebuild the centroid virtual group.
+        this._hidePivotIndicators();
+        this._attachToMulti(targets);
+      }
+    }
   }
 
   getMultiMode() { return this._multiMode; }

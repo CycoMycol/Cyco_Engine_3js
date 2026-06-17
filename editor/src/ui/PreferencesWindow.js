@@ -125,6 +125,20 @@ export const DEFAULT_PREFS = {
   viewport: {
     backgroundColor: '#1a1a1a',
   },
+  mouse: {
+    // What each mouse button does in the viewport when clicking on empty space.
+    //  - 'select'  : click an object to select it; click empty space for marquee
+    //  - 'orbit'   : drag the camera around the current focus
+    //  - 'pan'     : drag to slide the camera target
+    //  - 'dolly'   : drag to zoom the camera in/out
+    //  - 'none'    : button is ignored
+    leftButton:   'select',
+    middleButton: 'pan',
+    rightButton:  'orbit',
+    wheel:        'dolly',   // 'dolly' | 'zoom' | 'none'
+    invertZoom:   false,
+    wheelSpeed:   1,
+  },
   general: {
     autoSaveInterval: 'off',
     showWelcomeScreen: true,

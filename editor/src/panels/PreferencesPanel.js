@@ -5,10 +5,11 @@
  *
  * Tabs:
  *  1. Keyboard  — rebind editor shortcuts
- *  2. Gizmo     — size, axis colors
- *  3. Grid      — reuses GridProperties component
- *  4. Renderer  — startup renderer, shadow map, pixel ratio
- *  5. General   — auto-save, welcome screen
+ *  2. Mouse     — left/right/middle/wheel actions
+ *  3. Gizmo     — size, axis colors
+ *  4. Grid      — reuses GridProperties component
+ *  5. Renderer  — startup renderer, shadow map, pixel ratio
+ *  6. General   — auto-save, welcome screen
  */
 
 import { BasePanel } from './BasePanel.js';
@@ -51,6 +52,8 @@ export class PreferencesPanel extends BasePanel {
     switch (tabId) {
       case 'keybindings':
         return { keybindings: this._clonePrefs(DEFAULT_KEYS) };
+      case 'mouse':
+        return { mouse: this._clonePrefs(DEFAULT_PREFS.mouse) };
       case 'gizmo':
         return { gizmo: this._clonePrefs(DEFAULT_PREFS.gizmo) };
       case 'renderer':
@@ -70,6 +73,7 @@ export class PreferencesPanel extends BasePanel {
 
     const defaults = this._getDefaultPrefsForTab(this._activeTab);
     if (defaults.keybindings) this._prefs.keybindings = defaults.keybindings;
+    if (defaults.mouse) this._prefs.mouse = defaults.mouse;
     if (defaults.gizmo) this._prefs.gizmo = defaults.gizmo;
     if (defaults.renderer) this._prefs.renderer = defaults.renderer;
     if (defaults.general) this._prefs.general = defaults.general;
@@ -125,6 +129,7 @@ export class PreferencesPanel extends BasePanel {
 
     const TABS = [
       { id: 'keybindings', label: 'Keyboard' },
+      { id: 'mouse',       label: 'Mouse' },
       { id: 'gizmo',       label: 'Gizmo' },
       { id: 'grid',        label: 'Grid' },
       { id: 'renderer',    label: 'Renderer' },
@@ -206,6 +211,7 @@ export class PreferencesPanel extends BasePanel {
     
     switch (tabId) {
       case 'keybindings': this._contentArea.appendChild(this._buildKeybindingsTab()); break;
+      case 'mouse':       this._contentArea.appendChild(this._buildMouseTab());       break;
       case 'gizmo':       this._contentArea.appendChild(this._buildGizmoTab());       break;
       case 'grid':        this._buildGridTab(this._contentArea);                      break;
       case 'renderer':    this._contentArea.appendChild(this._buildRendererTab());    break;
@@ -292,6 +298,120 @@ export class PreferencesPanel extends BasePanel {
       document.removeEventListener('keydown', onKey, true);
     };
     document.addEventListener('keydown', onKey, true);
+  }
+
+  // ── Mouse tab ─────────────────────────────────────────────────────────────
+
+  /** Action options for mouse buttons — values are matched against OrbitControls action ids or special editor verbs. */
+  _mouseActionOptions(forWheel = false) {
+    if (forWheel) {
+      return [
+        ['dolly', 'Dolly (Zoom)'],
+        ['zoom',  'Zoom (Alternative)'],
+        ['none',  'Disabled'],
+      ];
+    }
+    return [
+      ['select', 'Select / Marquee (default)'],
+      ['orbit',  'Orbit Camera'],
+      ['pan',    'Pan Camera'],
+      ['dolly',  'Dolly / Zoom'],
+      ['none',   'Disabled'],
+    ];
+  }
+
+  _buildMouseTab() {
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+
+    const hdr = document.createElement('div');
+    hdr.innerHTML =
+      '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Mouse</h3>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);line-height:1.4;">Choose what each mouse button and the scroll wheel do inside the viewport. Changes apply live — no restart needed.</div>';
+    root.appendChild(hdr);
+
+    // Make sure mouse prefs exist (older prefs may not have this block)
+    if (!this._prefs.mouse) {
+      this._prefs.mouse = this._clonePrefs(DEFAULT_PREFS.mouse);
+    }
+
+    const makeRow = (labelText, value, options, onChange, note = '') => {
+      const sel = select({ options, value, onChange: (v) => { onChange(v); this._applyPrefsChange(); } });
+      sel.style.minWidth = '220px';
+      const wrap = this._makeSettingRow(labelText, sel, note);
+      return wrap;
+    };
+
+    const mouse = this._prefs.mouse;
+
+    root.appendChild(makeRow(
+      'Left Button',
+      mouse.leftButton,
+      this._mouseActionOptions(false),
+      (v) => { mouse.leftButton = v; },
+      'Click an object to select it. Click empty space and drag for a marquee selection.'
+    ));
+
+    root.appendChild(makeRow(
+      'Middle Button',
+      mouse.middleButton,
+      this._mouseActionOptions(false),
+      (v) => { mouse.middleButton = v; }
+    ));
+
+    root.appendChild(makeRow(
+      'Right Button',
+      mouse.rightButton,
+      this._mouseActionOptions(false),
+      (v) => { mouse.rightButton = v; }
+    ));
+
+    root.appendChild(makeRow(
+      'Scroll Wheel',
+      mouse.wheel,
+      this._mouseActionOptions(true),
+      (v) => { mouse.wheel = v; },
+      'Dolly is the standard three.js behaviour; Zoom is a finer alternative.'
+    ));
+
+    // Invert zoom direction
+    const invertRow = document.createElement('div');
+    invertRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+    const invertLbl = document.createElement('span');
+    invertLbl.textContent = 'Invert Wheel Direction';
+    invertLbl.style.cssText = 'font-size:12px;color:var(--ce-text-primary,#e0e0e0);';
+    const invertCb = document.createElement('input');
+    invertCb.type = 'checkbox';
+    invertCb.checked = !!mouse.invertZoom;
+    invertCb.style.cursor = 'pointer';
+    invertCb.addEventListener('change', () => {
+      mouse.invertZoom = invertCb.checked;
+      this._applyPrefsChange();
+    });
+    invertRow.appendChild(invertLbl);
+    invertRow.appendChild(invertCb);
+    root.appendChild(invertRow);
+
+    // Wheel speed slider
+    root.appendChild(this._makeSliderRow(
+      'Wheel Speed',
+      mouse.wheelSpeed ?? 1,
+      0.1, 4, 0.1,
+      (v) => { mouse.wheelSpeed = v; },
+      'Multiplier applied to the wheel zoom step.',
+      1
+    ));
+
+    // Hint about how selection marquee works
+    const hint = document.createElement('div');
+    hint.style.cssText = 'margin-top:6px;padding:10px 12px;background:rgba(224,114,40,0.08);border:1px solid rgba(224,114,40,0.35);border-radius:6px;font-size:11px;color:var(--ce-text-primary,#ede8e0);line-height:1.45;';
+    hint.innerHTML =
+      '<strong>Tip:</strong> When <em>Left Button</em> is set to <em>Select / Marquee</em> (the default), ' +
+      'clicking on an object selects it, and clicking on empty space lets you drag a selection rectangle to select multiple objects at once. ' +
+      'Hold <kbd>Ctrl</kbd> / <kbd>Shift</kbd> while clicking to add or remove individual objects.';
+    root.appendChild(hint);
+
+    return root;
   }
 
   // ── Gizmo tab ────────────────────────────────────────────────────────────────

@@ -178,8 +178,9 @@ export class RightPanel extends BasePanel {
         if (tg?.setMultiMode) tg.setMultiMode(mode);
         syncPivotBtnState(mode);
         this._refreshMultiTransformDisplay(wrap, objects);
-        window.dispatchEvent(new CustomEvent('cyco-toast', {
-          detail: { message: `Pivot: ${mode}` }
+        // Notify the viewport toolbar (if present) so it stays in sync.
+        window.dispatchEvent(new CustomEvent('cyco-multi-pivot-change', {
+          detail: { mode }
         }));
       });
     });

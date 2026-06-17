@@ -125,6 +125,7 @@ export class ViewportEngine {
     this._onLoadingProgress     = this._onLoadingProgress.bind(this);
     this._onLoadingDone         = this._onLoadingDone.bind(this);
     this._onLoadingError        = this._onLoadingError.bind(this);
+    this._onPrefsChange         = this._onPrefsChange.bind(this);
 
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
     window.addEventListener('cyco-rvp-focus',               this._onFocus);
@@ -146,6 +147,63 @@ export class ViewportEngine {
     window.addEventListener('cyco-loading-progress',        this._onLoadingProgress);
     window.addEventListener('cyco-loading-done',            this._onLoadingDone);
     window.addEventListener('cyco-loading-error',           this._onLoadingError);
+    window.addEventListener('cyco-preferences-change',      this._onPrefsChange);
+    window.addEventListener('cyco-preferences-preview',     this._onPrefsChange);
+  }
+
+  /**
+   * Translate the user's `mouse.*` preferences (left/right/middle/wheel) into
+   * OrbitControls's `mouseButtons` config + zoom behaviour, and disable the
+   * editor-level selection marquee when the user has rebound the left button
+   * away from select.
+   */
+  _applyMouseButtonPrefs() {
+    if (!this.controls) return;
+    let prefs = null;
+    try { prefs = JSON.parse(localStorage.getItem('cyco-prefs') || '{}'); } catch {}
+    const m = prefs?.mouse ?? {};
+    const actionFor = (a) => {
+      switch (a) {
+        case 'orbit': return THREE.MOUSE.ROTATE;
+        case 'pan':   return THREE.MOUSE.PAN;
+        case 'dolly': return THREE.MOUSE.DOLLY;
+        default:      return -1; // -1 = disabled in OrbitControls
+      }
+    };
+    this.controls.mouseButtons = {
+      LEFT:   actionFor(m.leftButton   ?? 'select'),
+      MIDDLE: actionFor(m.middleButton ?? 'pan'),
+      RIGHT:  actionFor(m.rightButton  ?? 'orbit'),
+    };
+    // Wheel: 'dolly' is the standard three.js zoom; 'zoom' is a softer alternative
+    // (the engine's "Zoom" pass uses a slower dollyIn/dollyOut factor); 'none' disables.
+    const wheel = m.wheel ?? 'dolly';
+    this.controls.enableZoom = wheel !== 'none';
+    // Speed multiplier — apply to zoomSpeed (only meaningful when zoom is enabled)
+    const ws = Number(m.wheelSpeed ?? 1);
+    if (Number.isFinite(ws) && ws > 0) this.controls.zoomSpeed = ws;
+    // Inversion: three.js doesn't expose invert-zoom directly — handle it via
+    // a wheel event listener in the engine instead (see _setupMouseWheel).
+    this._setupMouseWheel(m);
+  }
+
+  _setupMouseWheel(mousePrefs = null) {
+    if (this._wheelHandler) {
+      this.rendererManager?.renderer?.domElement?.removeEventListener('wheel', this._wheelHandler);
+      this._wheelHandler = null;
+    }
+    if (!this.controls) return;
+    const wheelPref = mousePrefs?.wheel ?? 'dolly';
+    if (wheelPref !== 'none') return; // OrbitControls handles it
+    // wheel === 'none' — we block wheel so the camera doesn't dolly
+    const dom = this.rendererManager?.renderer?.domElement;
+    if (!dom) return;
+    this._wheelHandler = (e) => { e.preventDefault(); };
+    dom.addEventListener('wheel', this._wheelHandler, { passive: false });
+  }
+
+  _onPrefsChange(event) {
+    this._applyMouseButtonPrefs();
   }
 
   _debug(step, payload = {}) {
@@ -1397,11 +1455,7 @@ export class ViewportEngine {
     // rotation becomes degenerate and the orbit appears completely frozen.
     this.controls.minPolarAngle   = 0.01;             // ~0.57° from top
     this.controls.maxPolarAngle   = Math.PI - 0.01;  // ~178.9° — never south pole
-    this.controls.mouseButtons    = {
-      LEFT:   THREE.MOUSE.ROTATE,   // left-drag to orbit; click-only selection handled by SelectionManager
-      MIDDLE: THREE.MOUSE.PAN,
-      RIGHT:  THREE.MOUSE.ROTATE,   // right-drag also orbits
-    };
+    this._applyMouseButtonPrefs();
     this.controls.touches = {
       ONE: THREE.TOUCH.ROTATE,
       TWO: THREE.TOUCH.DOLLY_PAN,
