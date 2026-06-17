@@ -51,3 +51,42 @@ export function cePrompt(message, placeholder = '') {
 function _esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
 }
+
+/**
+ * ceConfirm(message, { okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {})
+ *   → Promise<boolean>
+ * Replacement for window.confirm() — works inside sandboxed iframes
+ * (VS Code Live Preview blocks the native dialog). `danger: true` renders
+ * the OK button in destructive style.
+ */
+export function ceConfirm(message, { okLabel = 'OK', cancelLabel = 'Cancel', danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement('dialog');
+    dlg.className = 'ce-mini-dialog';
+    dlg.innerHTML = `
+      <div class="ce-mini-msg">${_esc(message)}</div>
+      <div class="ce-mini-actions">
+        <button class="ce-btn ghost ce-mini-cancel">${_esc(cancelLabel)}</button>
+        <button class="ce-btn ${danger ? 'danger' : 'primary'} ce-mini-ok">${_esc(okLabel)}</button>
+      </div>
+    `;
+    document.body.appendChild(dlg);
+
+    const okBtn  = dlg.querySelector('.ce-mini-ok');
+    const cancel = dlg.querySelector('.ce-mini-cancel');
+
+    function accept()  { dlg.close(); dlg.remove(); resolve(true);  }
+    function dismiss() { dlg.close(); dlg.remove(); resolve(false); }
+
+    okBtn.addEventListener('click', accept);
+    cancel.addEventListener('click', dismiss);
+    dlg.addEventListener('click', (e) => { if (e.target === dlg) dismiss(); });
+    dlg.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter')  accept();
+      if (e.key === 'Escape') dismiss();
+    });
+
+    dlg.showModal();
+    okBtn.focus();
+  });
+}

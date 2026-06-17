@@ -96,7 +96,11 @@ const ProjectLocalBridgeStorage = {
         snapshot,
       }),
     });
-    this.debug('writeSnapshot:complete', response);
+    this.debug('writeSnapshot:complete', {
+      ok: !!response?.ok,
+      assetsWritten: response?.assetsWritten ?? 0,
+      assetsSkipped: response?.assetsSkipped ?? 0,
+    });
     return !!response?.ok;
   },
 
@@ -127,6 +131,24 @@ const ProjectLocalBridgeStorage = {
       method: 'POST',
       body: JSON.stringify({ projectPath: target }),
     }, { timeoutMs: 10_000 });
+  },
+
+  /**
+   * Delete a file or empty folder from disk via the bridge. Used by the
+   * asset browser to permanently remove a deleted asset so the watcher
+   * does not immediately re-inject it.
+   *
+   * `absolutePath` MUST be an absolute path inside the attached project
+   * folder. The bridge enforces path-traversal protection.
+   */
+  async deleteFile({ absolutePath } = {}) {
+    if (!absolutePath) {
+      throw new Error('No absolutePath was provided to deleteFile.');
+    }
+    return this.fetchJson('/delete', {
+      method: 'POST',
+      body: JSON.stringify({ path: absolutePath }),
+    }, { timeoutMs: 5_000 });
   },
 
   /**

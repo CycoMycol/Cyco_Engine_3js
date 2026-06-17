@@ -166,10 +166,17 @@ const ProjectManager = {
     // 2. A bridge file target was attached (Save As → local save bridge)
     if (ProjectLocalBridgeStorage.hasTarget()) {
       try {
-        await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
+        const result = await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
         const fileName = this._projectFileName(snapshot);
+        const projectPath = ProjectLocalBridgeStorage.getProjectPath();
+        const written = result?.assetsWritten ?? 0;
+        const skipped = result?.assetsSkipped ?? 0;
+        const assetPart = written > 0
+          ? ` · ${written} asset${written === 1 ? '' : 's'} written`
+            + (skipped > 0 ? `, ${skipped} skipped (newer on disk)` : '')
+          : '';
         window.dispatchEvent(new CustomEvent('cyco-toast', {
-          detail: { message: `Saved ${fileName} to ${ProjectLocalBridgeStorage.getProjectPath() || 'project folder'}` },
+          detail: { message: `Saved ${fileName} → ${projectPath || 'project folder'}${assetPart}` },
         }));
         return true;
       } catch (err) {
@@ -598,6 +605,62 @@ const ProjectManager = {
     this._save();
     document.dispatchEvent(new CustomEvent('cyco-project-change'));
     return true;
+  },
+
+  /**
+   * Convert a tree path (e.g. ['prefabs', 'Box Prefab.cyprefab']) to an
+   * absolute disk path inside the project folder, using the path separator
+   * appropriate for the current platform.
+   */
+  treePathToDiskPath(pathArray) {
+    if (!this._project) return null;
+    const sep = this._project.path?.includes('\\') ? '\\' : '/';
+    const parts = [this._project.path, ...pathArray].map(p => String(p).trim()).filter(Boolean);
+    return parts.join(sep);
+  },
+
+  /**
+   * Permanently delete a node (file or folder) from BOTH the in-memory tree
+   * AND the on-disk project folder. The bridge's /delete endpoint already
+   * handles directories recursively, so a single call removes the whole
+   * subtree on disk.
+   *
+   * Returns { ok: boolean, deleted: string[], errors: string[] }.
+   *
+   * Without this, `deleteNode` only mutates the in-memory tree. The watcher
+   * then re-injects the file from disk on the next poll, undoing the delete.
+   */
+  async deleteFromDisk(pathArray) {
+    if (!this._project) return { ok: false, deleted: [], errors: ['No project open'] };
+    if (!pathArray?.length) return { ok: false, deleted: [], errors: ['Empty path'] };
+    const node = this._getNodeAt(pathArray);
+    if (!node) return { ok: false, deleted: [], errors: ['Node not found'] };
+
+    const deleted = [];
+    const errors  = [];
+
+    const haveBridge = !!ProjectLocalBridgeStorage.hasTarget?.() &&
+                       typeof ProjectLocalBridgeStorage.deleteFile === 'function';
+
+    if (haveBridge) {
+      const abs = this.treePathToDiskPath(pathArray);
+      if (abs) {
+        try {
+          const r = await ProjectLocalBridgeStorage.deleteFile({ absolutePath: abs });
+          if (r && r.ok) deleted.push(pathArray.join('/'));
+          else errors.push(`${pathArray.join('/')}: ${r?.error || 'unknown error'}`);
+        } catch (err) {
+          errors.push(`${pathArray.join('/')}: ${err?.message || String(err)}`);
+        }
+      }
+    }
+
+    // Always remove from the in-memory tree, even if the bridge call failed,
+    // so the user-visible state matches the delete action. _save() will write
+    // a new .cyco without the node and re-materialise the remaining files.
+    this.deleteNode(pathArray);
+
+    return { ok: errors.length === 0, deleted, errors };
   },
 
   /** True if a tree node is a file asset (not a folder). */

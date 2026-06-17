@@ -2,7 +2,7 @@
 
 import ProjectManager       from '../project/ProjectManager.js';
 import ProjectLocalBridgeStorage from '../project/ProjectLocalBridgeStorage.js';
-import { cePrompt }         from './ce-prompt.js';
+import { cePrompt, ceConfirm } from './ce-prompt.js';
 
 const FILTER_OPTIONS = [
   { value: 'all',       label: 'All'       },
@@ -31,9 +31,15 @@ export class AssetBrowser {
     this._viewBtns  = null;
 
     this._onProjectChange = () => this._refresh();
-    this._onPrefabSaved   = (e) => this._onPrefabSaved(e);
+    // Use bound copies of the methods so the listener stays valid even if
+    // an instance field with the same name is reassigned later. Storing the
+    // bound method on a *separate* field prevents the previous pattern
+    // `(e) => this._onPrefabSaved(e)` from rebinding the instance slot to a
+    // self-referential arrow function (which would infinite-loop on the
+    // first cyco-prefab-saved event).
+    this._boundOnPrefabSaved = (e) => this._onPrefabSaved(e);
     document.addEventListener('cyco-project-change', this._onProjectChange);
-    document.addEventListener('cyco-prefab-saved',   this._onPrefabSaved);
+    document.addEventListener('cyco-prefab-saved',   this._boundOnPrefabSaved);
   }
 
   get element() {
@@ -43,7 +49,7 @@ export class AssetBrowser {
 
   destroy() {
     document.removeEventListener('cyco-project-change', this._onProjectChange);
-    document.removeEventListener('cyco-prefab-saved',   this._onPrefabSaved);
+    document.removeEventListener('cyco-prefab-saved',   this._boundOnPrefabSaved);
   }
 
   /**
@@ -101,6 +107,7 @@ export class AssetBrowser {
       }
     });
     this._initFileDrop(this._contentEl);
+    this._initContextMenu(this._contentEl);
 
     this._refresh();
     return root;
@@ -532,17 +539,221 @@ export class AssetBrowser {
     ProjectManager.addFolder(this._currentPath, safe);
   }
 
-  _deleteSelected() {
+  async _deleteSelected() {
     if (!this._selected.size) return;
     const count = this._selected.size;
     const label = count === 1
       ? `"${[...this._selected][0]}"`
       : `${count} items`;
-    if (!window.confirm(`Delete ${label}? This cannot be undone.`)) return;
-    this._selected.forEach(name => {
-      ProjectManager.deleteNode([...this._currentPath, name]);
-    });
+    const ok = await ceConfirm(
+      `Delete ${label}? This cannot be undone.`,
+      { okLabel: 'Delete', danger: true }
+    );
+    if (!ok) return;
+    const projectPath = ProjectManager.getCurrent()?.path;
+    const failures = [];
+    for (const name of this._selected) {
+      const nodePath = [...this._currentPath, name];
+      const result = await ProjectManager.deleteFromDisk(nodePath);
+      if (!result?.ok) {
+        failures.push({ name, errors: result?.errors || [] });
+      }
+    }
     this._selected.clear();
+    this._refresh();
+    window.dispatchEvent(new CustomEvent('cyco-toast', {
+      detail: {
+        message: failures.length
+          ? `Deleted ${count - failures.length}/${count} · ${failures.length} failed`
+          : `Deleted ${count} ${count === 1 ? 'item' : 'items'} from ${projectPath ? projectPath : 'project'}`,
+      },
+    }));
+  }
+
+  // ── Context menu (right-click) ───────────────────────────────────────────
+
+  _initContextMenu(target) {
+    target.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      // Find the item under the cursor (its data-name ancestor).
+      const itemEl = e.target.closest('[data-name]');
+      if (itemEl) {
+        const name = itemEl.dataset.name;
+        // Select on right-click if not already part of the selection.
+        if (!this._selected.has(name)) {
+          if (!(e.ctrlKey || e.metaKey)) this._selected.clear();
+          this._selected.add(name);
+          this._refreshContentSelection();
+        }
+        this._showContextMenu(e.clientX, e.clientY, this._buildItemMenu(name));
+      } else {
+        // Right-click on empty space — clear selection and show folder menu.
+        this._selected.clear();
+        this._refreshContentSelection();
+        this._showContextMenu(e.clientX, e.clientY, this._buildFolderMenu());
+      }
+    });
+  }
+
+  _buildItemMenu(name) {
+    const node = ProjectManager.getFolderContents(this._currentPath)[name];
+    const isFile = ProjectManager.isFileNode(node);
+    const items = [];
+
+    if (!isFile) {
+      items.push({ label: 'Open',  onClick: () => {
+        this._currentPath = [...this._currentPath, name];
+        this._selected.clear();
+        this._refresh();
+      }});
+    } else if (node.type === 'prefab') {
+      items.push({ label: 'Instantiate in Scene', onClick: () => {
+        window.dispatchEvent(new CustomEvent('cyco-instantiate-prefab', {
+          detail: { fileName: name }
+        }));
+      }});
+    } else if (node.type === 'script') {
+      items.push({ label: 'Open in Editor', onClick: () => {
+        // TODO: hook into a script editor; for now we surface a toast.
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Script editor not implemented yet: ${name}` },
+        }));
+      }});
+    } else if (node.type === 'texture') {
+      items.push({ label: 'Use as…', onClick: () => {
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Drag-and-drop '${name}' into a slot to use it.` },
+        }));
+      }});
+    }
+
+    items.push({ separator: true });
+    items.push({ label: 'Rename…', onClick: () => this._renameItem(name) });
+    items.push({ label: `Delete "${name}"`, danger: true, onClick: () => this._deleteSelected() });
+    return items;
+  }
+
+  _buildFolderMenu() {
+    return [
+      { label: 'New Folder…',   onClick: () => this._addFolder() },
+      { label: 'New Script…',   onClick: () => this._createAsset('script',   '.js',  '// new script\n\nexport function init() {}\n') },
+      { label: 'New Material…', onClick: () => this._createAsset('material', '.mtl',  JSON.stringify({ name: 'New Material', color: '#cccccc' }, null, 2) + '\n') },
+      { label: 'New Texture (import from disk)…', onClick: () => this._importAssetOfType('texture') },
+      { label: 'New Audio (import from disk)…',    onClick: () => this._importAssetOfType('audio') },
+      { label: 'New Model (import from disk)…',    onClick: () => this._importAssetOfType('model') },
+      { label: 'New Font (import from disk)…',     onClick: () => this._importAssetOfType('font') },
+      { separator: true },
+      { label: 'Paste', disabled: true, onClick: () => {
+        window.dispatchEvent(new CustomEvent('cyco-toast', { detail: { message: 'Paste is not implemented yet.' } }));
+      }},
+    ];
+  }
+
+  _showContextMenu(x, y, items) {
+    _closeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'ce-ctx-menu';
+    for (const item of items) {
+      if (item.separator) {
+        const sep = document.createElement('div');
+        sep.className = 'ce-ctx-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      const el = document.createElement('div');
+      el.className = 'ce-ctx-item' + (item.danger ? ' is-danger' : '');
+      el.innerHTML = `<span class="ce-ctx-label">${_esc(item.label)}</span>`;
+      if (item.disabled) el.style.opacity = '0.4';
+      el.addEventListener('click', () => {
+        if (item.disabled) return;
+        _closeContextMenu();
+        try { item.onClick && item.onClick(); }
+        catch (err) { console.warn('[AssetBrowser] context menu action failed', err); }
+      });
+      menu.appendChild(el);
+    }
+    // Position then clamp to viewport.
+    menu.style.left = `${x}px`;
+    menu.style.top  = `${y}px`;
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    if (rect.right  > window.innerWidth)  menu.style.left = `${window.innerWidth - rect.width  - 4}px`;
+    if (rect.bottom > window.innerHeight) menu.style.top  = `${window.innerHeight - rect.height - 4}px`;
+    _activeContextMenu = menu;
+    // Defer so the current contextmenu event finishes before installing the
+    // outside-click handler — otherwise the menu closes immediately.
+    setTimeout(() => {
+      document.addEventListener('mousedown', _onOutsideContextClick, true);
+      document.addEventListener('keydown',   _onContextEsc, true);
+      window.addEventListener('resize',      _closeContextMenu);
+      window.addEventListener('blur',        _closeContextMenu);
+    }, 0);
+  }
+
+  async _createAsset(assetType, ext, template) {
+    const project = ProjectManager.getCurrent();
+    if (!project) return;
+    const baseName = await cePrompt(`New ${assetType} name:`, `New ${assetType[0].toUpperCase()}${assetType.slice(1)}`);
+    if (!baseName) return;
+    const safeStem = String(baseName).trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    if (!safeStem) return;
+    const fileName = safeStem.endsWith(ext) ? safeStem : `${safeStem}${ext}`;
+    ProjectManager.importAssetFile(this._currentPath, {
+      name: fileName,
+      mimeType: 'text/plain',
+      size: template.length,
+      data: 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(template))),
+      metadata: { createdAt: Date.now(), source: 'asset-browser-new' },
+    });
+    this._currentPath = [...this._currentPath];
+    this._selected.clear();
+    this._selected.add(fileName);
+    this._refresh();
+  }
+
+  async _importAssetOfType(assetType) {
+    window.dispatchEvent(new CustomEvent('cyco-toast', {
+      detail: { message: `Drop a ${assetType} file into this folder, or use the toolbar Import button.` },
+    }));
+  }
+
+  async _renameItem(oldName) {
+    const project = ProjectManager.getCurrent();
+    if (!project) return;
+    const newName = await cePrompt(`Rename "${oldName}" to:`, oldName);
+    if (!newName || newName === oldName) return;
+    const safe = String(newName).trim().replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+    if (!safe || safe === oldName) return;
+    const parent = ProjectManager.getFolderContents(this._currentPath);
+    if (!parent || !(oldName in parent)) return;
+    if (safe in parent) {
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Cannot rename: "${safe}" already exists.` },
+      }));
+      return;
+    }
+    // Re-key the in-memory node. The on-disk file will be re-materialised
+    // on the next Save with the new name. If the bridge is attached, also
+    // try to rename the file on disk to keep watcher state in sync.
+    const node = parent[oldName];
+    delete parent[oldName];
+    parent[safe] = node;
+    ProjectManager._save();
+    document.dispatchEvent(new CustomEvent('cyco-project-change'));
+    if (ProjectLocalBridgeStorage.hasTarget?.()) {
+      const oldAbs = ProjectManager.treePathToDiskPath([...this._currentPath, oldName]);
+      const newAbs = ProjectManager.treePathToDiskPath([...this._currentPath, safe]);
+      if (oldAbs && newAbs) {
+        // Best-effort: just delete the old file and let the next Save
+        // re-materialise the new one. A true cross-platform rename is a
+        // future improvement; for now we keep the rename flow simple.
+        try { await ProjectLocalBridgeStorage.deleteFile({ absolutePath: oldAbs }); }
+        catch (_) { /* ignore */ }
+      }
+    }
+    this._selected.clear();
+    this._selected.add(safe);
+    this._refresh();
   }
 
   _setView(mode) {
@@ -704,4 +915,24 @@ function _emptyMsg(text) {
 
 function _esc(s) {
   return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Context menu helpers (module-scope so the menu can be dismissed from
+//    any callback, including ones fired by external listeners) ─────────────
+let _activeContextMenu = null;
+function _closeContextMenu() {
+  if (_activeContextMenu) {
+    _activeContextMenu.remove();
+    _activeContextMenu = null;
+  }
+  document.removeEventListener('mousedown', _onOutsideContextClick, true);
+  document.removeEventListener('keydown',   _onContextEsc, true);
+  window.removeEventListener('resize',     _closeContextMenu);
+  window.removeEventListener('blur',       _closeContextMenu);
+}
+function _onOutsideContextClick(e) {
+  if (_activeContextMenu && !_activeContextMenu.contains(e.target)) _closeContextMenu();
+}
+function _onContextEsc(e) {
+  if (e.key === 'Escape') _closeContextMenu();
 }

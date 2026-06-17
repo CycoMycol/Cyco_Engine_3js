@@ -226,6 +226,7 @@ if (typeof window !== 'undefined') {
     prefabManager,
     dockviewApi: dockApi,
     pickDirectory,
+    projectManager: ProjectManager,
     get cloudSystem()     { return viewportEngine.cloudSystem; },
     get cloudSystem2()    { return viewportEngine.cloudSystem2; },
     get gradientSky()     { return viewportEngine.gradientSky; },

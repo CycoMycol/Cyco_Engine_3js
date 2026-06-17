@@ -328,8 +328,85 @@ function guessAssetType(name) {
   if (['js', 'ts', 'mjs', 'cjs'].includes(ext)) return 'script';
   if (['ttf', 'otf', 'woff', 'woff2'].includes(ext)) return 'font';
   if (['mtl', 'mat'].includes(ext)) return 'material';
+  if (ext === 'cyprefab') return 'prefab';
   if (['cyco', 'json'].includes(ext)) return 'engine-state';
   return 'file';
+}
+
+/**
+ * Decode a data URL of the form `data:[<mime>];base64,<payload>` (or `data:,
+ * <plain>`) into a raw Buffer. Returns null when the input is empty or not a
+ * recognisable data URL — callers fall back to writing the raw string.
+ */
+function decodeDataUrl(data) {
+  if (typeof data !== 'string' || !data) return null;
+  const match = /^data:([^;,]*)((?:;[^,]*)?),(.*)$/s.exec(data);
+  if (!match) return null;
+  const meta = match[2] || '';
+  const payload = match[3];
+  if (meta.includes(';base64')) {
+    try { return Buffer.from(payload, 'base64'); }
+    catch (_) { return null; }
+  }
+  try { return Buffer.from(decodeURIComponent(payload), 'utf8'); }
+  catch (_) { return Buffer.from(payload, 'utf8'); }
+}
+
+/**
+ * Recursively materialise a project `tree` to disk. Folder nodes become
+ * directories; file nodes (`_cycoType === 'file'`) have their `data` field
+ * decoded and written to the corresponding path. The traversal is bounded by
+ * `projectPath` to prevent any node name containing `..` from escaping it.
+ *
+ * Skips writes when the on-disk file already exists and is newer than the
+ * snapshot timestamp — protects files the user may have hand-edited
+ * externally from being silently overwritten on the next Save.
+ */
+async function writeTreeToDisk(projectPath, tree, snapshotTimestamp = Date.now()) {
+  if (!tree || typeof tree !== 'object') return { written: 0, skipped: 0 };
+  let written = 0;
+  let skipped = 0;
+  async function visit(node, relParts) {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) return;
+    for (const [name, child] of Object.entries(node)) {
+      const safeName = String(name).replace(/[\\/:*?"<>|]/g, '_').replace(/^\.+/, '');
+      if (!safeName || safeName === '..' || safeName === '.') continue;
+      const childParts = [...relParts, safeName];
+      const childRel = childParts.join('/');
+      if (childRel.includes('..')) continue;
+      const childAbs = path.join(projectPath, ...childParts);
+      if (!childAbs.startsWith(projectPath)) continue;
+      if (child && typeof child === 'object' && child._cycoType === 'file') {
+        await fs.mkdir(path.dirname(childAbs), { recursive: true });
+        // Don't clobber a file the user just edited on disk after the save.
+        try {
+          const st = await fs.stat(childAbs);
+          if (st.mtimeMs > snapshotTimestamp) {
+            skipped += 1;
+            continue;
+          }
+        } catch (_) { /* not present — write it */ }
+        const buf = decodeDataUrl(child.data);
+        if (buf) {
+          await fs.writeFile(childAbs, buf);
+        } else if (typeof child.data === 'string' && child.data.length) {
+          await fs.writeFile(childAbs, child.data, 'utf8');
+        } else if (child.metadata && typeof child.metadata.prefabName === 'string' && child.type === 'prefab') {
+          // Snapshot stored the prefab as a JSON string in `data` (legacy).
+          await fs.writeFile(childAbs, String(child.data || ''), 'utf8');
+        } else {
+          await fs.writeFile(childAbs, '', 'utf8');
+        }
+        written += 1;
+      } else if (child && typeof child === 'object') {
+        await fs.mkdir(childAbs, { recursive: true });
+        await visit(child, childParts);
+      }
+    }
+  }
+  await visit(tree, []);
+  return { written, skipped };
 }
 
 /**
@@ -465,11 +542,27 @@ async function writeProject(payload) {
     }
   }
 
+  // Materialise every file in the project tree to its corresponding folder
+  // on disk. Without this step, "Save" only writes the .cyco snapshot — the
+  // .cyprefab, textures, scripts, etc. stay in the JSON snapshot and never
+  // appear in the project folder. The watcher that triggers refreshFromDisk
+  // also relies on these files actually existing on disk.
+  let assetsWritten = 0;
+  let assetsSkipped = 0;
+  if (payload.snapshot?.tree && typeof payload.snapshot.tree === 'object') {
+    const stamp = Number(payload.snapshot?.savedAt) || Number(payload.snapshot?.updatedAt) || Date.now();
+    const result = await writeTreeToDisk(projectPath, payload.snapshot.tree, stamp);
+    assetsWritten = result.written;
+    assetsSkipped = result.skipped;
+  }
+
   return {
     ok: true,
     projectPath,
     filePath,
     fileName: path.basename(filePath),
+    assetsWritten,
+    assetsSkipped,
   };
 }
 
