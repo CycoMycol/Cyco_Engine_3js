@@ -307,18 +307,7 @@ export class TransformGizmo {
   _getSelectionOutlinePrefs() {
     const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
     const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
-    // Use the constructor-injected selectionManager, not `this.engine?.selectionManager`
-    // — the ViewportEngine doesn't expose the SelectionManager on itself,
-    // so the previous code was reading `undefined?.selected?.size` which
-    // always evaluated to 0 → `isMulti` was always false → the Box Gizmo
-    // always fell back to `singleSelect` prefs, even when ≥2 objects were
-    // actually selected.  That mismatch made the wireframe color flash
-    // (default white-blue) the moment the user moved a slider on the
-    // First Selected / Multi Select tabs, because the live outline
-    // groups correctly picked up the right colours from the pipeline
-    // while the Box Gizmo wireframe stayed stuck on the defaults.
-    const selMgr = this.selectionManager;
-    const selectedCount = selMgr?.selected?.size ?? 0;
+    const selectedCount = this.engine?.selectionManager?.selected?.size ?? 0;
     const isMulti = selectedCount > 1;
     if (isMulti) {
       return {
