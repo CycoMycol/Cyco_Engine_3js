@@ -513,10 +513,19 @@ export class LeftPanel extends BasePanel {
       return !selSet.has(node?.pid);
     });
 
-    // ── Create a real Three.js Group and reparent the live scene objects ──
+    // ── Create a "GameObject" container (same as the editor's Create Empty)
+    //     and reparent the live scene objects under it.
+    //
+    // We use `THREE.Object3D` (the editor's "Empty / GameObject" primitive,
+    // see `ObjectFactory.create('Empty')`) rather than `THREE.Group` so the
+    // resulting container behaves like any other scene object: it shows up
+    // in the hierarchy as type "object", the Properties panel renders the
+    // full Add-Component UI for it (Rigid Body, Collider, Script, etc.), and
+    // it matches the convention used by the rest of the editor (e.g. the
+    // "Create Empty" command in the hierarchy context menu).
     let createdGroupId = null;
     if (sm && objects.length >= 2) {
-      const groupObj = new THREE.Group();
+      const groupObj = new THREE.Object3D();
       groupObj.name = groupName;
       groupObj.userData.cycoEmptyRoot = true;
       // Pre-stamp the cycoId so the UI row we insert below can use the same
@@ -585,7 +594,7 @@ export class LeftPanel extends BasePanel {
       id:      groupId,
       pid:     groupPid,
       name:    groupName,
-      type:    createdGroupId ? 'group' : 'object',
+      type:    createdGroupId ? 'object' : 'object',
       open:    true,
       locked:  false,
       visible: true,

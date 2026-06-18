@@ -1583,24 +1583,34 @@ export class PostProcessingPipeline {
   }
 
   /**
-   * Build a LineSegments mesh whose geometry traces the silhouette of `obj`.
-   * Works for meshes (uses EdgesGeometry on the mesh's own geometry), groups
-   * (traverses to gather child edges), and lights / cameras (uses a small
-   * bounding-box wireframe).
+   * Build a wireframe outline mesh for `obj`.
    *
-   * The LineSegments is tagged with the source object's `cycoId` via
-   * `userData.cycoSourceId` so it can be matched back to its source if needed.
+   * The outline is rendered as a `THREE.Mesh` with `MeshBasicMaterial` in
+   * `wireframe: true` mode rather than a `LineSegments` with `LineBasicMaterial`.
+   * WebGL hardware line width is capped at 1 px on virtually every driver, so
+   * `LineBasicMaterial` outlines are visually invisible against bright scene
+   * backgrounds. Wireframe meshes render as actual triangles and are clearly
+   * visible regardless of driver line-width limits.
+   *
+   * The outline geometry is the source mesh's geometry (cloned so we can
+   * scale it without affecting the source) scaled slightly outward (~1.03x)
+   * so the wireframe sits just outside the source surface and is not z-fought
+   * by the source's own triangles.
+   *
+   * For non-meshes (lights / cameras / groups), a BoxGeometry sized to the
+   * object's world-space AABB is used as a wireframe fallback.
    *
    * @param {THREE.Object3D} obj
    * @param {THREE.Color} color
-   * @returns {THREE.LineSegments|null}
+   * @returns {THREE.Mesh|null}
    */
   _buildSecondaryOutlineFor(obj, color) {
     if (!obj) return null;
     let geometry = null;
     if (obj.isMesh || obj.isInstancedMesh || obj.isSkinnedMesh) {
       try {
-        geometry = new THREE.EdgesGeometry(obj.geometry, 25);
+        geometry = obj.geometry.clone();
+        geometry.scale(1.03, 1.03, 1.03); // push outward
       } catch (e) {
         geometry = null;
       }
@@ -1614,50 +1624,27 @@ export class PostProcessingPipeline {
       box.getSize(size);
       const center = new THREE.Vector3();
       box.getCenter(center);
-      // Build a 12-edge wireframe manually so it doesn't depend on the
-      // object being a mesh with valid geometry.
-      const min = box.min, max = box.max;
-      const v = [
-        new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, min.y, min.z),
-        new THREE.Vector3(max.x, max.y, min.z), new THREE.Vector3(min.x, max.y, min.z),
-        new THREE.Vector3(min.x, min.y, max.z), new THREE.Vector3(max.x, min.y, max.z),
-        new THREE.Vector3(max.x, max.y, max.z), new THREE.Vector3(min.x, max.y, max.z),
-      ];
-      // Edges (pairs of vertex indices).
-      const idx = [
-        0,1, 1,2, 2,3, 3,0, // bottom
-        4,5, 5,6, 6,7, 7,4, // top
-        0,4, 1,5, 2,6, 3,7, // verticals
-      ];
-      const positions = new Float32Array(idx.length * 3);
-      for (let i = 0; i < idx.length; i++) {
-        const p = v[idx[i]];
-        positions[i*3+0] = p.x;
-        positions[i*3+1] = p.y;
-        positions[i*3+2] = p.z;
-      }
-      geometry = new THREE.BufferGeometry();
-      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      if (size.lengthSq() < 1e-6) return null;
+      // Center the box geometry at the local origin so it follows the source
+      // object's transform correctly (no translation drift).
+      geometry = new THREE.BoxGeometry(size.x * 1.06, size.y * 1.06, size.z * 1.06);
+      geometry.translate(-center.x, -center.y, -center.z);
     }
-    const material = new THREE.LineBasicMaterial({
+    const material = new THREE.MeshBasicMaterial({
       color,
+      wireframe: true,
       transparent: true,
       opacity: 0.95,
       depthTest: true,
       depthWrite: false,
     });
-    const lines = new THREE.LineSegments(geometry, material);
-    lines.userData._isHelper = true;
-    lines.userData._editorOnly = true;
-    lines.userData.cycoSourceId = obj.userData?.cycoId;
-    // Render order high so the outline draws on top of the mesh interior.
-    lines.renderOrder = 999;
-    // Disable frustum culling — geometry's bounding box is in LOCAL space but
-    // the lines are drawn in WORLD space at the source object's transform, so
-    // the default frustum cull test uses a stale AABB and culls the lines
-    // when they should be visible.
-    lines.frustumCulled = false;
-    return lines;
+    const outline = new THREE.Mesh(geometry, material);
+    outline.userData._isHelper = true;
+    outline.userData._editorOnly = true;
+    outline.userData.cycoSourceId = obj.userData?.cycoId;
+    outline.renderOrder = 999;
+    outline.frustumCulled = false;
+    return outline;
   }
 
   /**
@@ -1745,7 +1732,11 @@ export class PostProcessingPipeline {
     this._selectedObjects = this._getSelectionObjects(event.detail);
     if (this.outlinePass) {
       this._applySelectionOutlinePrefs();
-      this.outlinePass.selectedObjects = this._selectedObjects;
+      // Only the primary (most-recently-selected) object is outlined by the
+      // WebGL OutlinePass; the secondary group handles the rest so multi-
+      // select uses distinct colors.
+      const primary = this._selectedObjects[this._selectedObjects.length - 1];
+      this.outlinePass.selectedObjects = primary ? [primary] : [];
     }
     // Refresh the scene-graph secondary outlines (the non-primary selected
     // objects each get a colored wireframe child).

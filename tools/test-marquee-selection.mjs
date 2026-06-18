@@ -99,7 +99,7 @@ console.log('Connected to', tab.url);
 // scene-graph LineSegments for both primary and secondary outlines). We do
 // NOT force a renderer switch — the user's preferred mode is preserved.
 const rRendererType = await send('Runtime.evaluate', {
-  expression: `window.__cyco?.viewportEngine?.rendererManager?.activeType || 'webgl'`,
+  expression: `window.__cyco?.viewportEngine?.rendererManager?.activeType || 'webgl'\`,
   returnByValue: true,
 });
 const initialRendererType = rRendererType.result.value;
@@ -107,7 +107,7 @@ console.log('Initial renderer type:', initialRendererType);
 
 // ── Run the actual test in-page ───────────────────────────────────────────
 const r = await send('Runtime.evaluate', {
-  expression: `(async () => {
+  expression: \`(async () => {
     const cyco = window.__cyco;
     const rm = cyco.viewportEngine.rendererManager;
     const sm = cyco.sceneManager;
@@ -163,7 +163,7 @@ const r = await send('Runtime.evaluate', {
     const marqueeBefore = document.querySelector('.cyco-marquee-box');
     assert('marquee hidden before any drag',
       !marqueeBefore || getComputedStyle(marqueeBefore).display === 'none',
-      marqueeBefore ? `display=${getComputedStyle(marqueeBefore).display}` : 'absent');
+      marqueeBefore ? \`display=${getComputedStyle(marqueeBefore).display}\` : 'absent');
 
     fire('pointerdown', startX, startY, 1);
     await new Promise(r => requestAnimationFrame(r));
@@ -173,7 +173,7 @@ const r = await send('Runtime.evaluate', {
     const m0 = document.querySelector('.cyco-marquee-box');
     assert('marquee hidden under drag threshold',
       !m0 || getComputedStyle(m0).display === 'none',
-      m0 ? `display=${getComputedStyle(m0).display}` : 'no element');
+      m0 ? \`display=${getComputedStyle(m0).display}\` : 'no element');
 
     // Move past threshold — marquee should appear and follow the cursor.
     const dragSamples = [];
@@ -199,17 +199,17 @@ const r = await send('Runtime.evaluate', {
     if (midDrag) {
       assert('marquee right edge at cursor X (page coords)',
         Math.abs(midDrag.pageRight - endX) < 2,
-        `marquee.right=${midDrag.pageRight}, cursor.x=${endX}`);
+        \`marquee.right=${midDrag.pageRight}, cursor.x=${endX}\`);
       assert('marquee bottom edge at cursor Y (page coords)',
         Math.abs(midDrag.pageBottom - endY) < 2,
-        `marquee.bottom=${midDrag.pageBottom}, cursor.y=${endY}`);
+        \`marquee.bottom=${midDrag.pageBottom}, cursor.y=${endY}\`);
     }
     assert('marquee visible during drag',
       dragSamples.length > 0 && dragSamples.every(s => s.display === 'block' && s.w > 0 && s.h > 0),
-      `samples=${dragSamples.length}`);
+      \`samples=${dragSamples.length}\`);
     assert('marquee widens monotonically',
       dragSamples.length >= 2 && dragSamples.at(-1).w > dragSamples[0].w,
-      `first.w=${dragSamples[0]?.w}, last.w=${dragSamples.at(-1)?.w}`);
+      \`first.w=${dragSamples[0]?.w}, last.w=${dragSamples.at(-1)?.w}\`);
 
     fire('pointerup', endX, endY, 0);
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
@@ -217,7 +217,7 @@ const r = await send('Runtime.evaluate', {
     const mAfter = document.querySelector('.cyco-marquee-box');
     assert('marquee hidden after pointerup',
       !mAfter || getComputedStyle(mAfter).display === 'none',
-      mAfter ? `display=${getComputedStyle(mAfter).display}` : 'no element');
+      mAfter ? \`display=${getComputedStyle(mAfter).display}\` : 'no element');
 
     // ── Part 2: marquee selects everything it covers ────────────────────
     // Drag from one corner of canvas to the opposite to cover all three boxes.
@@ -236,10 +236,10 @@ const r = await send('Runtime.evaluate', {
     const selectedNames = [...cyco.selectionManager.selected].map(o => o.name).sort();
     assert('marquee selected all 3 boxes',
       cyco.selectionManager.selected.size === 3,
-      `count=${cyco.selectionManager.selected.size}, names=${selectedNames.join(',')}`);
+      \`count=${cyco.selectionManager.selected.size}, names=${selectedNames.join(',')}\`);
     assert('selected names = BoxA, BoxB, BoxC',
       JSON.stringify(selectedNames) === JSON.stringify(['BoxA', 'BoxB', 'BoxC']),
-      `got ${selectedNames.join(', ')}`);
+      \`got ${selectedNames.join(', ')}\`);
 
     // ── Part 3: outline pass + secondary outline group structure ─────────
     const pp = cyco.postPipeline;
@@ -251,30 +251,30 @@ const r = await send('Runtime.evaluate', {
     if (isWebGL) {
       assert('WebGL: outline pass has all 3 selected',
         pp.outlinePass?.selectedObjects?.length === 3,
-        `count=${pp.outlinePass?.selectedObjects?.length}`);
+        \`count=${pp.outlinePass?.selectedObjects?.length}\`);
     } else {
       assert('WebGPU: outlinePass is null (no composer pass for outline)',
         pp.outlinePass === null,
-        `outlinePass=${pp.outlinePass}`);
+        \`outlinePass=${pp.outlinePass}\`);
     }
 
     assert('secondary outline group exists', !!pp.secondaryOutlineGroup, 'null');
     assert('secondary outline group is child of active scene',
       pp.secondaryOutlineGroup?.parent === scene,
-      `parent.type=${pp.secondaryOutlineGroup?.parent?.type}`);
+      \`parent.type=${pp.secondaryOutlineGroup?.parent?.type}\`);
     assert('secondary outline group has 2 children (all but primary)',
       pp.secondaryOutlineGroup?.children?.length === 2,
-      `count=${pp.secondaryOutlineGroup?.children?.length}`);
+      \`count=${pp.secondaryOutlineGroup?.children?.length}\`);
 
     if (pp.secondaryOutlineGroup?.children?.length === 2) {
       const sources = pp.secondaryOutlineGroup.children.map(c => c.userData?.cycoSourceId);
       assert('secondary outline children have unique source IDs',
         sources[0] !== sources[1] && sources.every(Boolean),
-        `sources=${JSON.stringify(sources)}`);
+        \`sources=${JSON.stringify(sources)}\`);
       const colors = pp.secondaryOutlineGroup.children.map(c => '#' + c.material.color.getHexString());
       assert('secondary outline color = #45ffd0',
         colors.every(c => c === '#45ffd0'),
-        `colors=${colors.join(',')}`);
+        \`colors=${colors.join(',')}\`);
     }
 
     // Resolve the primary color — either from the OutlinePass (WebGL) or
@@ -288,9 +288,9 @@ const r = await send('Runtime.evaluate', {
     const secondaryColor = pp.secondaryOutlineGroup?.children?.[0]?.material?.color
       ? '#' + pp.secondaryOutlineGroup.children[0].material.color.getHexString()
       : '';
-    assert('primary outline color = #e8eeff', primaryColor === '#e8eeff', `got ${primaryColor}`);
+    assert('primary outline color = #e8eeff', primaryColor === '#e8eeff', \`got ${primaryColor}\`);
     assert('primary and secondary colors differ', primaryColor !== secondaryColor,
-      `primary=${primaryColor}, secondary=${secondaryColor}`);
+      \`primary=${primaryColor}, secondary=${secondaryColor}\`);
 
     // In WebGPU mode, the primaryOutlineGroup must hold the primary object
     // (last in the selection set).
@@ -298,10 +298,10 @@ const r = await send('Runtime.evaluate', {
       assert('WebGPU: primaryOutlineGroup exists', !!pp.primaryOutlineGroup, 'null');
       assert('WebGPU: primaryOutlineGroup is child of active scene',
         pp.primaryOutlineGroup?.parent === scene,
-        `parent.type=${pp.primaryOutlineGroup?.parent?.type}`);
+        \`parent.type=${pp.primaryOutlineGroup?.parent?.type}\`);
       assert('WebGPU: primaryOutlineGroup has 1 child (the primary)',
         pp.primaryOutlineGroup?.children?.length === 1,
-        `count=${pp.primaryOutlineGroup?.children?.length}`);
+        \`count=${pp.primaryOutlineGroup?.children?.length}\`);
     }
 
     // ── Part 4: outline pixels actually rendered to screen ──────────────
@@ -342,10 +342,10 @@ const r = await send('Runtime.evaluate', {
     // shows dimmer 1-px LineSegments pixels — accept the looser threshold.
     const primaryMin = isWebGL ? 100 : 50;
     const primaryCount = Math.max(primaryPixels, primaryNearPixels);
-    assert(`primary outline pixels visible on canvas (>${primaryMin})`,
-      primaryCount > primaryMin, `strict=${primaryPixels}, loose=${primaryNearPixels}`);
+    assert(\`primary outline pixels visible on canvas (>${primaryMin})\`,
+      primaryCount > primaryMin, \`strict=${primaryPixels}, loose=${primaryNearPixels}\`);
     assert('secondary outline cyan-ish pixels visible on canvas (>50)',
-      secondaryTolerantPixels > 50, `count=${secondaryTolerantPixels}`);
+      secondaryTolerantPixels > 50, \`count=${secondaryTolerantPixels}\`);
 
     // Cleanup: remove test boxes
     for (let i = scene.children.length - 1; i >= 0; i--) {
