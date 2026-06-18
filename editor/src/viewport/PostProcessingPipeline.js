@@ -1655,8 +1655,6 @@ export class PostProcessingPipeline {
       if (!this.primaryOutlineGroup) this._ensurePrimaryOutlineGroup(scene);
       else if (this.primaryOutlineGroup.parent !== scene) this._ensurePrimaryOutlineGroup(scene);
     }
-    this._clearSecondaryOutlines();
-    this._clearPrimaryOutline();
     if (!this.secondaryOutlineGroup || !this.primaryOutlineGroup) return;
     // ── Mode isolation ───────────────────────────────────────────────────────
     // Single-select prefs (color, thickness, glow) apply ONLY to the
@@ -1678,8 +1676,20 @@ export class PostProcessingPipeline {
     const primaryOpacity    = this._primaryShellOpacity ?? 0.95;
     const primaryGlowAmt    = this._primaryGlowAmount ?? 0.4;
     const all = this._selectedObjects;
+    // ── Atomic swap: build new outlines FIRST, then dispose the old ones. ───
+    // The previous order was `clear → build`, which left the outline groups
+    // empty for one render frame after every selection / prefs change.  On a
+    // rapid marquee or slider drag the user perceived that gap as a visible
+    // "flash" of un-outlined content.  Building first, then disposing, keeps
+    // the outline groups populated at all times — the swap is invisible
+    // because the old and new meshes never coexist for a render frame.
+    const newPrimary = [];
+    const newSecondary = [];
     if (all.length === 0) {
-      // No selection — nothing to outline. Both groups stay empty.
+      // No selection — clear both groups.  Safe to dispose here because
+      // there's nothing to flash to.
+      this._clearSecondaryOutlines();
+      this._clearPrimaryOutline();
       return;
     }
     // Primary = FIRST selected object (the "anchor").  The user expects
@@ -1693,9 +1703,13 @@ export class PostProcessingPipeline {
     const isMulti = all.length > 1;
     // Hide outlines while in physics edit mode for collider objects.
     const hideForPhysics = this._physicsEditMode && this._hasPhysicsCollider(primary);
-    this.secondaryOutlineGroup.visible = !hideForPhysics && isMulti;
-    this.primaryOutlineGroup.visible   = !hideForPhysics;
-    if (hideForPhysics) return;
+    if (hideForPhysics) {
+      this.secondaryOutlineGroup.visible = false;
+      this.primaryOutlineGroup.visible   = false;
+      this._clearSecondaryOutlines();
+      this._clearPrimaryOutline();
+      return;
+    }
     // ── DEBUG: log what we're about to apply ─────────────────────────────────
     if (window.CYCO_DEBUG_OUTLINE) {
       console.log('[CYCO:OUTLINE-PIPE] _refreshSecondaryOutlines (apply)', {
@@ -1720,21 +1734,40 @@ export class PostProcessingPipeline {
         lines.userData.cycoSourceId = primary.userData?.cycoId;
         lines.userData._cycoRole = 'primary';
         lines.renderOrder = 1000; // ensure on top
-        this.primaryOutlineGroup.add(lines);
+        newPrimary.push(lines);
       }
     }
     // ── Secondary outline (multi-select prefs only — never applied to the
     //    primary, which always uses single-select prefs) ────────────────────
-    if (!isMulti) return;
-    // Skip index 0 — that's the primary, which is rendered above with
-    // single-select settings.
-    const secondary = all.slice(1);
-    for (const obj of secondary) {
-      const lines = this._buildSecondaryOutlineFor(obj, secondaryColor, secondaryShell, secondaryOpacity, secondaryGlowColor, secondaryGlowAmt);
-      if (lines) {
-        lines.userData._cycoRole = 'secondary';
-        this.secondaryOutlineGroup.add(lines);
+    if (isMulti) {
+      const secondary = all.slice(1);
+      for (const obj of secondary) {
+        const lines = this._buildSecondaryOutlineFor(obj, secondaryColor, secondaryShell, secondaryOpacity, secondaryGlowColor, secondaryGlowAmt);
+        if (lines) {
+          lines.userData._cycoRole = 'secondary';
+          newSecondary.push(lines);
+        }
       }
+    }
+    // ── Atomic swap ─────────────────────────────────────────────────────────
+    // Snapshot the current children BEFORE adding the new ones so we can
+    // dispose only the old ones.  Building new → adding new → removing old
+    // → disposing old keeps the outline groups populated at all times.
+    const oldPrimary = this.primaryOutlineGroup.children.slice();
+    const oldSecondary = this.secondaryOutlineGroup.children.slice();
+    for (const m of newPrimary) this.primaryOutlineGroup.add(m);
+    for (const m of newSecondary) this.secondaryOutlineGroup.add(m);
+    this.secondaryOutlineGroup.visible = isMulti;
+    this.primaryOutlineGroup.visible   = true;
+    for (const child of oldPrimary) {
+      this.primaryOutlineGroup.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
+    }
+    for (const child of oldSecondary) {
+      this.secondaryOutlineGroup.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
     }
   }
 
@@ -1797,8 +1830,24 @@ export class PostProcessingPipeline {
     }
     if (!geometry) {
       // Fall back to an axis-aligned bounding-box wireframe so groups / lights
-      // / cameras still get a visible secondary outline.
-      const box = new THREE.Box3().setFromObject(obj);
+      // / cameras still get a visible secondary outline.  `setFromObject` can
+      // throw on TransformControls / Box Gizmo internals (AxisShaft, AxisTip,
+      // gizmo faces) whose underlying geometry attribute is null — even
+      // though the SelectionManager marquee filter is supposed to exclude
+      // these, other code paths (event-driven selection, custom events)
+      // might still pass them in.  Wrap in try/catch so one bad object
+      // doesn't abort the rest of the rebuild and leave the viewport with
+      // a half-stripped outline group (the source of the visible "flash"
+      // during rapid marquee / slider drag).
+      let box;
+      try {
+        box = new THREE.Box3().setFromObject(obj);
+      } catch (e) {
+        if (window.CYCO_DEBUG_OUTLINE) {
+          console.warn('[CYCO:OUTLINE-PIPE] _buildSecondaryOutlineFor: setFromObject failed for', obj?.name || obj?.type, e?.message);
+        }
+        return null;
+      }
       if (!isFinite(box.min.x) || box.isEmpty()) return null;
       const size = new THREE.Vector3();
       box.getSize(size);
@@ -1978,7 +2027,23 @@ export class PostProcessingPipeline {
   _scheduleOutlineRebuild() {
     if (this._outlineRebuildPending) return;
     this._outlineRebuildPending = true;
-    requestAnimationFrame(() => {
+    // Use a microtask (`Promise.resolve().then`) so the rebuild runs after
+    // the current event handler returns but BEFORE any rAF callback for the
+    // next frame fires.  Microtasks drain at the end of the current macrotask
+    // (the event handler) and before the next rAF — so the outline group is
+    // fully rebuilt before the renderer paints the next frame.  This
+    // eliminates the 1-frame "empty outlines" flash the user reported during
+    // rapid marquee / slider drag.
+    //
+    // We previously used `requestAnimationFrame` for this, but the
+    // renderer's own rAF was registered first (during init), so the
+    // rebuild rAF ran AFTER the render, leaving the outline group empty
+    // for one paint.  `setTimeout(0)` is no better — the renderer's tick
+    // loop is a rAF, and setTimeout(0) is scheduled at the same priority
+    // as the next event loop tick, which can still lose the race.  A
+    // microtask is guaranteed to drain before the next rAF.
+    Promise.resolve().then(() => {
+      if (!this._outlineRebuildPending) return;
       this._outlineRebuildPending = false;
       this._refreshSecondaryOutlines();
     });

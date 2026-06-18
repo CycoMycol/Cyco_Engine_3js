@@ -656,12 +656,19 @@ export class SelectionManager {
     if (obj.type === 'GridHelper' || obj.type === 'AxesHelper') return true;
     if (obj.name === 'Main Grid') return true;
     if (this.nonSelectableSet.has(obj)) return true;
-    // Also walk up the parent chain — if any ancestor is non-selectable, skip
+    // Also walk up the parent chain — if any ancestor is non-selectable, skip.
+    // This is essential: TransformControls / Box Gizmo internals (AxisShaft,
+    // AxisTip, gizmo faces, etc.) have no `_isGizmo` flag of their own, but
+    // their parent group DOES.  Without this ancestor check, marquee
+    // selection sweeps up these gizmo internals and the outline rebuild
+    // then throws "Cannot read properties of null (reading 'getAttribute')"
+    // from Box3.setFromObject on a geometry-less helper mesh.
     let p = obj.parent;
     while (p) {
       if (this.nonSelectableSet.has(p)) return true;
-      if (p.userData?._isHelper) return true;
-      if (p.userData?._editorOnly) return true;
+      if (p.userData?._isGizmo)      return true;
+      if (p.userData?._isHelper)     return true;
+      if (p.userData?._editorOnly)   return true;
       if (p.type === 'GridHelper' || p.type === 'AxesHelper') return true;
       if (p.name === 'Main Grid') return true;
       p = p.parent;

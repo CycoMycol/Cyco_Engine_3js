@@ -39,6 +39,8 @@ export class TransformGizmo {
     this._boxOutline    = null;
     this._boxGlow       = null;
     this._boxActive     = false;
+    this._boxPaletteUpdatePending = false; // rAF-coalesced palette update
+    this._prefsApplyPending = false;        // rAF-coalesced prefs apply
     this._hoveredHandle = null;
     this._interaction   = null;
     this._physicsEdit   = false;
@@ -220,7 +222,24 @@ export class TransformGizmo {
 
   _onPrefsChanged(event) {
     this._prefs = event.detail?.prefs ?? loadPrefs();
-    this._applyPreferences();
+    // Debounce: dragging a slider fires cyco-preferences-preview many
+    // times per second.  Calling _applyPreferences synchronously each
+    // time rebuilds the box-gizmo materials and the TransformControls
+    // helpers, which is the source of the "flashes of color in the
+    // viewport" the user reported while dragging sliders.  Coalesce
+    // all rapid prefs events into one microtask-delayed apply.  A
+    // microtask runs at the end of the current event handler — before
+    // the next rAF — so the palette update lands BEFORE the next
+    // render frame.  Using `requestAnimationFrame` instead would
+    // schedule the update AFTER the renderer's own rAF, leaving the
+    // gizmo with stale colors for one paint (the "flash").
+    if (this._prefsApplyPending) return;
+    this._prefsApplyPending = true;
+    Promise.resolve().then(() => {
+      if (!this._prefsApplyPending) return;
+      this._prefsApplyPending = false;
+      this._applyPreferences();
+    });
   }
 
   _getTransformPrefs(mode) {
@@ -288,7 +307,17 @@ export class TransformGizmo {
   _getSelectionOutlinePrefs() {
     const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
     const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
-    const selMgr = this.engine?.selectionManager;
+    // Use the constructor-injected selectionManager, not `this.engine?.selectionManager`
+    // — the ViewportEngine doesn't expose the SelectionManager on itself,
+    // so the previous code was reading `undefined?.selected?.size` which
+    // always evaluated to 0 → `isMulti` was always false → the Box Gizmo
+    // always fell back to `singleSelect` prefs, even when ≥2 objects were
+    // actually selected.  That mismatch made the wireframe color flash
+    // (default white-blue) the moment the user moved a slider on the
+    // First Selected / Multi Select tabs, because the live outline
+    // groups correctly picked up the right colours from the pipeline
+    // while the Box Gizmo wireframe stayed stuck on the defaults.
+    const selMgr = this.selectionManager;
     const selectedCount = selMgr?.selected?.size ?? 0;
     const isMulti = selectedCount > 1;
     if (isMulti) {
@@ -924,12 +953,12 @@ export class TransformGizmo {
         this._multiTargets = locked.slice();
         this._attachTo(locked[0]);
         this._updatePivotIndicators(locked);
-        if (this._boxGroup) this._updateBoxPalette();
+        this._scheduleBoxPaletteUpdate();
         return;
       }
       this._hidePivotIndicators();
       this._attachToMulti(locked);
-      if (this._boxGroup) this._updateBoxPalette();
+      this._scheduleBoxPaletteUpdate();
       return;
     }
     // Single select — drop the multi-group
@@ -937,9 +966,36 @@ export class TransformGizmo {
     this._attachTo(object ?? null);
     // Refresh the Box Gizmo palette so its wireframe + glow colors
     // track the active outline section (singleSelect for 1 object,
-    // firstSelected for ≥2).  Without this the box gizmo keeps using
-    // whatever was painted at the last palette update.
-    if (this._boxGroup) this._updateBoxPalette();
+    // firstSelected for ≥2).  Debounced so a marquee selection that
+    // selects N objects in quick succession only triggers ONE palette
+    // update on the next animation frame, eliminating the per-cube
+    // color flashes the user reported.
+    this._scheduleBoxPaletteUpdate();
+  }
+
+  /**
+   * Coalesce multiple selection events into a single Box Gizmo palette
+   * update on the next animation frame.  Marquee selection fires
+   * `cyco-select-node` once per selected object, so without this
+   * debounce a 5-cube marquee triggers 5 immediate palette updates
+   * (each one rebuilding the box gizmo materials) — visible as
+   * colored flashes at the viewport edges during marquee drag.
+   */
+  _scheduleBoxPaletteUpdate() {
+    if (!this._boxGroup) return;
+    if (this._boxPaletteUpdatePending) return;
+    this._boxPaletteUpdatePending = true;
+    // Microtask (Promise.resolve().then) rather than requestAnimationFrame
+    // so the palette update lands at the end of the current event handler —
+    // BEFORE the next render frame.  The previous rAF version scheduled
+    // the update after the renderer's own rAF, leaving the box gizmo
+    // with stale colors for one paint and causing the visible "flash"
+    // during rapid marquee / slider drag.
+    Promise.resolve().then(() => {
+      if (!this._boxPaletteUpdatePending) return;
+      this._boxPaletteUpdatePending = false;
+      this._updateBoxPalette();
+    });
   }
 
   _attachToMulti(objects) {
