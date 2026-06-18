@@ -1963,28 +1963,19 @@ export class PostProcessingPipeline {
         continue;
       }
       // Lines are children of the outline group (which is in the active
-      // scene). Make their world transform match the source object. We
-      // attach as a child of the source so it follows parent changes too,
-      // but we need it to live under the outline group so it gets cleaned
-      // up on selection change. So we re-parent only if needed.
+      // scene). Make their world transform match the source object. The
+      // outline group may itself be attached to the scene, so convert the
+      // source's world matrix into the group's local space.
       if (lines.parent !== g) {
         g.add(lines);
       }
-      lines.position.copy(source.position);
-      lines.rotation.copy(source.rotation);
-      lines.scale.copy(source.scale);
-      // Account for parent's world matrix if the source is not at the root.
-      if (source.parent && source.parent.matrixWorld) {
-        source.parent.updateMatrixWorld(true);
-        const localFromParent = new THREE.Matrix4().copy(source.parent.matrixWorld).invert();
-        lines.matrix.identity();
-        lines.applyMatrix4(source.matrixWorld);
-        lines.applyMatrix4(localFromParent);
-      } else {
-        lines.matrix.identity();
-        lines.applyMatrix4(source.matrixWorld);
-      }
       lines.matrixAutoUpdate = false;
+      source.updateMatrixWorld(true);
+      g.updateMatrixWorld(true);
+      const localFromOutlineGroup = new THREE.Matrix4().copy(g.matrixWorld).invert();
+      lines.matrix.identity();
+      lines.applyMatrix4(source.matrixWorld);
+      lines.applyMatrix4(localFromOutlineGroup);
     }
   }
 

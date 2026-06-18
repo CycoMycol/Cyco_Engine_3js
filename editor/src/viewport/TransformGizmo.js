@@ -307,7 +307,8 @@ export class TransformGizmo {
   _getSelectionOutlinePrefs() {
     const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
     const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
-    const selectedCount = this.engine?.selectionManager?.selected?.size ?? 0;
+    const selMgr = this.engine?.selectionManager;
+    const selectedCount = selMgr?.selected?.size ?? 0;
     const isMulti = selectedCount > 1;
     if (isMulti) {
       return {

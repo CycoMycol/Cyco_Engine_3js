@@ -596,10 +596,21 @@ export class SelectionManager {
     this._marqueeEndNDC.set(ndc.x, ndc.y);
 
     const objects = this._selectByScreenRect(this._marqueeStartNDC, this._marqueeEndNDC);
-
     const additive = !!(event.ctrlKey || event.metaKey || event.shiftKey);
-    if (!additive) this.clearSelection();
-    objects.forEach(obj => this._selectObject(obj));
+
+    if (!additive) {
+      this.setSelectedObjects(objects);
+    } else {
+      let added = false;
+      for (const obj of objects) {
+        if (!this.selected.has(obj)) {
+          this.selected.add(obj);
+          added = true;
+        }
+      }
+      if (added) this._dispatchSelection();
+    }
+
     // Re-enable orbit (disabled at pointerdown while the user was
     // marquee-dragging).
     if (this.engine.controls) this.engine.controls.enabled = true;
