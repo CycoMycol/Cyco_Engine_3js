@@ -27,6 +27,8 @@ export class PreferencesPanel extends BasePanel {
     this._gizmoTabBtns   = {};
     this._colliderActiveTab = 'colliderBox';
     this._colliderTabBtns   = {};
+    this._outlineActiveTab = 'single';
+    this._outlineTabBtns   = {};
     this._gridProps   = null;
     this._contentArea = null;
     this._committed   = false;
@@ -765,6 +767,14 @@ export class PreferencesPanel extends BasePanel {
   }
 
   _buildBoundingBoxTab(key = 'bounds') {
+    // The regular 'bounds' selection outline is split into two sub-tabs:
+    //   • Single Select — the primary (most-recently-selected) outline.
+    //   • Multi Select  — every other selected object's outline.
+    // Collider / temporary outlines stay on a single tab because they are
+    // always single-object outlines.
+    if (key === 'bounds') {
+      return this._buildSelectionOutlineTab();
+    }
     const prefs = this._prefs.gizmo[key];
     const defaults = DEFAULT_PREFS.gizmo[key];
     const isCollider = key === 'colliderBounds';
@@ -792,15 +802,6 @@ export class PreferencesPanel extends BasePanel {
       this._applyPrefsChange();
     }));
 
-    // Only the regular "Outline" tab (not collider/temporary outlines) controls
-    // the secondary selection color — the others are single-object outlines.
-    if (key === 'bounds') {
-      root.appendChild(this._makeColorRow('Multi-Select Outline Color', prefs.secondaryOutlineColor, (c) => {
-        this._prefs.gizmo[key].secondaryOutlineColor = c;
-        this._applyPrefsChange();
-      }));
-    }
-
     root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
       this._prefs.gizmo[key].glowColor = c;
       this._applyPrefsChange();
@@ -810,6 +811,152 @@ export class PreferencesPanel extends BasePanel {
       this._prefs.gizmo[key].glowIntensity = v;
       this._applyPrefsChange();
     }, 'No post-processing required.', defaults.glowIntensity));
+
+    return root;
+  }
+
+  /**
+   * Build the bounds (selection) outline tab with Single / Multi sub-tabs.
+   *
+   * Single Select controls the primary (most-recently-selected) outline —
+   * its color, thickness, and glow intensity all map directly to the
+   * scene-graph inverted-hull outline (and to the WebGL OutlinePass when
+   * the WebGL pipeline is active).
+   *
+   * Multi Select controls every other selected object's outline — distinct
+   * color, distinct thickness, distinct glow intensity.
+   */
+  _buildSelectionOutlineTab() {
+    const prefs = this._prefs.gizmo.bounds;
+    const defaults = DEFAULT_PREFS.gizmo.bounds;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;height:100%;';
+
+    // Sub-tab bar.
+    const tabBar = document.createElement('div');
+    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
+    this._outlineTabBtns = {};
+    const tabs = [
+      { id: 'single', label: 'Single Select' },
+      { id: 'multi',  label: 'Multi Select' },
+    ];
+    for (const tab of tabs) {
+      const btn = document.createElement('button');
+      btn.textContent = tab.label;
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
+      btn.addEventListener('click', () => this._switchOutlineSubTab(tab.id));
+      tabBar.appendChild(btn);
+      this._outlineTabBtns[tab.id] = btn;
+    }
+
+    this._outlineContentArea = document.createElement('div');
+    this._outlineContentArea.style.cssText = 'flex:1;overflow-y:auto;padding-right:4px;';
+
+    root.appendChild(tabBar);
+    root.appendChild(this._outlineContentArea);
+    this._switchOutlineSubTab(this._outlineActiveTab || 'single');
+    return root;
+  }
+
+  _switchOutlineSubTab(tabId) {
+    this._outlineActiveTab = tabId;
+    for (const [id, btn] of Object.entries(this._outlineTabBtns || {})) {
+      const active = id === tabId;
+      btn.style.color = 'var(--ce-accent-orange,#e07228)';
+      btn.style.opacity = active ? '1' : '0.82';
+      btn.style.background = active ? 'rgba(224,114,40,0.16)' : 'var(--ce-bg-surface,#332a22)';
+      btn.style.borderColor = active ? 'rgba(224,114,40,0.55)' : 'var(--ce-border,#3d3028)';
+    }
+    if (!this._outlineContentArea) return;
+    this._outlineContentArea.innerHTML = '';
+    if (tabId === 'single') this._outlineContentArea.appendChild(this._buildSingleOutlineTab());
+    else if (tabId === 'multi') this._outlineContentArea.appendChild(this._buildMultiOutlineTab());
+  }
+
+  /** Single (primary) outline controls — the most-recently-selected object. */
+  _buildSingleOutlineTab() {
+    const prefs = this._prefs.gizmo.bounds;
+    const defaults = DEFAULT_PREFS.gizmo.bounds;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.bounds.thickness = v;
+      this._applyPrefsChange();
+    }, '', defaults.thickness));
+
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.bounds.distance = v;
+      this._applyPrefsChange();
+    }, '', defaults.distance));
+
+    root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
+      this._prefs.gizmo.bounds.outlineColor = c;
+      this._applyPrefsChange();
+    }));
+
+    root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
+      this._prefs.gizmo.bounds.glowColor = c;
+      this._applyPrefsChange();
+    }));
+
+    // Use singleGlowIntensity when available, fall back to legacy shared
+    // glowIntensity so older prefs files keep working.
+    const singleGlow = prefs.singleGlowIntensity ?? prefs.glowIntensity ?? defaults.glowIntensity;
+    root.appendChild(this._makeSliderRow('Glow Intensity', singleGlow, 0, 2, 0.01, (v) => {
+      this._prefs.gizmo.bounds.singleGlowIntensity = v;
+      // Keep the shared glowIntensity in sync so legacy code paths still
+      // see a sensible value.
+      this._prefs.gizmo.bounds.glowIntensity = v;
+      this._applyPrefsChange();
+    }, '', defaults.singleGlowIntensity ?? defaults.glowIntensity));
+
+    return root;
+  }
+
+  /** Multi (secondary) outline controls — every other selected object. */
+  _buildMultiOutlineTab() {
+    const prefs = this._prefs.gizmo.bounds;
+    const defaults = DEFAULT_PREFS.gizmo.bounds;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    // multiThickness defaults to the shared thickness for back-compat.
+    // Slider max raised to 8 so multi-select outlines can be made visibly
+    // chunky — the user reported the default max of 4 is too thin.
+    const multiThickness = prefs.multiThickness ?? prefs.thickness ?? defaults.thickness;
+    root.appendChild(this._makeSliderRow('Thickness', multiThickness, 0.05, 8, 0.01, (v) => {
+      this._prefs.gizmo.bounds.multiThickness = v;
+      this._applyPrefsChange();
+    }, '', defaults.multiThickness ?? defaults.thickness));
+
+    // Distance max raised to 8 so multi-select outlines can be pushed
+    // visibly further from the source.
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 8, 0.01, (v) => {
+      this._prefs.gizmo.bounds.distance = v;
+      this._applyPrefsChange();
+    }, '', defaults.distance));
+
+    root.appendChild(this._makeColorRow('Outline Color', prefs.secondaryOutlineColor, (c) => {
+      this._prefs.gizmo.bounds.secondaryOutlineColor = c;
+      this._applyPrefsChange();
+    }));
+
+    // Multi-select uses its own glow color (not the shared bounds.glowColor)
+    // so the user can independently tint the multi-select halo.
+    const multiGlowColor = prefs.multiGlowColor ?? '#ff7a3d';
+    root.appendChild(this._makeColorRow('Glow Color', multiGlowColor, (c) => {
+      this._prefs.gizmo.bounds.multiGlowColor = c;
+      this._applyPrefsChange();
+    }));
+
+    const multiGlow = prefs.multiGlowIntensity ?? prefs.glowIntensity ?? defaults.glowIntensity;
+    // Glow intensity max raised to 4 so the multi-select outline can be
+    // made visually heavier than the primary if desired.
+    root.appendChild(this._makeSliderRow('Glow Intensity', multiGlow, 0, 4, 0.01, (v) => {
+      this._prefs.gizmo.bounds.multiGlowIntensity = v;
+      this._applyPrefsChange();
+    }, '', defaults.multiGlowIntensity ?? defaults.glowIntensity));
 
     return root;
   }

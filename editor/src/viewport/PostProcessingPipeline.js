@@ -1404,36 +1404,81 @@ export class PostProcessingPipeline {
 
   _applySelectionOutlinePrefs() {
     const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    // thickness slider is a 0.05–4 visual-weight value; we map it to a
+    // 0.001–0.10 inverted-hull relative scale (WebGPU / scene-graph
+    // outline) AND forward it to the WebGL OutlinePass.edgeThickness.
     const thickness = Math.max(0.05, bounds.thickness ?? 1);
-    const glowIntensity = Math.max(0, bounds.glowIntensity ?? 0.35);
+    const glowIntensity = Math.max(0, bounds.singleGlowIntensity ?? bounds.glowIntensity ?? 0.35);
     const selectedObject = this._selectedObjects[this._selectedObjects.length - 1] ?? null;
     const showSelectionOutline = !this._physicsEditMode || !this._hasPhysicsCollider(selectedObject);
-    // Remember the color so the scene-graph primary-outline LineSegments can
-    // use the same hue when no OutlinePass is available (WebGPU mode).
+    // Remember the color + shell thickness so the scene-graph primary
+    // outline (used in WebGPU mode and in WebGL fallback) can use the
+    // same hue and weight as the WebGL OutlinePass.
     this._primaryOutlineColor = new THREE.Color(bounds.outlineColor ?? '#e8eeff');
+    // Glow color drives the secondary halo mesh behind the outline.  This
+    // is the SAME field that TransformGizmo reads for the box-tool glow;
+    // the user expects the Outline Glow Color to affect the outline glow.
+    this._primaryGlowColor = new THREE.Color(bounds.glowColor ?? '#9b6cff');
+    // 0.025 × thickness → 0.001–0.10 relative scale.  Keeps the default
+    // (thickness=1) at ~2.5% shell — visibly thick, not screen-filling —
+    // and lets the slider reach a chunky 10% shell at its high end.
+    // Glow intensity adds a small shell-thickness bonus so "more glow"
+    // feels visually heavier even on the scene-graph inverted hull.
+    this._primaryShellThickness = Math.max(0.001, thickness * 0.025 + glowIntensity * 0.008);
+    // Map glow intensity to opacity in [0.5..1.0].  Higher glow = more
+    // saturated outline shell.
+    this._primaryShellOpacity = Math.min(1.0, 0.5 + glowIntensity * 0.25);
+    // Glow amount drives the halo mesh's additive opacity (0..1).  This
+    // is what the user sees as the outline "glow" — a soft colored halo
+    // wrapping the silhouette.  At glowIntensity=0 the halo is invisible;
+    // at glowIntensity=4 it's near-saturated.
+    this._primaryGlowAmount = Math.min(1.0, glowIntensity * 0.28);
     if (this.outlinePass) {
       this.outlinePass.enabled = showSelectionOutline;
       this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
       this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
       this.outlinePass.edgeThickness = thickness;
+      // visibleEdgeColor = the "outline" color (what the user sees as the
+      // outline itself); hiddenEdgeColor = the "glow" tint three.js uses
+      // for the parts of the silhouette hidden behind the source mesh.
+      // Together they form the OutlinePass's own visual glow.
       this.outlinePass.visibleEdgeColor.set(bounds.outlineColor ?? '#e8eeff');
-      this.outlinePass.hiddenEdgeColor.set(0x000000);
+      this.outlinePass.hiddenEdgeColor.set(this._primaryGlowColor);
     }
   }
 
   /**
-   * Apply prefs to the secondary outline pass. The secondary pass outlines
-   * every multi-selected object EXCEPT the primary (most-recently-selected)
-   * one — those use the regular outlinePass. The secondary color defaults to
-   * a vivid cyan so it stands out from the primary's near-white.
+   * Apply prefs to the secondary (multi-select) outline. Like the primary
+   * outline in WebGPU mode, the secondary is rendered as scene-graph
+   * geometry, so applying prefs just means caching the latest colour and
+   * shell thickness for the next `_refreshSecondaryOutlines()` call. No
+   * composer pass is required.
+   *
+   * The secondary color defaults to vivid orange (#ff6a3d) so it stands
+   * out from the primary's near-white outline.
    */
   _applySecondaryOutlinePrefs() {
-    // The secondary outline is a scene-graph LineSegments mesh, so "apply
-    // prefs" just means remembering the latest color / thickness for the
-    // next `_refreshSecondaryOutlines()` call. We don't need a renderer
-    // pass here.
     const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
-    this._secondaryColor = new THREE.Color(bounds.secondaryOutlineColor ?? '#45ffd0');
+    this._secondaryColor = new THREE.Color(bounds.secondaryOutlineColor ?? '#ff6a3d');
+    // Independent glow color for the multi-select outline.  We read from
+    // `multiGlowColor` (the dedicated multi-select swatch) first so the
+    // user can tint the multi-select glow independently from the primary.
+    this._secondaryGlowColor = new THREE.Color(bounds.multiGlowColor ?? bounds.glowColor ?? '#ff7a3d');
+    // multiThickness is a per-mode slider (defaults to the shared
+    // `thickness` so older prefs files keep working).  Slider max is now
+    // 8 (raised from 4) and the per-unit mapping is steeper (0.04×) so
+    // multi-select outlines feel chunky even at moderate slider values.
+    const multiThickness = Math.max(0.05, bounds.multiThickness ?? bounds.thickness ?? 1);
+    // multiGlowIntensity drives both the scene-graph shell thickness
+    // (small bonus) and the shell opacity so the slider has a visible
+    // effect under WebGPU / fallback modes.  Slider max is 4 (raised
+    // from 2) so glow can push the shell to a strong 1.0 opacity.
+    const multiGlow = Math.max(0, bounds.multiGlowIntensity ?? bounds.glowIntensity ?? 0.35);
+    this._secondaryShellThickness = Math.max(0.001, multiThickness * 0.04 + multiGlow * 0.012);
+    this._secondaryShellOpacity   = Math.min(1.0, 0.5 + multiGlow * 0.18);
+    // Halo opacity for the multi-select glow.  With multiGlowIntensity up
+    // to 4 the halo can reach 1.0 (fully saturated additive halo).
+    this._secondaryGlowAmount = Math.min(1.0, multiGlow * 0.28);
   }
 
   /**
@@ -1554,63 +1599,111 @@ export class PostProcessingPipeline {
     this._clearSecondaryOutlines();
     this._clearPrimaryOutline();
     if (!this.secondaryOutlineGroup || !this.primaryOutlineGroup) return;
-    const secondaryColor = this._secondaryColor ?? new THREE.Color('#45ffd0');
-    const primaryColor = this._primaryOutlineColor ?? new THREE.Color('#e8eeff');
+    // ── Mode isolation ───────────────────────────────────────────────────────
+    // Single-select prefs (color, thickness, glow) apply ONLY to the
+    // single-most-recently-selected object — call it the "primary".
+    // Multi-select prefs apply ONLY to the OTHER selected objects (if any).
+    //
+    // When only one object is selected there are no "other" objects, so
+    // multi-select prefs have nothing to act on.  When ≥2 are selected,
+    // the LAST object in the array is the primary (single-select prefs)
+    // and everything before it uses multi-select prefs.
+    const secondaryColor      = this._secondaryColor ?? new THREE.Color('#ff6a3d');
+    const secondaryGlowColor  = this._secondaryGlowColor ?? secondaryColor;
+    const secondaryShell      = this._secondaryShellThickness ?? 0.03;
+    const secondaryOpacity    = this._secondaryShellOpacity ?? 0.95;
+    const secondaryGlowAmt    = this._secondaryGlowAmount ?? 0.4;
+    const primaryColor      = this._primaryOutlineColor ?? new THREE.Color('#e8eeff');
+    const primaryGlowColor  = this._primaryGlowColor ?? primaryColor;
+    const primaryShell      = this._primaryShellThickness ?? 0.03;
+    const primaryOpacity    = this._primaryShellOpacity ?? 0.95;
+    const primaryGlowAmt    = this._primaryGlowAmount ?? 0.4;
     const all = this._selectedObjects;
-    if (all.length === 0) return;
+    if (all.length === 0) {
+      // No selection — nothing to outline. Both groups stay empty.
+      return;
+    }
     const primary = all[all.length - 1];
+    const isMulti = all.length > 1;
     // Hide outlines while in physics edit mode for collider objects.
     const hideForPhysics = this._physicsEditMode && this._hasPhysicsCollider(primary);
-    this.secondaryOutlineGroup.visible = !hideForPhysics;
-    this.primaryOutlineGroup.visible = !hideForPhysics;
+    this.secondaryOutlineGroup.visible = !hideForPhysics && isMulti;
+    this.primaryOutlineGroup.visible   = !hideForPhysics;
     if (hideForPhysics) return;
-    // The primary object gets a wireframe in the primary color (only when
-    // no OutlinePass is available to render it).
+    // ── Primary outline (single-select prefs only) ───────────────────────────
+    // The primary outline ONLY uses single-select prefs, regardless of
+    // whether other objects are also selected.
     if (!this.outlinePass && primary) {
-      const lines = this._buildSecondaryOutlineFor(primary, primaryColor);
+      const lines = this._buildSecondaryOutlineFor(primary, primaryColor, primaryShell, primaryOpacity, primaryGlowColor, primaryGlowAmt);
       if (lines) {
         lines.userData.cycoSourceId = primary.userData?.cycoId;
         lines.renderOrder = 1000; // ensure on top
         this.primaryOutlineGroup.add(lines);
       }
     }
-    // Every other selected object gets the secondary (cyan) wireframe.
+    // ── Secondary outline (multi-select prefs only — never applied to a
+    //    single-select object) ──────────────────────────────────────────────
+    if (!isMulti) return;
     const secondary = all.slice(0, -1);
     for (const obj of secondary) {
-      const lines = this._buildSecondaryOutlineFor(obj, secondaryColor);
+      const lines = this._buildSecondaryOutlineFor(obj, secondaryColor, secondaryShell, secondaryOpacity, secondaryGlowColor, secondaryGlowAmt);
       if (lines) this.secondaryOutlineGroup.add(lines);
     }
   }
 
   /**
-   * Build a wireframe outline mesh for `obj`.
+   * Build a two-layer inverted-hull outline group for `obj`.
    *
-   * The outline is rendered as a `THREE.Mesh` with `MeshBasicMaterial` in
-   * `wireframe: true` mode rather than a `LineSegments` with `LineBasicMaterial`.
-   * WebGL hardware line width is capped at 1 px on virtually every driver, so
-   * `LineBasicMaterial` outlines are visually invisible against bright scene
-   * backgrounds. Wireframe meshes render as actual triangles and are clearly
-   * visible regardless of driver line-width limits.
+   * The outline is rendered as a `THREE.Group` containing two `Mesh`es,
+   * both with `MeshBasicMaterial` in `side: THREE.BackSide` mode:
    *
-   * The outline geometry is the source mesh's geometry (cloned so we can
-   * scale it without affecting the source) scaled slightly outward (~1.03x)
-   * so the wireframe sits just outside the source surface and is not z-fought
-   * by the source's own triangles.
+   *   1. **Glow halo** — a slightly larger shell rendered with additive
+   *      blending and the user's `glowColor`.  This is what the user
+   *      sees as the "outline glow" — a soft colored halo wrapping the
+   *      silhouette.  Driven by `glowAmount` (0..1).
    *
-   * For non-meshes (lights / cameras / groups), a BoxGeometry sized to the
-   * object's world-space AABB is used as a wireframe fallback.
+   *   2. **Core outline** — the visible outline shell in the user's
+   *      `outlineColor`.  Larger than the source by `shellThickness` so
+   *      the source mesh occludes the interior of the shell via depth
+   *      test, leaving only the silhouette ring visible.
+   *
+   * The previous wireframe approach collapsed to 1-pixel hardware-line
+   * width on every WebGL/WebGPU driver.  The inverted-hull technique
+   * renders actual triangles whose silhouette width is proportional to
+   * the source size, so the outline stays clearly visible regardless of
+   * camera distance or background.
+   *
+   * Works identically in WebGL and WebGPU because it is plain scene
+   * geometry rendered by the active renderer — no composer pass, no
+   * custom shader, no addon dependency.
+   *
+   * For non-meshes (lights / cameras / groups), a BoxGeometry sized to
+   * the object's world-space AABB is used as a fallback.
    *
    * @param {THREE.Object3D} obj
    * @param {THREE.Color} color
-   * @returns {THREE.Mesh|null}
+   * @param {number} shellThickness - relative scale for the core outline
+   *        shell (e.g. 0.03 → 3% larger than the source).  Defaults to
+   *        0.03 when omitted.
+   * @param {number} opacity - core outline opacity 0..1, default 0.95.
+   * @param {THREE.Color} [glowColor] - halo color.  When omitted or when
+   *        `glowAmount` is 0, no halo mesh is created (zero overhead).
+   * @param {number} [glowAmount=0] - halo additive opacity 0..1.  Drives
+   *        how strongly the glow color tints the silhouette.
+   * @returns {THREE.Group|null}
    */
-  _buildSecondaryOutlineFor(obj, color) {
+  _buildSecondaryOutlineFor(obj, color, shellThickness = 0.03, opacity = 0.95, glowColor = null, glowAmount = 0) {
     if (!obj) return null;
     let geometry = null;
     if (obj.isMesh || obj.isInstancedMesh || obj.isSkinnedMesh) {
       try {
         geometry = obj.geometry.clone();
-        geometry.scale(1.03, 1.03, 1.03); // push outward
+        // Push outward by the shell-thickness factor in local geometry
+        // space.  Combined with the source's world transform (re-applied
+        // every frame in `_updateOutlineGroupTransforms`), this yields a
+        // uniform world-space outline shell.
+        const s = 1 + Math.max(0, shellThickness);
+        geometry.scale(s, s, s);
       } catch (e) {
         geometry = null;
       }
@@ -1625,26 +1718,84 @@ export class PostProcessingPipeline {
       const center = new THREE.Vector3();
       box.getCenter(center);
       if (size.lengthSq() < 1e-6) return null;
-      // Center the box geometry at the local origin so it follows the source
-      // object's transform correctly (no translation drift).
-      geometry = new THREE.BoxGeometry(size.x * 1.06, size.y * 1.06, size.z * 1.06);
+      // Match the inverted-hull pattern: scale the fallback AABB by the
+      // same shell factor so the outline silhouette sits just outside the
+      // source.
+      const s = 1 + Math.max(0, shellThickness);
+      geometry = new THREE.BoxGeometry(size.x * s, size.y * s, size.z * s);
       geometry.translate(-center.x, -center.y, -center.z);
     }
-    const material = new THREE.MeshBasicMaterial({
+    // Build the core outline shell first.  We render the BackSide of the
+    // enlarged geometry in the outline colour; the source mesh occludes
+    // the interior of the shell via depth test, so only the silhouette
+    // ring remains visible.
+    //
+    // polygonOffset pulls the shell toward the camera by a sub-pixel
+    // amount to prevent Z-fighting at the silhouette edge on low-precision
+    // depth buffers.
+    const coreMaterial = new THREE.MeshBasicMaterial({
       color,
-      wireframe: true,
+      side: THREE.BackSide,
       transparent: true,
-      opacity: 0.95,
+      opacity,
       depthTest: true,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     });
-    const outline = new THREE.Mesh(geometry, material);
-    outline.userData._isHelper = true;
-    outline.userData._editorOnly = true;
-    outline.userData.cycoSourceId = obj.userData?.cycoId;
-    outline.renderOrder = 999;
-    outline.frustumCulled = false;
-    return outline;
+    const core = new THREE.Mesh(geometry, coreMaterial);
+    core.userData._isHelper = true;
+    core.userData._editorOnly = true;
+    core.userData.cycoSourceId = obj.userData?.cycoId;
+    core.renderOrder = 1000;
+    core.frustumCulled = false;
+
+    // Build the glow halo group.  We skip creating this mesh entirely
+    // when the user has the glow intensity at zero — saves a draw call
+    // and avoids any halo bleed-through on objects that don't want one.
+    const group = new THREE.Group();
+    group.name = '__cyco_outline_group';
+    group.userData._isHelper = true;
+    group.userData._editorOnly = true;
+    group.userData.cycoSourceId = obj.userData?.cycoId;
+    group.frustumCulled = false;
+    group.add(core);
+
+    if (glowColor && glowAmount > 0.001) {
+      // The halo geometry is a clone of the source scaled 50% wider than
+      // the core shell so the halo extends visibly beyond the core.  We
+      // use additive blending so it brightens whatever's behind it
+      // (matching the visual semantics of a "glow"), and we render it
+      // BEHIND the core outline (lower renderOrder + depthTest still
+      // enabled so it gets occluded correctly by other scene geometry).
+      const haloGeom = geometry.clone();
+      const haloScale = 1 + Math.max(0, shellThickness) * 1.6; // 1.6× the core shell
+      haloGeom.scale(haloScale, haloScale, haloScale);
+      const haloMaterial = new THREE.MeshBasicMaterial({
+        color: glowColor,
+        side: THREE.BackSide,
+        transparent: true,
+        opacity: glowAmount,
+        depthTest: true,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
+      });
+      const halo = new THREE.Mesh(haloGeom, haloMaterial);
+      halo.userData._isHalo = true;
+      halo.userData._isHelper = true;
+      halo.userData._editorOnly = true;
+      halo.userData.cycoSourceId = obj.userData?.cycoId;
+      halo.renderOrder = 999; // behind the core
+      halo.frustumCulled = false;
+      group.add(halo);
+      group.userData.cycoHalo = halo;
+    }
+
+    return group;
   }
 
   /**
