@@ -792,6 +792,15 @@ export class PreferencesPanel extends BasePanel {
       this._applyPrefsChange();
     }));
 
+    // Only the regular "Outline" tab (not collider/temporary outlines) controls
+    // the secondary selection color — the others are single-object outlines.
+    if (key === 'bounds') {
+      root.appendChild(this._makeColorRow('Multi-Select Outline Color', prefs.secondaryOutlineColor, (c) => {
+        this._prefs.gizmo[key].secondaryOutlineColor = c;
+        this._applyPrefsChange();
+      }));
+    }
+
     root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
       this._prefs.gizmo[key].glowColor = c;
       this._applyPrefsChange();

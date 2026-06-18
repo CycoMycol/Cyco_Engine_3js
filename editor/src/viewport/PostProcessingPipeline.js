@@ -139,6 +139,46 @@ export class PostProcessingPipeline {
     /** @type {OutlinePass|null} — exposed for SelectionManager to set selectedObjects */
     this.outlinePass = null;
 
+    /**
+     * Secondary selection outlines — drawn as scene-graph LineSegments meshes
+     * (NOT through the composer). Each non-primary selected object gets a
+     * colored wireframe added as its child; we update the set on selection
+     * changes and sync transforms every frame.
+     *
+     * Why not a second `OutlinePass`?  In practice, two OutlinePass instances
+     * chained through the EffectComposer do NOT render correctly together
+     * because three.js's OutlinePass does not call `renderer.setViewport()`
+     * when it switches between its mask / downsample / blur render targets.
+     * The second pass inherits the first pass's last-used viewport (typically
+     * 1/4 size), causing its mask render to be clipped into a sub-rectangle
+     * of the target — outlines only appear in the top-left quadrant of the
+     * scene. Drawing secondary outlines as scene-graph geometry avoids this
+     * entirely and is also much cheaper (no per-frame composer passes).
+     *
+     * These work identically under both the WebGL EffectComposer and the
+     * WebGPU TSL `pass(scene, camera)` pipelines because they live in the
+     * scene tree and are rendered by the active renderer's normal scene pass.
+     *
+     * @type {THREE.Group|null}
+     */
+    this.secondaryOutlineGroup = null;
+
+    /**
+     * Primary selection outline group — drawn as scene-graph LineSegments.
+     * Holds the wireframe for the LAST selected object (the primary). This
+     * is used:
+     *   - In WebGPU mode, where no `OutlinePass` is available at all.
+     *   - In WebGL mode, as a fallback when the OutlinePass is disabled
+     *     (e.g. in physics-edit mode for collider objects).
+     * In WebGL mode the OutlinePass also renders the primary outline (with
+     * edge-detection blur), which looks smoother than the 1-pixel LineSegments
+     * drawn here — so we leave the WebGL OutlinePass alone and let this
+     * group ONLY be used when the OutlinePass is absent.
+     *
+     * @type {THREE.Group|null}
+     */
+    this.primaryOutlineGroup = null;
+
     /** @type {OutlinePass|null} — hover highlight (white outline, thinner) */
     this.hoverOutlinePass = null;
 
@@ -301,6 +341,7 @@ export class PostProcessingPipeline {
     this._onPpSettings        = this._onPpSettings.bind(this);
     this._onPostFxChange      = this._onPostFxChange.bind(this);
     this._onSceneChildAdded    = this._onSceneChildAdded.bind(this);
+    this._onSceneSwitch        = this._onSceneSwitch.bind(this);
     this._onVpTool             = this._onVpTool.bind(this);
     this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
     this._onPrefsChanged       = this._onPrefsChanged.bind(this);
@@ -320,6 +361,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-preferences-change',      this._onPrefsChanged);
     window.addEventListener('cyco-preferences-preview',     this._onPrefsChanged);
     window.addEventListener('cyco-physics-edit-mode',       this._onPhysicsEditMode);
+    window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
 
     // If the viewport was already initialized before this pipeline was
     // constructed, rebuild immediately so the composer is available.
@@ -366,6 +408,12 @@ export class PostProcessingPipeline {
     this._applySelectionOutlinePrefs();
     this.outlinePass.selectedObjects = this._selectedObjects;
     this._composer.addPass(this.outlinePass);
+
+    // 3a. Secondary selection outlines — drawn as scene-graph LineSegments
+    //     inside `secondaryOutlineGroup` (added to the scene root). See the
+    //     field doc on `secondaryOutlineGroup` for why we don't use a second
+    //     OutlinePass. We create the group lazily in `_ensureSecondaryGroup`.
+    this._ensureSecondaryGroup(scene);
 
     // 3b. Hover outline pass — white outline when mousing over unselected objects
     this.hoverOutlinePass = new OutlinePass(new THREE.Vector2(w, h), scene, camera);
@@ -446,25 +494,28 @@ export class PostProcessingPipeline {
         : 0 )
       : 0;
     const isDebug = (output !== 0);
-    if (this.bloomPass)        this.bloomPass.enabled        = !isDebug;
-    if (this.outlinePass)      this.outlinePass.enabled      = !isDebug;
-    if (this.hoverOutlinePass) this.hoverOutlinePass.enabled = !isDebug;
+    if (this.bloomPass)              this.bloomPass.enabled              = !isDebug;
+    if (this.outlinePass)            this.outlinePass.enabled            = !isDebug;
+    if (this.secondaryOutlineGroup)  this.secondaryOutlineGroup.visible = !isDebug;
+    if (this.hoverOutlinePass)       this.hoverOutlinePass.enabled       = !isDebug;
   }
 
   _disposeWebGLPipeline() {
     if (!this._composer) return;
     this._composer.passes.forEach(pass => pass.dispose?.());
     this._composer.dispose?.();
-    this._composer   = null;
-    this.outlinePass = null;
-    this.bloomPass   = null;
-    this.fxaaPass    = null;
-    this.smaaPass    = null;
-    this.lutPass     = null;
-    this.aoPass      = null;
-    this.chromaPass    = null;
-    this.vignettePass  = null;
-    this.filmGrainPass = null;
+    this._composer             = null;
+    this.outlinePass           = null;
+    this._disposeSecondaryGroup();
+    this._disposePrimaryOutlineGroup();
+    this.bloomPass             = null;
+    this.fxaaPass              = null;
+    this.smaaPass              = null;
+    this.lutPass               = null;
+    this.aoPass                = null;
+    this.chromaPass            = null;
+    this.vignettePass          = null;
+    this.filmGrainPass         = null;
     this.godRays?.dispose();
     this.engine.setPipelineActive(false);
   }
@@ -488,6 +539,10 @@ export class PostProcessingPipeline {
       this._compileRT = null;
     }
     this._tslNodes = null;
+    // Drop both outline groups too — the WebGPU pipeline is being torn
+    // down; `_buildWebGPUPipeline` will recreate them on the new scene.
+    this._disposeSecondaryGroup();
+    this._disposePrimaryOutlineGroup();
     this.engine.setPipelineActive(false);
   }
 
@@ -498,6 +553,20 @@ export class PostProcessingPipeline {
     // async pipeline is rebuilding.  Without this, _pipelineActive stays true
     // but _tslPipelineActive is false, which produces blank frames.
     this.engine.setPipelineActive(false);
+    // The secondary outline group is a scene-graph Group (not a composer
+    // pass) so it works identically under both WebGL EffectComposer and
+    // WebGPU TSL pipelines. Make sure it exists and is attached to the
+    // current scene.
+    this._ensureSecondaryGroup(scene);
+    // In WebGPU mode there's no OutlinePass, so we also draw the primary
+    // outline as scene-graph LineSegments. In WebGL mode the OutlinePass
+    // renders the primary outline with edge-detection blur which looks
+    // better — so the primary scene-graph group is created but stays empty
+    // unless `outlinePass` is null.
+    this._ensurePrimaryOutlineGroup(scene);
+    // Also rebuild any pending selection outlines — the group was just
+    // (re)created so its child LineSegments list is empty.
+    this._refreshSecondaryOutlines();
     try {
       const webgpuMod = await import('three/webgpu');
       const { RenderPipeline, TSL } = webgpuMod;
@@ -720,6 +789,33 @@ export class PostProcessingPipeline {
   _onSceneChildAdded() {
     if (!this._tslPipelineActive) return;
     this._scheduleTslCompile();
+  }
+
+  /**
+   * Scene switch — re-attach the secondary-outline Group to the new active
+   * scene, otherwise the Group stays parented to the old scene and the
+   * outlines won't render.
+   */
+  _onSceneSwitch(_event) {
+    if (this.secondaryOutlineGroup) {
+      // Drop any cached outlines — the source objects live in the old scene.
+      this._clearSecondaryOutlines();
+      // Detach so `_ensureSecondaryGroup` will re-add to the current scene.
+      if (this.secondaryOutlineGroup.parent) {
+        this.secondaryOutlineGroup.parent.remove(this.secondaryOutlineGroup);
+      }
+    }
+    if (this.primaryOutlineGroup) {
+      this._clearPrimaryOutline();
+      if (this.primaryOutlineGroup.parent) {
+        this.primaryOutlineGroup.parent.remove(this.primaryOutlineGroup);
+      }
+    }
+    const scene = this.engine.scene;
+    if (scene) {
+      this._ensureSecondaryGroup(scene);
+      this._ensurePrimaryOutlineGroup(scene);
+    }
   }
 
   /**
@@ -1084,6 +1180,13 @@ export class PostProcessingPipeline {
     const _fr = window._cycoDbgFrame || '?';
     // ─────────────────────────────────────────────────────────────────────────
 
+    // Sync secondary-outline LineSegments transforms to their source objects.
+    // These are scene-graph meshes so they need matrix updates each frame to
+    // track moves/rotates/scales of the selected objects. Runs under BOTH
+    // WebGL and WebGPU pipelines — the group lives in the scene and is
+    // rendered by whichever renderer the engine is using.
+    this._updateSecondaryOutlinesTransforms();
+
     // ── TSL pipeline (WebGPU native post-processing) ──────────────────────────
     if (this._tslPipelineActive && this._tslPipeline && this._pipelineEnabled) {
       const renderer = this.engine.rendererManager?.renderer;
@@ -1300,23 +1403,342 @@ export class PostProcessingPipeline {
   }
 
   _applySelectionOutlinePrefs() {
-    if (!this.outlinePass) return;
     const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
     const thickness = Math.max(0.05, bounds.thickness ?? 1);
     const glowIntensity = Math.max(0, bounds.glowIntensity ?? 0.35);
     const selectedObject = this._selectedObjects[this._selectedObjects.length - 1] ?? null;
     const showSelectionOutline = !this._physicsEditMode || !this._hasPhysicsCollider(selectedObject);
-    this.outlinePass.enabled = showSelectionOutline;
-    this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
-    this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
-    this.outlinePass.edgeThickness = thickness;
-    this.outlinePass.visibleEdgeColor.set(bounds.outlineColor ?? '#e8eeff');
-    this.outlinePass.hiddenEdgeColor.set(0x000000);
+    // Remember the color so the scene-graph primary-outline LineSegments can
+    // use the same hue when no OutlinePass is available (WebGPU mode).
+    this._primaryOutlineColor = new THREE.Color(bounds.outlineColor ?? '#e8eeff');
+    if (this.outlinePass) {
+      this.outlinePass.enabled = showSelectionOutline;
+      this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
+      this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
+      this.outlinePass.edgeThickness = thickness;
+      this.outlinePass.visibleEdgeColor.set(bounds.outlineColor ?? '#e8eeff');
+      this.outlinePass.hiddenEdgeColor.set(0x000000);
+    }
   }
+
+  /**
+   * Apply prefs to the secondary outline pass. The secondary pass outlines
+   * every multi-selected object EXCEPT the primary (most-recently-selected)
+   * one — those use the regular outlinePass. The secondary color defaults to
+   * a vivid cyan so it stands out from the primary's near-white.
+   */
+  _applySecondaryOutlinePrefs() {
+    // The secondary outline is a scene-graph LineSegments mesh, so "apply
+    // prefs" just means remembering the latest color / thickness for the
+    // next `_refreshSecondaryOutlines()` call. We don't need a renderer
+    // pass here.
+    const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    this._secondaryColor = new THREE.Color(bounds.secondaryOutlineColor ?? '#45ffd0');
+  }
+
+  /**
+   * Ensure the secondary-outline Group exists and is added to the given scene.
+   * Idempotent. The Group lives as a child of the active scene, so its lines
+   * participate in normal rendering (no composer pass needed). Tagged so the
+   * non-selectable filter in SelectionManager skips it.
+   * @param {THREE.Scene} scene
+   */
+  _ensureSecondaryGroup(scene) {
+    if (this.secondaryOutlineGroup && this.secondaryOutlineGroup.parent === scene) return;
+    if (!this.secondaryOutlineGroup) {
+      this.secondaryOutlineGroup = new THREE.Group();
+      this.secondaryOutlineGroup.name = '__cyco_secondary_outlines';
+      this.secondaryOutlineGroup.userData._isHelper = true;
+      this.secondaryOutlineGroup.userData._editorOnly = true;
+      this.secondaryOutlineGroup.userData.cycoId = '__cyco_secondary_outlines';
+      // Persist a single empty buffer geometry we reuse as the pool. Each
+      // child gets its own LineSegments with its own geometry built from
+      // the source object's EdgesGeometry.
+      this.secondaryOutlineGroup.frustumCulled = false;
+      this.secondaryOutlineGroup.renderOrder = 999;
+    }
+    if (this.secondaryOutlineGroup.parent && this.secondaryOutlineGroup.parent !== scene) {
+      this.secondaryOutlineGroup.parent.remove(this.secondaryOutlineGroup);
+    }
+    if (scene && !this.secondaryOutlineGroup.parent) scene.add(this.secondaryOutlineGroup);
+  }
+
+  _disposeSecondaryGroup() {
+    if (!this.secondaryOutlineGroup) return;
+    this._clearSecondaryOutlines();
+    if (this.secondaryOutlineGroup.parent) this.secondaryOutlineGroup.parent.remove(this.secondaryOutlineGroup);
+    this.secondaryOutlineGroup = null;
+  }
+
+  /**
+   * Remove all secondary-outline LineSegments from the group. Called when
+   * the selection changes or the pipeline is rebuilt.
+   */
+  _clearSecondaryOutlines() {
+    const g = this.secondaryOutlineGroup;
+    if (!g) return;
+    for (let i = g.children.length - 1; i >= 0; i--) {
+      const child = g.children[i];
+      g.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
+    }
+  }
+
+  /**
+   * Ensure the primary-outline Group exists and is attached to the scene.
+   * Used only in WebGPU mode (and as a fallback when OutlinePass is disabled
+   * in WebGL mode) — in WebGL mode the regular OutlinePass renders the
+   * primary outline with edge-detection blur which looks better.
+   * @param {THREE.Scene} scene
+   */
+  _ensurePrimaryOutlineGroup(scene) {
+    if (this.primaryOutlineGroup && this.primaryOutlineGroup.parent === scene) return;
+    if (!this.primaryOutlineGroup) {
+      this.primaryOutlineGroup = new THREE.Group();
+      this.primaryOutlineGroup.name = '__cyco_primary_outlines';
+      this.primaryOutlineGroup.userData._isHelper = true;
+      this.primaryOutlineGroup.userData._editorOnly = true;
+      this.primaryOutlineGroup.userData.cycoId = '__cyco_primary_outlines';
+      this.primaryOutlineGroup.frustumCulled = false;
+      this.primaryOutlineGroup.renderOrder = 1000; // above secondary outlines
+    }
+    if (this.primaryOutlineGroup.parent && this.primaryOutlineGroup.parent !== scene) {
+      this.primaryOutlineGroup.parent.remove(this.primaryOutlineGroup);
+    }
+    if (scene && !this.primaryOutlineGroup.parent) scene.add(this.primaryOutlineGroup);
+  }
+
+  _disposePrimaryOutlineGroup() {
+    if (!this.primaryOutlineGroup) return;
+    this._clearPrimaryOutline();
+    if (this.primaryOutlineGroup.parent) this.primaryOutlineGroup.parent.remove(this.primaryOutlineGroup);
+    this.primaryOutlineGroup = null;
+  }
+
+  _clearPrimaryOutline() {
+    const g = this.primaryOutlineGroup;
+    if (!g) return;
+    for (let i = g.children.length - 1; i >= 0; i--) {
+      const child = g.children[i];
+      g.remove(child);
+      if (child.geometry) child.geometry.dispose();
+      if (child.material) child.material.dispose();
+    }
+  }
+
+  /** True when the active renderer is WebGPU (no OutlinePass available). */
+  _isWebGPURenderer() {
+    return this.engine?.rendererManager?.activeType === 'webgpu';
+  }
+
+  /**
+   * Rebuild the secondary-outline LineSegments meshes from the current
+   * `_selectedObjects` (everything EXCEPT the primary — the last element).
+   * Each LineSegments is parented to the secondary-outline Group, so it
+   * inherits the scene's render path automatically.
+   *
+   * Also refreshes the primary-outline group when no OutlinePass is
+   * available (WebGPU mode, or when the OutlinePass is disabled for
+   * colliders in physics edit mode).
+   */
+  _refreshSecondaryOutlines() {
+    const scene = this.engine?.scene;
+    // Make sure both groups are attached to the current active scene.
+    if (scene) {
+      if (!this.secondaryOutlineGroup) this._ensureSecondaryGroup(scene);
+      else if (this.secondaryOutlineGroup.parent !== scene) this._ensureSecondaryGroup(scene);
+      if (!this.primaryOutlineGroup) this._ensurePrimaryOutlineGroup(scene);
+      else if (this.primaryOutlineGroup.parent !== scene) this._ensurePrimaryOutlineGroup(scene);
+    }
+    this._clearSecondaryOutlines();
+    this._clearPrimaryOutline();
+    if (!this.secondaryOutlineGroup || !this.primaryOutlineGroup) return;
+    const secondaryColor = this._secondaryColor ?? new THREE.Color('#45ffd0');
+    const primaryColor = this._primaryOutlineColor ?? new THREE.Color('#e8eeff');
+    const all = this._selectedObjects;
+    if (all.length === 0) return;
+    const primary = all[all.length - 1];
+    // Hide outlines while in physics edit mode for collider objects.
+    const hideForPhysics = this._physicsEditMode && this._hasPhysicsCollider(primary);
+    this.secondaryOutlineGroup.visible = !hideForPhysics;
+    this.primaryOutlineGroup.visible = !hideForPhysics;
+    if (hideForPhysics) return;
+    // The primary object gets a wireframe in the primary color (only when
+    // no OutlinePass is available to render it).
+    if (!this.outlinePass && primary) {
+      const lines = this._buildSecondaryOutlineFor(primary, primaryColor);
+      if (lines) {
+        lines.userData.cycoSourceId = primary.userData?.cycoId;
+        lines.renderOrder = 1000; // ensure on top
+        this.primaryOutlineGroup.add(lines);
+      }
+    }
+    // Every other selected object gets the secondary (cyan) wireframe.
+    const secondary = all.slice(0, -1);
+    for (const obj of secondary) {
+      const lines = this._buildSecondaryOutlineFor(obj, secondaryColor);
+      if (lines) this.secondaryOutlineGroup.add(lines);
+    }
+  }
+
+  /**
+   * Build a LineSegments mesh whose geometry traces the silhouette of `obj`.
+   * Works for meshes (uses EdgesGeometry on the mesh's own geometry), groups
+   * (traverses to gather child edges), and lights / cameras (uses a small
+   * bounding-box wireframe).
+   *
+   * The LineSegments is tagged with the source object's `cycoId` via
+   * `userData.cycoSourceId` so it can be matched back to its source if needed.
+   *
+   * @param {THREE.Object3D} obj
+   * @param {THREE.Color} color
+   * @returns {THREE.LineSegments|null}
+   */
+  _buildSecondaryOutlineFor(obj, color) {
+    if (!obj) return null;
+    let geometry = null;
+    if (obj.isMesh || obj.isInstancedMesh || obj.isSkinnedMesh) {
+      try {
+        geometry = new THREE.EdgesGeometry(obj.geometry, 25);
+      } catch (e) {
+        geometry = null;
+      }
+    }
+    if (!geometry) {
+      // Fall back to an axis-aligned bounding-box wireframe so groups / lights
+      // / cameras still get a visible secondary outline.
+      const box = new THREE.Box3().setFromObject(obj);
+      if (!isFinite(box.min.x) || box.isEmpty()) return null;
+      const size = new THREE.Vector3();
+      box.getSize(size);
+      const center = new THREE.Vector3();
+      box.getCenter(center);
+      // Build a 12-edge wireframe manually so it doesn't depend on the
+      // object being a mesh with valid geometry.
+      const min = box.min, max = box.max;
+      const v = [
+        new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, min.y, min.z),
+        new THREE.Vector3(max.x, max.y, min.z), new THREE.Vector3(min.x, max.y, min.z),
+        new THREE.Vector3(min.x, min.y, max.z), new THREE.Vector3(max.x, min.y, max.z),
+        new THREE.Vector3(max.x, max.y, max.z), new THREE.Vector3(min.x, max.y, max.z),
+      ];
+      // Edges (pairs of vertex indices).
+      const idx = [
+        0,1, 1,2, 2,3, 3,0, // bottom
+        4,5, 5,6, 6,7, 7,4, // top
+        0,4, 1,5, 2,6, 3,7, // verticals
+      ];
+      const positions = new Float32Array(idx.length * 3);
+      for (let i = 0; i < idx.length; i++) {
+        const p = v[idx[i]];
+        positions[i*3+0] = p.x;
+        positions[i*3+1] = p.y;
+        positions[i*3+2] = p.z;
+      }
+      geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    }
+    const material = new THREE.LineBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.95,
+      depthTest: true,
+      depthWrite: false,
+    });
+    const lines = new THREE.LineSegments(geometry, material);
+    lines.userData._isHelper = true;
+    lines.userData._editorOnly = true;
+    lines.userData.cycoSourceId = obj.userData?.cycoId;
+    // Render order high so the outline draws on top of the mesh interior.
+    lines.renderOrder = 999;
+    // Disable frustum culling — geometry's bounding box is in LOCAL space but
+    // the lines are drawn in WORLD space at the source object's transform, so
+    // the default frustum cull test uses a stale AABB and culls the lines
+    // when they should be visible.
+    lines.frustumCulled = false;
+    return lines;
+  }
+
+  /**
+   * Update both primary and secondary outline meshes' transforms to match
+   * their source objects every frame. Called from `_onTick` so outlines
+   * follow transforms in real time without rebuilding geometry.
+   */
+  _updateSecondaryOutlinesTransforms() {
+    this._updateOutlineGroupTransforms(this.secondaryOutlineGroup);
+    this._updateOutlineGroupTransforms(this.primaryOutlineGroup);
+  }
+
+  _updateOutlineGroupTransforms(g) {
+    if (!g || !g.visible) return;
+    // Each child LineSegments has userData.cycoSourceId; look up the source
+    // object by id from the current scene. This works even if the scene was
+    // rebuilt.
+    for (let i = 0; i < g.children.length; i++) {
+      const lines = g.children[i];
+      const sourceId = lines.userData?.cycoSourceId;
+      if (!sourceId) continue;
+      const source = this._findObjectByCycoId(sourceId);
+      if (!source) {
+        // Source object gone — drop the outline.
+        g.remove(lines);
+        if (lines.geometry) lines.geometry.dispose();
+        if (lines.material) lines.material.dispose();
+        i--;
+        continue;
+      }
+      // Lines are children of the outline group (which is in the active
+      // scene). Make their world transform match the source object. We
+      // attach as a child of the source so it follows parent changes too,
+      // but we need it to live under the outline group so it gets cleaned
+      // up on selection change. So we re-parent only if needed.
+      if (lines.parent !== g) {
+        g.add(lines);
+      }
+      lines.position.copy(source.position);
+      lines.rotation.copy(source.rotation);
+      lines.scale.copy(source.scale);
+      // Account for parent's world matrix if the source is not at the root.
+      if (source.parent && source.parent.matrixWorld) {
+        source.parent.updateMatrixWorld(true);
+        const localFromParent = new THREE.Matrix4().copy(source.parent.matrixWorld).invert();
+        lines.matrix.identity();
+        lines.applyMatrix4(source.matrixWorld);
+        lines.applyMatrix4(localFromParent);
+      } else {
+        lines.matrix.identity();
+        lines.applyMatrix4(source.matrixWorld);
+      }
+      lines.matrixAutoUpdate = false;
+    }
+  }
+
+  /** Look up an object in the active scene by its `userData.cycoId`. */
+  _findObjectByCycoId(id) {
+    if (!id) return null;
+    const scene = this.engine.scene;
+    if (!scene) return null;
+    let found = null;
+    scene.traverse(o => {
+      if (!found && o.userData?.cycoId === id) found = o;
+    });
+    return found;
+  }
+
+  /**
+   * (Legacy / unused — kept as a no-op so external code that calls it
+   * doesn't crash. See `_refreshSecondaryOutlines` for the real work.)
+   * @deprecated
+   */
+  _wrapOutlinePassForViewportReset(_outlinePass) { /* no-op */ }
 
   _onPrefsChanged(event) {
     this._prefs = event.detail?.prefs ?? loadPrefs();
     this._applySelectionOutlinePrefs();
+    this._applySecondaryOutlinePrefs();
+    // Rebuild the secondary outlines so any color/glow change is reflected.
+    this._refreshSecondaryOutlines();
   }
 
   _onSelectNode(event) {
@@ -1325,6 +1747,9 @@ export class PostProcessingPipeline {
       this._applySelectionOutlinePrefs();
       this.outlinePass.selectedObjects = this._selectedObjects;
     }
+    // Refresh the scene-graph secondary outlines (the non-primary selected
+    // objects each get a colored wireframe child).
+    this._refreshSecondaryOutlines();
     // When selection changes with the TSL pipeline active, newly-visible gizmo
     // handles (TransformControls) may not have compiled shaders yet.  Schedule
     // a deferred compile so they appear on the very next frame.
@@ -1334,6 +1759,7 @@ export class PostProcessingPipeline {
   _onDeselectAll() {
     this._selectedObjects = [];
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
+    this._refreshSecondaryOutlines();
   }
 
   _onVpTool() {
@@ -1359,6 +1785,7 @@ export class PostProcessingPipeline {
       this._applySelectionOutlinePrefs();
       this.outlinePass.selectedObjects = this._selectedObjects;
     }
+    this._refreshSecondaryOutlines();
     if (this.hoverOutlinePass && this._physicsEditMode) {
       this.hoverOutlinePass.selectedObjects = [];
     }
@@ -1503,6 +1930,7 @@ export class PostProcessingPipeline {
 
   dispose() {
     this._disposeWebGLPipeline();
+    this._disposeSecondaryGroup();
     window.removeEventListener('cyco-vp-ready',          this._onVpReady);
     window.removeEventListener('cyco-renderer-changed',  this._onRendererChanged);
     window.removeEventListener('cyco-vp-tick',           this._onTick);
@@ -1517,6 +1945,7 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-editor-camera-changed',   this._onEditorCameraChanged);
     window.removeEventListener('cyco-preferences-change',      this._onPrefsChanged);
     window.removeEventListener('cyco-preferences-preview',     this._onPrefsChanged);
+    window.removeEventListener('cyco-scene-switch',            this._onSceneSwitch);
   }
 }
 

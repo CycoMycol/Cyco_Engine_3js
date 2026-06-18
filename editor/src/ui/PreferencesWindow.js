@@ -99,6 +99,7 @@ export const DEFAULT_PREFS = {
       thickness: 1,
       distance: 1,
       outlineColor: '#e8eeff',
+      secondaryOutlineColor: '#45ffd0',
       glowIntensity: 0.35,
       glowColor: '#9b6cff',
     },

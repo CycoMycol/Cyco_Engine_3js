@@ -4313,3 +4313,18 @@ input.ce-fp-search, input.ce-fp-search:-webkit-autofill {
   z-index: 50;
 }
 .ce-fp-resize-handle:hover { opacity: 1; }
+
+/* ─── Marquee selection box (viewport drag-rect) ──────────────────────────
+ * Drawn as an absolutely-positioned <div> appended to the canvas parent.
+ * SelectionManager.js owns its lifecycle (create on first drag, size/move on
+ * pointermove, hide on pointerup). Sits above the canvas but below dockview
+ * panels so other panels still intercept pointer events. */
+.cyco-marquee-box {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  border: 1px solid #66b3ff;
+  background: rgba(102, 179, 255, 0.12);
+  z-index: 30;
+  display: none;
+}

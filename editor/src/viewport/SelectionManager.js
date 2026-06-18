@@ -11,12 +11,11 @@
  *
  * Events consumed:
  *   cyco-vp-ready      { scene, camera }           — grab scene + camera ref
- *   cyco-renderer-changed { renderer }             — rebuild SelectionHelper
+ *   cyco-renderer-changed { renderer }             — rebuild marquee overlay
  *   cyco-deselect      {}                          — programmatic deselect
  */
 
 import * as THREE from 'three';
-import { SelectionHelper } from 'three/addons/interactive/SelectionHelper.js';
 
 export class SelectionManager {
   /**
@@ -49,8 +48,12 @@ export class SelectionManager {
     this._marqueeStartNDC  = new THREE.Vector2();
     /** @type {THREE.Vector2} Marquee end in NDC. */
     this._marqueeEndNDC    = new THREE.Vector2();
-    /** @type {SelectionHelper|null} */
-    this._selectionHelper = null;
+    /** @type {HTMLDivElement|null} Marquee rectangle overlay (lazy-created). */
+    this._marqueeEl        = null;
+    /** @type {{x:number,y:number}|null} Marquee origin in viewport (client) coords. */
+    this._marqueeStartClient = null;
+    /** @type {THREE.Object3D|null} Last hover hit used for hover outline. */
+    this._selectionHelper = null; // legacy field; intentionally null
 
     /** Currently hovered object (for outline hover highlight) */
     this._hoveredObject = null;
@@ -172,20 +175,110 @@ export class SelectionManager {
     // Re-attach events to new canvas
     this._detachPointerEvents();
     this._attachPointerEvents(renderer.domElement);
-    this._selectionHelper = null; // will be rebuilt
+    this._disposeMarquee();
     this._buildSelectionBox(renderer);
   }
 
-  _buildSelectionBox(renderer) {
-    // The marquee is a 2D HUD overlay. We use the existing three.js
-    // SelectionHelper (which draws a div rectangle in screen space) and pair
-    // it with a custom screen-space selection routine (`_selectByScreenRect`)
-    // that projects each candidate's world position to NDC and checks whether
-    // it falls inside the marquee rectangle. This is far more reliable than
-    // the three.js SelectionBox frustum test, which only checks the bounding
-    // sphere centre against a thin cone and routinely misses objects.
-    this._selectionHelper = new SelectionHelper(renderer, 'selectBox');
-    this._selectionHelper.enabled = false; // only active during drag
+  _buildSelectionBox(_renderer) {
+    // The marquee is a 2D HUD overlay. We manage a single `<div>` ourselves
+    // (lazy-created, appended to the canvas parent, sized/positioned on drag).
+    //
+    // We do NOT use the three.js `SelectionHelper` here. That helper binds its
+    // OWN pointerdown/pointermove/pointerup listeners to the canvas and only
+    // triggers `_onSelectStart` (which appends the div) on its own pointerdown.
+    // Because we toggle its `enabled` flag AFTER the drag threshold — i.e. AFTER
+    // our pointerdown has already fired — the helper's internal `isDown` flag
+    // is never set, the div is never appended, and the marquee is never drawn.
+    // See https://github.com/mrdoob/three.js/blob/dev/examples/jsm/interactive/SelectionHelper.js
+    //
+    // Instead we own the lifecycle directly: `_showMarquee()` on drag start,
+    // `_updateMarquee()` on every move, `_hideMarquee()` on release.
+    //
+    // Selection itself still uses the screen-space NDC projection routine
+    // (`_selectByScreenRect`) — far more reliable than the three.js SelectionBox
+    // frustum test, which only checks each candidate's bounding-sphere centre
+    // against a thin cone and routinely misses objects.
+    this._selectionHelper = null;
+  }
+
+  /**
+   * Lazily create the marquee `<div>` and append it to the canvas parent.
+   * Returns the existing element if it already exists.
+   * @returns {HTMLDivElement}
+   */
+  _ensureMarqueeEl() {
+    if (this._marqueeEl && this._marqueeEl.isConnected) return this._marqueeEl;
+    const el = document.createElement('div');
+    el.className = 'cyco-marquee-box';
+    el.style.display = 'none';
+    el.style.pointerEvents = 'none';
+    const host = this._canvas?.parentElement ?? document.body;
+    host.appendChild(el);
+    this._marqueeEl = el;
+    return el;
+  }
+
+  /**
+   * Position the marquee between two client-space points and make it visible.
+   *
+   * The marquee origin is anchored at the pointer position (the
+   * "tip of the mouse pointer"). When the user clicks and drags, the visible
+   * rectangle grows in the direction the cursor moves — the cursor is always
+   * at the corner of the marquee closest to its current screen position.
+   * This matches the convention used by Blender, Figma, Windows Explorer
+   * (rubber-band select), and most desktop file managers: the marquee
+   * visually "starts at the mouse pointer" and extends in the drag direction.
+   *
+   * Internally, `min(start, current)` gives the corner opposite to the
+   * pointer's motion (the click point), and `|current - start|` gives the
+   * dimensions.
+   *
+   * The marquee `<div>` is appended to the canvas parent (`.ce-viewport-canvas`),
+   * which is itself offset from the page origin by the panel's left/top. We
+   * therefore subtract the parent rect from each client-space coordinate so
+   * the div's `left`/`top` style values are relative to the parent — without
+   * this fix the rectangle appears offset by `parentLeft` / `parentTop` from
+   * the cursor.
+   */
+  _showMarquee(startClient, currentClient) {
+    const el = this._ensureMarqueeEl();
+    // Translate client-space coordinates into the marquee parent's coordinate
+    // system so the div sits exactly under the pointer.
+    const parent = el.parentElement;
+    let offsetX = 0, offsetY = 0;
+    if (parent) {
+      const pr = parent.getBoundingClientRect();
+      offsetX = pr.left;
+      offsetY = pr.top;
+    }
+    const aX = startClient.x - offsetX;
+    const aY = startClient.y - offsetY;
+    const bX = currentClient.x - offsetX;
+    const bY = currentClient.y - offsetY;
+    const left   = Math.min(aX, bX);
+    const top    = Math.min(aY, bY);
+    const width  = Math.abs(bX - aX);
+    const height = Math.abs(bY - aY);
+    el.style.left   = left   + 'px';
+    el.style.top    = top    + 'px';
+    el.style.width  = width  + 'px';
+    el.style.height = height + 'px';
+    el.style.display = 'block';
+  }
+
+  _updateMarquee(currentClient) {
+    if (!this._marqueeStartClient) return;
+    this._showMarquee(this._marqueeStartClient, currentClient);
+  }
+
+  _hideMarquee() {
+    if (!this._marqueeEl) return;
+    this._marqueeEl.style.display = 'none';
+  }
+
+  _disposeMarquee() {
+    if (this._marqueeEl?.parentElement) this._marqueeEl.parentElement.removeChild(this._marqueeEl);
+    this._marqueeEl = null;
   }
 
   /**
@@ -277,6 +370,7 @@ export class SelectionManager {
     const ndc = this._toNDC(event);
     this._marqueeStartNDC.set(ndc.x, ndc.y);
     this._marqueeEndNDC.set(ndc.x, ndc.y);
+    this._marqueeStartClient = { x: event.clientX, y: event.clientY };
 
     // Decide if the press landed on an existing gizmo handle / box. If so the
     // gizmo owns the drag and OrbitControls + marquee should both stay out of
@@ -304,11 +398,18 @@ export class SelectionManager {
       const dy = event.clientY - this._pointerDown.y;
       if (!this._isDragging && Math.hypot(dx, dy) > this._dragThreshold) {
         this._isDragging = true;
-        if (this._selectionHelper) this._selectionHelper.enabled = true;
+        // Show the marquee rectangle NOW — the drag is real, draw it from the
+        // pointerdown origin to the current pointer position.
+        if (this._marqueeStartClient) {
+          this._showMarquee(this._marqueeStartClient, { x: event.clientX, y: event.clientY });
+        }
       }
       if (this._isDragging) {
         const ndc = this._toNDC(event);
         this._marqueeEndNDC.set(ndc.x, ndc.y);
+        if (this._marqueeStartClient) {
+          this._updateMarquee({ x: event.clientX, y: event.clientY });
+        }
       }
     } else {
       // No button held — hover highlight
@@ -317,6 +418,9 @@ export class SelectionManager {
   }
 
   _onPointerLeave() {
+    // Don't hide the marquee mid-drag — the pointer can leave the canvas while
+    // the user is still dragging (e.g. moving outside the dockview panel) and
+    // we still want the rectangle visible until pointerup. We do clear hover.
     this._setHoveredObject(null);
   }
 
@@ -393,24 +497,27 @@ export class SelectionManager {
   _onPointerUp(event) {
     if (!this._active || event.button !== 0) return;
 
+    // Always hide the marquee on any pointerup; selection outcome is decided
+    // below. This catches the cases where we early-return without finishing
+    // the marquee as well.
+    const wasDragging = this._isDragging;
+    this._hideMarquee();
+    this._marqueeStartClient = null;
+
     // If the press did not start on the canvas (e.g. user dragged a material card
     // from another panel and released here), ignore — do NOT clear selection.
     if (!this._pointerDownOnCanvas) {
-      if (this._selectionHelper) this._selectionHelper.enabled = false;
       return;
     }
     // If another system (e.g. PhysicsEditHelper) already handled selection on
     // pointerdown, it sets a suppression flag so we must skip default click handling.
     if (window.__cyco && window.__cyco._suppressSelectionManagerClick) {
       try { delete window.__cyco._suppressSelectionManagerClick; } catch (err) {}
-      if (this._selectionHelper) this._selectionHelper.enabled = false;
       this._pointerDownOnCanvas = false;
       this._isDragging = false;
       return;
     }
     this._pointerDownOnCanvas = false;
-
-    if (this._selectionHelper) this._selectionHelper.enabled = false;
 
     // dragging-changed(true) was received during this drag — gizmo owns it.
     // dragging-changed(false) fires on document pointerup, which is AFTER this
@@ -594,6 +701,7 @@ export class SelectionManager {
     window.removeEventListener('cyco-renderer-changed', this._onRendererChanged);
     window.removeEventListener('cyco-select-node',      this._onSelectNode);
     window.removeEventListener('cyco-deselect',         this._onDeselect);
+    this._disposeMarquee();
     this._selectionHelper = null;
   }
 }
