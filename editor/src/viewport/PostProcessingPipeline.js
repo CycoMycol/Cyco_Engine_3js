@@ -294,6 +294,14 @@ export class PostProcessingPipeline {
     //   giant white halo at default settings.  Users can dial it down if desired.
     this._bloomParams = { enabled: true, strength: 0.6, radius: 0.3, threshold: 1.5 };
 
+    // ── Outline refresh debouncing ───────────────────────────────────────────
+    // When the user drags a slider, `cyco-preferences-preview` fires many
+    // times per second.  Each call would otherwise rebuild the outline
+    // meshes (dispose + recreate geometry + materials), causing visible
+    // flashes at the viewport edges.  Coalesce multiple previews into a
+    // single rAF rebuild.
+    this._outlineRebuildPending = false;
+
     // ── Chromatic Aberration ──────────────────────────────────────────────────
     /** @type {ShaderPass|null} */
     this.chromaPass        = null;
@@ -1403,46 +1411,79 @@ export class PostProcessingPipeline {
   }
 
   _applySelectionOutlinePrefs() {
-    const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
+    const bounds = gizmo.bounds ?? {};
+    // Pick the correct prefs source based on selection size.
+    //   - 1 object selected  → use gizmo.singleSelect
+    //   - ≥2 objects selected → use gizmo.firstSelected for the FIRST
+    //     selected object, gizmo.multiSelect for the rest.
+    // The shared `bounds.*` fields are kept as legacy fallbacks for
+    // older prefs files.
+    const isMulti = (this._selectedObjects?.length ?? 0) > 1;
+    const active = isMulti
+      ? (gizmo.firstSelected ?? bounds)
+      : (gizmo.singleSelect ?? bounds);
     // thickness slider is a 0.05–4 visual-weight value; we map it to a
     // 0.001–0.10 inverted-hull relative scale (WebGPU / scene-graph
     // outline) AND forward it to the WebGL OutlinePass.edgeThickness.
-    const thickness = Math.max(0.05, bounds.thickness ?? 1);
-    const glowIntensity = Math.max(0, bounds.singleGlowIntensity ?? bounds.glowIntensity ?? 0.35);
+    const thickness = Math.max(0.05, active.thickness ?? bounds.thickness ?? 1);
+    const distance = Math.max(0.05, active.distance ?? bounds.distance ?? 1);
+    const glowIntensity = Math.max(0, active.glowIntensity ?? bounds.singleGlowIntensity ?? bounds.glowIntensity ?? 0.35);
     const selectedObject = this._selectedObjects[this._selectedObjects.length - 1] ?? null;
     const showSelectionOutline = !this._physicsEditMode || !this._hasPhysicsCollider(selectedObject);
     // Remember the color + shell thickness so the scene-graph primary
     // outline (used in WebGPU mode and in WebGL fallback) can use the
     // same hue and weight as the WebGL OutlinePass.
-    this._primaryOutlineColor = new THREE.Color(bounds.outlineColor ?? '#e8eeff');
-    // Glow color drives the secondary halo mesh behind the outline.  This
-    // is the SAME field that TransformGizmo reads for the box-tool glow;
-    // the user expects the Outline Glow Color to affect the outline glow.
-    this._primaryGlowColor = new THREE.Color(bounds.glowColor ?? '#9b6cff');
-    // 0.025 × thickness → 0.001–0.10 relative scale.  Keeps the default
-    // (thickness=1) at ~2.5% shell — visibly thick, not screen-filling —
-    // and lets the slider reach a chunky 10% shell at its high end.
-    // Glow intensity adds a small shell-thickness bonus so "more glow"
-    // feels visually heavier even on the scene-graph inverted hull.
-    this._primaryShellThickness = Math.max(0.001, thickness * 0.025 + glowIntensity * 0.008);
+    this._primaryOutlineColor = new THREE.Color(active.outlineColor ?? bounds.outlineColor ?? '#e8eeff');
+    // Glow color drives the secondary halo mesh behind the outline.
+    this._primaryGlowColor = new THREE.Color(active.glowColor ?? bounds.glowColor ?? '#9b6cff');
+    // Shell thickness (relative scale of inverted hull):
+    //   thickness  → visible line weight (~2.5% per unit)
+    //   distance   → outward offset from source surface (~6% per unit,
+    //                so distance=2 = 6% farther, distance=4 = 18% farther)
+    //   glow       → small additive shell-size bonus
+    // Distance is the dominant outward-push so the slider has a
+    // clearly visible effect even at thickness=1.
+    this._primaryShellThickness = Math.max(0.001,
+      thickness * 0.025 +
+      glowIntensity * 0.008 +
+      distance   * 0.06
+    );
     // Map glow intensity to opacity in [0.5..1.0].  Higher glow = more
     // saturated outline shell.
     this._primaryShellOpacity = Math.min(1.0, 0.5 + glowIntensity * 0.25);
-    // Glow amount drives the halo mesh's additive opacity (0..1).  This
-    // is what the user sees as the outline "glow" — a soft colored halo
-    // wrapping the silhouette.  At glowIntensity=0 the halo is invisible;
-    // at glowIntensity=4 it's near-saturated.
+    // Glow amount drives the halo mesh's additive opacity (0..1).
     this._primaryGlowAmount = Math.min(1.0, glowIntensity * 0.28);
+    // Cache the distance slider so the OutlinePass edgeThickness (WebGL
+    // path) can be updated without re-reading prefs.
+    this._primaryDistance = distance;
+    if (window.CYCO_DEBUG_OUTLINE) {
+      console.log('[CYCO:OUTLINE-PIPE] _applySelectionOutlinePrefs', {
+        isMulti,
+        selectedCount: this._selectedObjects?.length ?? 0,
+        activeSource:  isMulti ? 'firstSelected' : 'singleSelect',
+        active:        { ...active },
+        resolved: {
+          thickness,
+          distance,
+          glowIntensity,
+          outlineColor:  this._primaryOutlineColor.getHexString(),
+          glowColor:     this._primaryGlowColor.getHexString(),
+          shellThickness: this._primaryShellThickness,
+          shellOpacity:   this._primaryShellOpacity,
+          glowAmount:     this._primaryGlowAmount,
+        },
+      });
+    }
     if (this.outlinePass) {
       this.outlinePass.enabled = showSelectionOutline;
       this.outlinePass.edgeStrength = Math.max(1.5, 2.4 + glowIntensity * 2.2);
       this.outlinePass.edgeGlow = Math.min(2.5, glowIntensity * 0.75);
+      // WebGL OutlinePass: edgeThickness is the visible thickness of the
+      // glow, pulsePeriod is independent.  We feed it ONLY the thickness
+      // slider so distance doesn't bleed into the line weight.
       this.outlinePass.edgeThickness = thickness;
-      // visibleEdgeColor = the "outline" color (what the user sees as the
-      // outline itself); hiddenEdgeColor = the "glow" tint three.js uses
-      // for the parts of the silhouette hidden behind the source mesh.
-      // Together they form the OutlinePass's own visual glow.
-      this.outlinePass.visibleEdgeColor.set(bounds.outlineColor ?? '#e8eeff');
+      this.outlinePass.visibleEdgeColor.set(this._primaryOutlineColor);
       this.outlinePass.hiddenEdgeColor.set(this._primaryGlowColor);
     }
   }
@@ -1454,31 +1495,49 @@ export class PostProcessingPipeline {
    * shell thickness for the next `_refreshSecondaryOutlines()` call. No
    * composer pass is required.
    *
-   * The secondary color defaults to vivid orange (#ff6a3d) so it stands
-   * out from the primary's near-white outline.
+   * Uses the dedicated `gizmo.multiSelect` section (independent from
+   * singleSelect and firstSelected). Falls back to legacy `bounds.*`
+   * fields for older prefs files.
    */
   _applySecondaryOutlinePrefs() {
-    const bounds = this._prefs?.gizmo?.bounds ?? loadPrefs().gizmo.bounds;
-    this._secondaryColor = new THREE.Color(bounds.secondaryOutlineColor ?? '#ff6a3d');
-    // Independent glow color for the multi-select outline.  We read from
-    // `multiGlowColor` (the dedicated multi-select swatch) first so the
-    // user can tint the multi-select glow independently from the primary.
-    this._secondaryGlowColor = new THREE.Color(bounds.multiGlowColor ?? bounds.glowColor ?? '#ff7a3d');
-    // multiThickness is a per-mode slider (defaults to the shared
-    // `thickness` so older prefs files keep working).  Slider max is now
-    // 8 (raised from 4) and the per-unit mapping is steeper (0.04×) so
-    // multi-select outlines feel chunky even at moderate slider values.
-    const multiThickness = Math.max(0.05, bounds.multiThickness ?? bounds.thickness ?? 1);
-    // multiGlowIntensity drives both the scene-graph shell thickness
-    // (small bonus) and the shell opacity so the slider has a visible
-    // effect under WebGPU / fallback modes.  Slider max is 4 (raised
-    // from 2) so glow can push the shell to a strong 1.0 opacity.
-    const multiGlow = Math.max(0, bounds.multiGlowIntensity ?? bounds.glowIntensity ?? 0.35);
-    this._secondaryShellThickness = Math.max(0.001, multiThickness * 0.04 + multiGlow * 0.012);
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
+    const bounds = gizmo.bounds ?? {};
+    const active = gizmo.multiSelect ?? {};
+    this._secondaryColor = new THREE.Color(active.outlineColor ?? bounds.secondaryOutlineColor ?? '#ff6a3d');
+    // Independent glow color for the multi-select outline.
+    this._secondaryGlowColor = new THREE.Color(active.glowColor ?? bounds.multiGlowColor ?? bounds.glowColor ?? '#ffb380');
+    // Slider max 8 with steeper 0.04× per-unit mapping.
+    const multiThickness = Math.max(0.05, active.thickness ?? bounds.multiThickness ?? bounds.thickness ?? 2.5);
+    const multiDistance = Math.max(0.05, active.distance ?? bounds.distance ?? 1);
+    const multiGlow = Math.max(0, active.glowIntensity ?? bounds.multiGlowIntensity ?? bounds.glowIntensity ?? 0.9);
+    // Shell thickness = thickness slider + glow contribution + distance offset.
+    // Same mapping as the primary: distance adds a 6%-per-unit outward
+    // offset on top of thickness.
+    this._secondaryShellThickness = Math.max(0.001,
+      multiThickness * 0.04 +
+      multiGlow * 0.012 +
+      multiDistance * 0.06
+    );
     this._secondaryShellOpacity   = Math.min(1.0, 0.5 + multiGlow * 0.18);
-    // Halo opacity for the multi-select glow.  With multiGlowIntensity up
-    // to 4 the halo can reach 1.0 (fully saturated additive halo).
+    // Halo opacity for the multi-select glow.
     this._secondaryGlowAmount = Math.min(1.0, multiGlow * 0.28);
+    this._secondaryDistance = multiDistance;
+    if (window.CYCO_DEBUG_OUTLINE) {
+      console.log('[CYCO:OUTLINE-PIPE] _applySecondaryOutlinePrefs', {
+        activeSource: 'multiSelect',
+        active: { ...active },
+        resolved: {
+          thickness: multiThickness,
+          distance: multiDistance,
+          glowIntensity: multiGlow,
+          outlineColor:  this._secondaryColor.getHexString(),
+          glowColor:     this._secondaryGlowColor.getHexString(),
+          shellThickness: this._secondaryShellThickness,
+          shellOpacity:   this._secondaryShellOpacity,
+          glowAmount:     this._secondaryGlowAmount,
+        },
+      });
+    }
   }
 
   /**
@@ -1623,31 +1682,59 @@ export class PostProcessingPipeline {
       // No selection — nothing to outline. Both groups stay empty.
       return;
     }
-    const primary = all[all.length - 1];
+    // Primary = FIRST selected object (the "anchor").  The user expects
+    // single-select prefs to apply to this object consistently: when
+    // only one object is selected, it's the primary; when several are
+    // selected, the FIRST one the user clicked is the primary and gets
+    // the single-select outline, while every other selected object gets
+    // the multi-select outline.  This matches SelectionManager's
+    // primary convention and the TransformGizmo pivot-indicator rule.
+    const primary = all[0];
     const isMulti = all.length > 1;
     // Hide outlines while in physics edit mode for collider objects.
     const hideForPhysics = this._physicsEditMode && this._hasPhysicsCollider(primary);
     this.secondaryOutlineGroup.visible = !hideForPhysics && isMulti;
     this.primaryOutlineGroup.visible   = !hideForPhysics;
     if (hideForPhysics) return;
+    // ── DEBUG: log what we're about to apply ─────────────────────────────────
+    if (window.CYCO_DEBUG_OUTLINE) {
+      console.log('[CYCO:OUTLINE-PIPE] _refreshSecondaryOutlines (apply)', {
+        isMulti,
+        primarySrc:   primary?.userData?.cycoId ?? null,
+        primaryColor: primaryColor.getHexString(),
+        primaryGlow:  primaryGlowColor.getHexString(),
+        primaryShell,
+        primaryOpacity,
+        primaryGlowAmt,
+      });
+    }
     // ── Primary outline (single-select prefs only) ───────────────────────────
     // The primary outline ONLY uses single-select prefs, regardless of
-    // whether other objects are also selected.
+    // whether other objects are also selected.  When a single object is
+    // selected this is the same object; when several are selected this
+    // is the FIRST one the user clicked — its outline settings stay in
+    // lock-step with the single-select tab regardless of selection size.
     if (!this.outlinePass && primary) {
       const lines = this._buildSecondaryOutlineFor(primary, primaryColor, primaryShell, primaryOpacity, primaryGlowColor, primaryGlowAmt);
       if (lines) {
         lines.userData.cycoSourceId = primary.userData?.cycoId;
+        lines.userData._cycoRole = 'primary';
         lines.renderOrder = 1000; // ensure on top
         this.primaryOutlineGroup.add(lines);
       }
     }
-    // ── Secondary outline (multi-select prefs only — never applied to a
-    //    single-select object) ──────────────────────────────────────────────
+    // ── Secondary outline (multi-select prefs only — never applied to the
+    //    primary, which always uses single-select prefs) ────────────────────
     if (!isMulti) return;
-    const secondary = all.slice(0, -1);
+    // Skip index 0 — that's the primary, which is rendered above with
+    // single-select settings.
+    const secondary = all.slice(1);
     for (const obj of secondary) {
       const lines = this._buildSecondaryOutlineFor(obj, secondaryColor, secondaryShell, secondaryOpacity, secondaryGlowColor, secondaryGlowAmt);
-      if (lines) this.secondaryOutlineGroup.add(lines);
+      if (lines) {
+        lines.userData._cycoRole = 'secondary';
+        this.secondaryOutlineGroup.add(lines);
+      }
     }
   }
 
@@ -1875,23 +1962,48 @@ export class PostProcessingPipeline {
     this._prefs = event.detail?.prefs ?? loadPrefs();
     this._applySelectionOutlinePrefs();
     this._applySecondaryOutlinePrefs();
-    // Rebuild the secondary outlines so any color/glow change is reflected.
-    this._refreshSecondaryOutlines();
+    // Coalesce multiple slider-driven prefs-preview events into a single
+    // rAF-delayed rebuild.  This avoids the dispose/create churn that
+    // causes visible flashes at the viewport edges when dragging sliders.
+    this._scheduleOutlineRebuild();
+  }
+
+  /**
+   * Schedule a single `_refreshSecondaryOutlines()` call on the next
+   * animation frame.  Multiple calls within the same frame coalesce into
+   * one rebuild.  The cached `_primaryOutlineColor` / `_primaryShellThickness`
+   * etc. fields are still updated synchronously above so the next
+   * rebuild picks them up.
+   */
+  _scheduleOutlineRebuild() {
+    if (this._outlineRebuildPending) return;
+    this._outlineRebuildPending = true;
+    requestAnimationFrame(() => {
+      this._outlineRebuildPending = false;
+      this._refreshSecondaryOutlines();
+    });
   }
 
   _onSelectNode(event) {
     this._selectedObjects = this._getSelectionObjects(event.detail);
+    // Recompute the cached single/first-selected outline state from the
+    // current prefs on every selection change.  This MUST run regardless
+    // of renderer type: in WebGPU mode there's no OutlinePass, but the
+    // scene-graph inverted-hull outline reads `_primaryOutlineColor`,
+    // `_primaryShellThickness`, etc. directly from these cached fields.
+    this._applySelectionOutlinePrefs();
     if (this.outlinePass) {
-      this._applySelectionOutlinePrefs();
-      // Only the primary (most-recently-selected) object is outlined by the
-      // WebGL OutlinePass; the secondary group handles the rest so multi-
-      // select uses distinct colors.
-      const primary = this._selectedObjects[this._selectedObjects.length - 1];
+      // Only the primary (FIRST-selected) object is outlined by the WebGL
+      // OutlinePass; the secondary group handles the rest so multi-select
+      // uses distinct colors.
+      const primary = this._selectedObjects[0];
       this.outlinePass.selectedObjects = primary ? [primary] : [];
     }
     // Refresh the scene-graph secondary outlines (the non-primary selected
-    // objects each get a colored wireframe child).
-    this._refreshSecondaryOutlines();
+    // objects each get a colored wireframe child).  Use the rAF-coalesced
+    // scheduler to avoid per-event rebuild churn during rapid select/
+    // deselect cycles.
+    this._scheduleOutlineRebuild();
     // When selection changes with the TSL pipeline active, newly-visible gizmo
     // handles (TransformControls) may not have compiled shaders yet.  Schedule
     // a deferred compile so they appear on the very next frame.
@@ -1901,7 +2013,7 @@ export class PostProcessingPipeline {
   _onDeselectAll() {
     this._selectedObjects = [];
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
-    this._refreshSecondaryOutlines();
+    this._scheduleOutlineRebuild();
   }
 
   _onVpTool() {
@@ -1927,7 +2039,7 @@ export class PostProcessingPipeline {
       this._applySelectionOutlinePrefs();
       this.outlinePass.selectedObjects = this._selectedObjects;
     }
-    this._refreshSecondaryOutlines();
+    this._scheduleOutlineRebuild();
     if (this.hoverOutlinePass && this._physicsEditMode) {
       this.hoverOutlinePass.selectedObjects = [];
     }

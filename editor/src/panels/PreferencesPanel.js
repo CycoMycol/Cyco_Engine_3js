@@ -27,7 +27,7 @@ export class PreferencesPanel extends BasePanel {
     this._gizmoTabBtns   = {};
     this._colliderActiveTab = 'colliderBox';
     this._colliderTabBtns   = {};
-    this._outlineActiveTab = 'single';
+    this._outlineActiveTab = 'firstSelected';
     this._outlineTabBtns   = {};
     this._gridProps   = null;
     this._contentArea = null;
@@ -42,6 +42,18 @@ export class PreferencesPanel extends BasePanel {
   }
 
   _applyPrefsChange({ makeDefault = false } = {}) {
+    // ── DEBUG: outline-control change tracking ──────────────────────────────
+    // Logs every outline-related preference change so we can see exactly
+    // what the user picked vs what the pipeline receives.
+    if (window.CYCO_DEBUG_OUTLINE) {
+      const g = this._prefs?.gizmo ?? {};
+      console.log('[CYCO:OUTLINE-PREFS] cyco-preferences-preview dispatched', {
+        singleSelect: { ...(g.singleSelect ?? {}) },
+        firstSelected: { ...(g.firstSelected ?? {}) },
+        multiSelect:   { ...(g.multiSelect   ?? {}) },
+        bounds:        { ...(g.bounds ?? {}) },
+      });
+    }
     window.dispatchEvent(new CustomEvent('cyco-preferences-preview', { detail: { prefs: this._prefs } }));
     if (makeDefault) {
       savePrefs(this._prefs);
@@ -827,8 +839,6 @@ export class PreferencesPanel extends BasePanel {
    * color, distinct thickness, distinct glow intensity.
    */
   _buildSelectionOutlineTab() {
-    const prefs = this._prefs.gizmo.bounds;
-    const defaults = DEFAULT_PREFS.gizmo.bounds;
     const root = document.createElement('div');
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;height:100%;';
 
@@ -836,9 +846,12 @@ export class PreferencesPanel extends BasePanel {
     const tabBar = document.createElement('div');
     tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
     this._outlineTabBtns = {};
+    // Three independent control sets so the user can tune each scenario
+    // separately without one bleeding into the other.
     const tabs = [
-      { id: 'single', label: 'Single Select' },
-      { id: 'multi',  label: 'Multi Select' },
+      { id: 'single',         label: 'Single Select' },
+      { id: 'firstSelected',  label: 'First Selected' },
+      { id: 'multi',          label: 'Multi Select' },
     ];
     for (const tab of tabs) {
       const btn = document.createElement('button');
@@ -869,94 +882,132 @@ export class PreferencesPanel extends BasePanel {
     }
     if (!this._outlineContentArea) return;
     this._outlineContentArea.innerHTML = '';
-    if (tabId === 'single') this._outlineContentArea.appendChild(this._buildSingleOutlineTab());
-    else if (tabId === 'multi') this._outlineContentArea.appendChild(this._buildMultiOutlineTab());
+    if (tabId === 'single')         this._outlineContentArea.appendChild(this._buildSingleOutlineTab());
+    else if (tabId === 'firstSelected') this._outlineContentArea.appendChild(this._buildFirstSelectedOutlineTab());
+    else if (tabId === 'multi')          this._outlineContentArea.appendChild(this._buildMultiOutlineTab());
   }
 
-  /** Single (primary) outline controls — the most-recently-selected object. */
+  /** Ensure the three new prefs sections exist with defaults. Called on
+   *  tab build so older prefs files automatically get the new sections. */
+  _ensureOutlineSubPrefs() {
+    const gizmo = this._prefs.gizmo;
+    for (const key of ['singleSelect', 'firstSelected', 'multiSelect']) {
+      if (!gizmo[key] || typeof gizmo[key] !== 'object') {
+        gizmo[key] = JSON.parse(JSON.stringify(DEFAULT_PREFS.gizmo[key]));
+      } else {
+        // Merge any missing fields from defaults.
+        for (const [k, v] of Object.entries(DEFAULT_PREFS.gizmo[key])) {
+          if (gizmo[key][k] === undefined) gizmo[key][k] = v;
+        }
+      }
+    }
+  }
+
+  /** Single-select controls — applied ONLY when exactly one object is selected. */
   _buildSingleOutlineTab() {
-    const prefs = this._prefs.gizmo.bounds;
-    const defaults = DEFAULT_PREFS.gizmo.bounds;
+    this._ensureOutlineSubPrefs();
+    const prefs = this._prefs.gizmo.singleSelect;
+    const defaults = DEFAULT_PREFS.gizmo.singleSelect;
     const root = document.createElement('div');
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
 
     root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.bounds.thickness = v;
+      this._prefs.gizmo.singleSelect.thickness = v;
       this._applyPrefsChange();
     }, '', defaults.thickness));
 
     root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
-      this._prefs.gizmo.bounds.distance = v;
+      this._prefs.gizmo.singleSelect.distance = v;
       this._applyPrefsChange();
     }, '', defaults.distance));
 
     root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
-      this._prefs.gizmo.bounds.outlineColor = c;
+      this._prefs.gizmo.singleSelect.outlineColor = c;
       this._applyPrefsChange();
     }));
 
     root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
-      this._prefs.gizmo.bounds.glowColor = c;
+      this._prefs.gizmo.singleSelect.glowColor = c;
       this._applyPrefsChange();
     }));
 
-    // Use singleGlowIntensity when available, fall back to legacy shared
-    // glowIntensity so older prefs files keep working.
-    const singleGlow = prefs.singleGlowIntensity ?? prefs.glowIntensity ?? defaults.glowIntensity;
-    root.appendChild(this._makeSliderRow('Glow Intensity', singleGlow, 0, 2, 0.01, (v) => {
-      this._prefs.gizmo.bounds.singleGlowIntensity = v;
-      // Keep the shared glowIntensity in sync so legacy code paths still
-      // see a sensible value.
-      this._prefs.gizmo.bounds.glowIntensity = v;
+    root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 4, 0.01, (v) => {
+      this._prefs.gizmo.singleSelect.glowIntensity = v;
       this._applyPrefsChange();
-    }, '', defaults.singleGlowIntensity ?? defaults.glowIntensity));
+    }, '', defaults.glowIntensity));
 
     return root;
   }
 
-  /** Multi (secondary) outline controls — every other selected object. */
-  _buildMultiOutlineTab() {
-    const prefs = this._prefs.gizmo.bounds;
-    const defaults = DEFAULT_PREFS.gizmo.bounds;
+  /** First-selected controls — applied to the FIRST object in a multi-select. */
+  _buildFirstSelectedOutlineTab() {
+    this._ensureOutlineSubPrefs();
+    const prefs = this._prefs.gizmo.firstSelected;
+    const defaults = DEFAULT_PREFS.gizmo.firstSelected;
     const root = document.createElement('div');
     root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
 
-    // multiThickness defaults to the shared thickness for back-compat.
-    // Slider max raised to 8 so multi-select outlines can be made visibly
-    // chunky — the user reported the default max of 4 is too thin.
-    const multiThickness = prefs.multiThickness ?? prefs.thickness ?? defaults.thickness;
-    root.appendChild(this._makeSliderRow('Thickness', multiThickness, 0.05, 8, 0.01, (v) => {
-      this._prefs.gizmo.bounds.multiThickness = v;
+    root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.firstSelected.thickness = v;
       this._applyPrefsChange();
-    }, '', defaults.multiThickness ?? defaults.thickness));
+    }, '', defaults.thickness));
 
-    // Distance max raised to 8 so multi-select outlines can be pushed
-    // visibly further from the source.
-    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 8, 0.01, (v) => {
-      this._prefs.gizmo.bounds.distance = v;
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 4, 0.01, (v) => {
+      this._prefs.gizmo.firstSelected.distance = v;
       this._applyPrefsChange();
     }, '', defaults.distance));
 
-    root.appendChild(this._makeColorRow('Outline Color', prefs.secondaryOutlineColor, (c) => {
-      this._prefs.gizmo.bounds.secondaryOutlineColor = c;
+    root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
+      this._prefs.gizmo.firstSelected.outlineColor = c;
       this._applyPrefsChange();
     }));
 
-    // Multi-select uses its own glow color (not the shared bounds.glowColor)
-    // so the user can independently tint the multi-select halo.
-    const multiGlowColor = prefs.multiGlowColor ?? '#ff7a3d';
-    root.appendChild(this._makeColorRow('Glow Color', multiGlowColor, (c) => {
-      this._prefs.gizmo.bounds.multiGlowColor = c;
+    root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
+      this._prefs.gizmo.firstSelected.glowColor = c;
       this._applyPrefsChange();
     }));
 
-    const multiGlow = prefs.multiGlowIntensity ?? prefs.glowIntensity ?? defaults.glowIntensity;
-    // Glow intensity max raised to 4 so the multi-select outline can be
-    // made visually heavier than the primary if desired.
-    root.appendChild(this._makeSliderRow('Glow Intensity', multiGlow, 0, 4, 0.01, (v) => {
-      this._prefs.gizmo.bounds.multiGlowIntensity = v;
+    root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 4, 0.01, (v) => {
+      this._prefs.gizmo.firstSelected.glowIntensity = v;
       this._applyPrefsChange();
-    }, '', defaults.multiGlowIntensity ?? defaults.glowIntensity));
+    }, '', defaults.glowIntensity));
+
+    return root;
+  }
+
+  /** Multi-select controls — applied to every other selected object. */
+  _buildMultiOutlineTab() {
+    this._ensureOutlineSubPrefs();
+    const prefs = this._prefs.gizmo.multiSelect;
+    const defaults = DEFAULT_PREFS.gizmo.multiSelect;
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    // Slider max 8 so multi-select outlines can be made visibly chunky.
+    root.appendChild(this._makeSliderRow('Thickness', prefs.thickness, 0.05, 8, 0.01, (v) => {
+      this._prefs.gizmo.multiSelect.thickness = v;
+      this._applyPrefsChange();
+    }, '', defaults.thickness));
+
+    root.appendChild(this._makeSliderRow('Distance', prefs.distance, 0.05, 8, 0.01, (v) => {
+      this._prefs.gizmo.multiSelect.distance = v;
+      this._applyPrefsChange();
+    }, '', defaults.distance));
+
+    root.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
+      this._prefs.gizmo.multiSelect.outlineColor = c;
+      this._applyPrefsChange();
+    }));
+
+    root.appendChild(this._makeColorRow('Glow Color', prefs.glowColor, (c) => {
+      this._prefs.gizmo.multiSelect.glowColor = c;
+      this._applyPrefsChange();
+    }));
+
+    root.appendChild(this._makeSliderRow('Glow Intensity', prefs.glowIntensity, 0, 4, 0.01, (v) => {
+      this._prefs.gizmo.multiSelect.glowIntensity = v;
+      this._applyPrefsChange();
+    }, '', defaults.glowIntensity));
 
     return root;
   }

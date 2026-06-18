@@ -107,6 +107,36 @@ export const DEFAULT_PREFS = {
       glowColor: '#9b6cff',
       multiGlowColor: '#ff7a3d',
     },
+    // Single-select prefs: applied ONLY when exactly one object is selected.
+    // Independent from firstSelected so changing these doesn't bleed into
+    // multi-select workflows.
+    singleSelect: {
+      thickness: 1,
+      distance: 1,
+      outlineColor: '#e8eeff',
+      glowColor: '#9b6cff',
+      glowIntensity: 0.35,
+    },
+    // First-selected prefs: applied to the FIRST object in a multi-select
+    // (the "anchor" object). Independent from singleSelect so the user
+    // can tune a different look for "the first one I clicked" vs.
+    // "the only one I selected".
+    firstSelected: {
+      thickness: 1,
+      distance: 1,
+      outlineColor: '#ffd54a',
+      glowColor: '#ffb84a',
+      glowIntensity: 0.7,
+    },
+    // Multi-select prefs: applied to every OTHER selected object (not the
+    // first, not single). Independent from firstSelected.
+    multiSelect: {
+      thickness: 2.5,
+      distance: 1,
+      outlineColor: '#ff6a3d',
+      glowColor: '#ffb380',
+      glowIntensity: 0.9,
+    },
     colliderBounds: {
       thickness: 1,
       distance: 1,

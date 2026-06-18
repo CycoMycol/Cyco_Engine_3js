@@ -254,9 +254,9 @@ function _startAutoSave(intervalMinutes) {
 }
 
 // Start with saved prefs
-_startAutoSave(prefs.general.autoSaveInterval);
+_startAutoSave(prefs?.general?.autoSaveInterval);
 
 // Restart if preferences change
 window.addEventListener('cyco-preferences-change', ({ detail: { prefs } }) => {
-  _startAutoSave(prefs.general.autoSaveInterval);
+  _startAutoSave(prefs?.general?.autoSaveInterval);
 });

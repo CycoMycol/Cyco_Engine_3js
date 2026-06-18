@@ -618,7 +618,14 @@ export class SelectionManager {
 
   _dispatchSelection() {
     const arr  = [...this.selected];
-    const obj  = arr[arr.length - 1] ?? null;
+    // Primary = the FIRST object the user selected (the "anchor" object
+    // whose properties / gizmo / outline match the single-select prefs).
+    // This matches the gizmo's pivot-indicator convention (see
+    // TransformGizmo._updatePivotIndicators which skips index 0) and
+    // gives a consistent user-facing rule: the FIRST thing you click
+    // is the one that "owns" the single-select settings — whether you
+    // end up selecting one, three, or fifty objects.
+    const obj  = arr[0] ?? null;
     const type = obj ? this._inferType(obj) : null;
     // Dispatch both the legacy single-object event (for the gizmo, properties
     // panel, hierarchy, etc.) and a multi-aware one.

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { loadPrefs } from '../ui/PreferencesWindow.js';
+import { loadPrefs, DEFAULT_PREFS } from '../ui/PreferencesWindow.js';
 export class TransformGizmo {
   constructor(viewportEngine, selectionManager) {
     this.engine           = viewportEngine;
@@ -258,18 +258,51 @@ export class TransformGizmo {
   }
 
   _getBoxPrefs() {
-    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
+    // Always deep-merge against DEFAULT_PREFS so the box section is
+    // guaranteed to exist even when the user's prefs file is missing
+    // sections (legacy migration safety net).
+    const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
     return this._physicsEdit
-      ? (gizmo.colliderBox ?? gizmo.box)
-      : gizmo.box;
+      ? (gizmo.colliderBox ?? defaults.colliderBox ?? gizmo.box ?? defaults.box ?? {})
+      : (gizmo.box ?? defaults.box ?? {});
   }
 
   _getBoundsPrefs() {
-    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo;
-    if (!this._physicsEdit) return gizmo.bounds;
-    if (this._physicsProxy) return gizmo.colliderBounds ?? gizmo.bounds;
-    if (this._physicsTemporaryOutline) return gizmo.temporaryBounds ?? gizmo.colliderBounds ?? gizmo.bounds;
-    return gizmo.colliderBounds ?? gizmo.bounds;
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
+    const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
+    if (!this._physicsEdit) return gizmo.bounds ?? defaults.bounds ?? {};
+    if (this._physicsProxy) return gizmo.colliderBounds ?? defaults.colliderBounds ?? gizmo.bounds ?? defaults.bounds ?? {};
+    if (this._physicsTemporaryOutline) return gizmo.temporaryBounds ?? defaults.temporaryBounds ?? gizmo.colliderBounds ?? defaults.colliderBounds ?? gizmo.bounds ?? defaults.bounds ?? {};
+    return gizmo.colliderBounds ?? defaults.colliderBounds ?? gizmo.bounds ?? defaults.bounds ?? {};
+  }
+
+  /**
+   * Pick the outline-color prefs section that matches the current
+   * selection state so the Box Gizmo wireframe/glow matches the
+   * selection outline (single → singleSelect; ≥2 → firstSelected).
+   *
+   * Falls back to the legacy shared `bounds.*` section when the new
+   * sections are absent (older prefs files).
+   */
+  _getSelectionOutlinePrefs() {
+    const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
+    const defaults = (typeof DEFAULT_PREFS !== 'undefined' && DEFAULT_PREFS?.gizmo) ? DEFAULT_PREFS.gizmo : {};
+    const selMgr = this.engine?.selectionManager;
+    const selectedCount = selMgr?.selected?.size ?? 0;
+    const isMulti = selectedCount > 1;
+    if (isMulti) {
+      return {
+        outlineColor:  gizmo.firstSelected?.outlineColor  ?? defaults.firstSelected?.outlineColor  ?? gizmo.bounds?.outlineColor ?? defaults.bounds?.outlineColor ?? '#e8eeff',
+        glowColor:     gizmo.firstSelected?.glowColor     ?? defaults.firstSelected?.glowColor     ?? gizmo.bounds?.glowColor     ?? defaults.bounds?.glowColor     ?? '#9b6cff',
+        glowIntensity: gizmo.firstSelected?.glowIntensity ?? defaults.firstSelected?.glowIntensity ?? gizmo.bounds?.glowIntensity ?? defaults.bounds?.glowIntensity ?? 0.35,
+      };
+    }
+    return {
+      outlineColor:  gizmo.singleSelect?.outlineColor  ?? defaults.singleSelect?.outlineColor  ?? gizmo.bounds?.outlineColor ?? defaults.bounds?.outlineColor ?? '#e8eeff',
+      glowColor:     gizmo.singleSelect?.glowColor     ?? defaults.singleSelect?.glowColor     ?? gizmo.bounds?.glowColor     ?? defaults.bounds?.glowColor     ?? '#9b6cff',
+      glowIntensity: gizmo.singleSelect?.glowIntensity ?? defaults.singleSelect?.glowIntensity ?? gizmo.bounds?.glowIntensity ?? defaults.bounds?.glowIntensity ?? 0.35,
+    };
   }
 
   _setBoxModeVisibility(mode = 'full') {
@@ -422,13 +455,26 @@ export class TransformGizmo {
   _updateBoxPalette() {
     const boxPrefs = this._getBoxPrefs();
     const boundsPrefs = this._getBoundsPrefs();
+    // The Box Gizmo's wireframe + glow should match the SELECTION outline
+    // color (singleSelect for 1 object, firstSelected for ≥2).  The
+    // glow intensity also follows the selection outline so the visual
+    // weight stays consistent.  This avoids the "orange/purple ghost
+    // outline" caused by the legacy `bounds.outlineColor`/`bounds.glowColor`
+    // fields being picked up when they shouldn't be.
+    const selOutlinePrefs = this._getSelectionOutlinePrefs();
+    if (window.CYCO_DEBUG_OUTLINE) {
+      console.log('[CYCO:OUTLINE-PIPE] _updateBoxPalette', {
+        boundsPrefs: { ...boundsPrefs },
+        selOutlinePrefs: { ...selOutlinePrefs },
+      });
+    }
     if (this._boxOutline?.material) {
-      this._boxOutline.material.color.set(boundsPrefs.outlineColor ?? boxPrefs.outlineColor ?? '#e8eeff');
+      this._boxOutline.material.color.set(selOutlinePrefs.outlineColor);
       this._boxOutline.material.opacity = Math.min(1, 0.55 + (boundsPrefs.thickness ?? 1) * 0.08);
     }
     if (this._boxGlow?.material) {
-      this._boxGlow.material.color.set(boundsPrefs.glowColor ?? boxPrefs.glowColor ?? '#9b6cff');
-      this._boxGlow.material.opacity = Math.max(0, Math.min(0.65, (boundsPrefs.glowIntensity ?? 0.35) * 0.28));
+      this._boxGlow.material.color.set(selOutlinePrefs.glowColor);
+      this._boxGlow.material.opacity = Math.max(0, Math.min(0.65, selOutlinePrefs.glowIntensity * 0.28));
     }
     for (const handle of this._boxHandles) {
       const role = handle.userData.handleRole;
@@ -878,15 +924,22 @@ export class TransformGizmo {
         this._multiTargets = locked.slice();
         this._attachTo(locked[0]);
         this._updatePivotIndicators(locked);
+        if (this._boxGroup) this._updateBoxPalette();
         return;
       }
       this._hidePivotIndicators();
       this._attachToMulti(locked);
+      if (this._boxGroup) this._updateBoxPalette();
       return;
     }
     // Single select — drop the multi-group
     this._destroyMultiGroup();
     this._attachTo(object ?? null);
+    // Refresh the Box Gizmo palette so its wireframe + glow colors
+    // track the active outline section (singleSelect for 1 object,
+    // firstSelected for ≥2).  Without this the box gizmo keeps using
+    // whatever was painted at the last palette update.
+    if (this._boxGroup) this._updateBoxPalette();
   }
 
   _attachToMulti(objects) {
