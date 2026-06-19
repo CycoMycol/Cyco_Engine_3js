@@ -105,20 +105,6 @@ const ProjectLocalBridgeStorage = {
   },
 
   /**
-   * Save As: write the .cyco file (and engine state sidecar) inside the
-   * project folder. For the local save bridge this is effectively the same
-   * as writeSnapshot, but we route through a dedicated endpoint so future
-   * "Save As" variants (e.g. JSON, Markdown) can be added without disturbing
-   * the live save path.
-   */
-  async exportAsFolder(snapshot) {
-    if (!this._projectFilePath) {
-      throw new Error('No project folder is attached for Save As.');
-    }
-    return this.writeSnapshot(snapshot);
-  },
-
-  /**
    * Rescan the project folder and return the on-disk tree.
    * If no projectPath is provided, falls back to the attached target.
    */

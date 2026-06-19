@@ -214,66 +214,139 @@ const ProjectManager = {
   },
 
   /**
-   * Save As: write the .cyco into the project's picked location.
-   * @param {{ exportMode?: 'file' | 'folder' }} [options]
-   *   - 'file' (default): write a single .cyco into the project folder.
-   *   - 'folder': write the project as a folder of the same name containing the .cyco.
+   * Save As — write the current project as a brand-new project folder at a
+   * user-chosen location, then switch the active project to that new copy.
+   *
+   * Creates an entirely separate .cyco project with its own id, recents
+   * entry, scene state, and bridge target. The user ends up loaded into the
+   * new project on completion, so they can immediately keep editing the
+   * backup/copy without re-opening anything.
+   *
+   * @param {string}  newName         New project name (display name + filename stem).
+   * @param {string}  newLocation     Folder the new project will be created in.
+   * @param {boolean} createFolder    Whether to create a subfolder named after the project.
+   * @param {string[]|null} folders   Folder list for the new project. Defaults to current tree keys.
+   * @param {FileSystemDirectoryHandle|null} directoryHandle  Optional browser handle to the parent folder.
+   * @returns {Promise<object|null>}  The new project, or null on cancel.
    */
-  async saveProjectAs(options = {}) {
+  async saveAsNewProject(newName, newLocation, createFolder, folders = null, directoryHandle = null) {
     if (!this._project) {
       throw new Error('No project is open. Create or open a project before using Save As.');
     }
-    const exportMode = options.exportMode || 'file';
-    const snapshot = this._buildSnapshot();
-    const fileName = this._projectFileName(snapshot);
-
-    // 1. Bridge attached (project was created with the local save bridge)
-    if (ProjectLocalBridgeStorage.hasTarget()) {
-      const projectPath = ProjectLocalBridgeStorage.getProjectPath();
-      try {
-        if (exportMode === 'file') {
-          await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
-        } else if (exportMode === 'folder') {
-          await ProjectLocalBridgeStorage.exportAsFolder(snapshot);
-        } else {
-          throw new Error(`Save As mode "${exportMode}" is not supported yet.`);
-        }
-        window.dispatchEvent(new CustomEvent('cyco-toast', {
-          detail: { message: `Saved ${fileName} → ${projectPath || 'project folder'}` },
-        }));
-        return { ok: true, fileName, projectPath, mode: exportMode };
-      } catch (err) {
-        throw new Error(`Could not Save As into the project folder: ${err.message || err}`);
-      }
+    if (!newName || !newName.trim()) {
+      throw new Error('A project name is required for Save As.');
+    }
+    if (!newLocation || !newLocation.trim()) {
+      throw new Error('A project location is required for Save As.');
     }
 
-    // 2. Browser File System Access API
-    if (typeof window.showSaveFilePicker === 'function') {
-      try {
-        const fileHandle = await window.showSaveFilePicker({
-          suggestedName: fileName,
-          types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
-        });
+    this._diskWriteSuspended = true;
+    try {
+      this._debug('saveAsNewProject:start', {
+        newName,
+        newLocation,
+        createFolder,
+        handleName: directoryHandle?.name || null,
+        hasHandle: !!directoryHandle,
+        sourceProjectId: this._project.id,
+        sourceProjectName: this._project.name,
+      });
+
+      // 1. Capture the current state — this is the data we will clone into
+      //    the new project. Re-uses _buildSnapshot so the Save As copy
+      //    includes the live scene + prefs + engine bootstrap.
+      const sourceSnapshot = this._buildSnapshot();
+
+      // 2. Build the new project's snapshot. New id, new name, new path,
+      //    but keep the tree, gameData, scene, prefs, and bootstrap.
+      const newId = `proj-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      const displayPath = createFolder
+        ? `${newLocation.replace(/\\+/g, '/')}/${newName}`
+        : newLocation.replace(/\\+/g, '/');
+
+      const folderList = folders && folders.length
+        ? folders
+        : Object.keys(sourceSnapshot.tree || {});
+      const newTree = {};
+      for (const f of folderList) newTree[f] = {};
+
+      const newSnapshot = {
+        ...sourceSnapshot,
+        id: newId,
+        name: newName,
+        path: displayPath,
+        tree: newTree,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        savedAt: Date.now(),
+      };
+
+      this._debug('saveAsNewProject:snapshot-built', {
+        newId,
+        newName,
+        newPath: displayPath,
+        folderCount: folderList.length,
+      });
+
+      // 3. Write the new project to disk via the same /create-project
+      //    endpoint that New Project uses. This creates the folder tree,
+      //    ensures an engine/ subfolder with bootstrap.js, and writes the
+      //    .cyco file containing our new snapshot.
+      let response;
+      if (ProjectDiskStorage.isDirectoryHandle?.(directoryHandle)) {
+        // Browser File System Access path — reuses the same createProject
+        // flow that New Project uses for handle-based creation.
         ProjectDiskStorage.reset();
-        ProjectLocalBridgeStorage.reset();
-        ProjectDiskStorage.attachFile(fileHandle, fileHandle?.name || fileName);
-        await ProjectDiskStorage.writeSnapshot(snapshot);
-        window.dispatchEvent(new CustomEvent('cyco-toast', {
-          detail: { message: `Saved ${fileHandle?.name || fileName}` },
-        }));
-        return { ok: true, fileName: fileHandle?.name || fileName, projectPath: null, mode: exportMode };
-      } catch (err) {
-        if (err?.name === 'AbortError') return { ok: false, cancelled: true };
-        throw new Error(`Could not Save As: ${err.message || err}`);
+        response = await ProjectDiskStorage.createProject({
+          name: newName,
+          rootDirectoryHandle: directoryHandle,
+          createFolder,
+          tree: newTree,
+          snapshot: newSnapshot,
+        });
+      } else {
+        response = await ProjectLocalBridgeStorage.createProject({
+          name: newName,
+          location: newLocation,
+          createFolder,
+          tree: newTree,
+          snapshot: newSnapshot,
+        });
       }
-    }
+      this._debug('saveAsNewProject:disk-created', response);
 
-    // 3. No writable target — fall back to download
-    this._downloadText(JSON.stringify(snapshot, null, 2), fileName);
-    window.dispatchEvent(new CustomEvent('cyco-toast', {
-      detail: { message: `Downloaded ${fileName} (browse to a folder & use New Project to enable Save As)` },
-    }));
-    return { ok: true, fileName, projectPath: null, mode: 'download' };
+      // 4. Re-attach the bridge to the NEW project's file path so
+      //    subsequent Save operations hit the new file. (Disk-storage
+      //    handle flow is already attached by createProject above.)
+      if (!ProjectDiskStorage.isDirectoryHandle?.(directoryHandle)) {
+        ProjectLocalBridgeStorage.reset();
+        if (response?.filePath) {
+          ProjectLocalBridgeStorage.attachTarget({
+            filePath: response.filePath,
+            projectPath: response.projectPath || displayPath,
+          });
+        }
+      }
+
+      // 5. Switch the active project to the new copy. loadSnapshot will:
+      //    - replace this._project with newSnapshot (new id)
+      //    - restore the scene
+      //    - run the engine bootstrap (so the new project's bootstrap.js fires)
+      //    - record the recents entry under the new id
+      //    - start the file watcher on the new folder
+      const switched = this.loadSnapshot(newSnapshot, { recordRecent: true, applyPrefs: false });
+      if (!switched) {
+        throw new Error('The new project was written but could not be loaded.');
+      }
+
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Saved as "${newName}" → ${response.projectPath || displayPath}` },
+      }));
+
+      return this._project;
+    } finally {
+      this._diskWriteSuspended = false;
+    }
   },
 
   /**

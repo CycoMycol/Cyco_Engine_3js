@@ -8,8 +8,9 @@ import ThemeManager     from '../theme/theme-manager.js';
 import ThemeDialog      from './ThemeDialog.js';
 import LayoutManager    from '../layout-manager.js';
 import { cePrompt }     from './ce-prompt.js';
-import NewProjectDialog from './NewProjectDialog.js';
-import ProjectManager   from '../project/ProjectManager.js';
+import NewProjectDialog      from './NewProjectDialog.js';
+import SaveProjectAsDialog   from './SaveProjectAsDialog.js';
+import ProjectManager        from '../project/ProjectManager.js';
 import { makeFloatable } from './FloatBar.js';
 
 const PANEL_IDS = [
@@ -456,8 +457,7 @@ function fileMenu() {
     { label: 'Recent Projects', dynamicSubmenu: _recentProjectsSubmenu },
     { separator: true },
     { label: 'Save',            action: () => ProjectManager.saveProjectFile() },
-    { label: 'Save As…',        action: () => ProjectManager.saveProjectAs() },
-    { label: 'Save Project as Folder…', action: () => ProjectManager.saveProjectAs({ exportMode: 'folder' }) },
+    { label: 'Save As…',        action: () => SaveProjectAsDialog.open() },
     { separator: true },
     { label: 'Export', submenu: [
       { label: 'Export GLTF (.glb)',  action: () => _exportGLTF() },
