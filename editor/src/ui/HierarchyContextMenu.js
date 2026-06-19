@@ -5,7 +5,7 @@
 
 // ─── Menu schema ─────────────────────────────────────────────────────────────
 const CREATE_SCHEMA = [
-  { label: 'Create Empty', action: 'empty' },
+  { label: 'Create Folder', action: 'empty' },
   { separator: true },
   { label: '3D Object', sub: [
     { label: 'Cube',            action: '3d-cube'      },

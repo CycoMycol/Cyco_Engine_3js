@@ -113,6 +113,10 @@ export class LeftPanel extends BasePanel {
     // a new object via the "+" button or the viewport context menu should
     // always place the new object at the scene root unless the user said so.
     this._contextMenuTargetId = null;
+    // When true, the next cyco-hierarchy-add skips its auto-select-dispatch.
+    // Set by _group() so the new container doesn't briefly attach the green
+    // Box Gizmo before _group's own multi-select dispatch takes over.
+    this._suppressHierarchyAutoSelect = false;
     this._activeScene     = 'Scene';   // currently active scene name
     this._scenes          = ['Scene']; // list of scene names
     this._pendingDelScene = null;      // scene name pending delete confirm
@@ -254,20 +258,30 @@ export class LeftPanel extends BasePanel {
     const { object, parentId } = e.detail ?? {};
     if (!object?.userData?.cycoId) return;
 
+    // When this flag is set the caller (typically _group()) is about to do
+    // its own selection step and the auto-select-dispatch below would
+    // briefly attach the green Box Gizmo to the new container — that flash
+    // is exactly the "second folder" the user reported. We still register
+    // the row in _nodes, we just skip the auto-select + gizmo-attach.
+    const suppressAutoSelect = !!this._suppressHierarchyAutoSelect;
+    if (suppressAutoSelect) this._suppressHierarchyAutoSelect = false;
+
     // Idempotent by id (same row added twice).
     const existing = this._nodes.find(n => n.id === object.userData.cycoId);
     if (existing) {
       existing.pid   = parentId ?? existing.pid ?? 'root';
       existing.name  = object.name || existing.name;
       existing.type  = (object.isGroup ? 'group' : existing.type);
-      this._selectedIds.clear();
-      this._selectedIds.add(existing.id);
-      this._lastClickId = existing.id;
-      this._renderTree();
-      // Make sure the viewport gizmo attaches to the freshly-created group
-      window.dispatchEvent(new CustomEvent('cyco-select-node', {
-        detail: { object, objects: [object], type: existing.type }
-      }));
+      if (!suppressAutoSelect) {
+        this._selectedIds.clear();
+        this._selectedIds.add(existing.id);
+        this._lastClickId = existing.id;
+        this._renderTree();
+        // Make sure the viewport gizmo attaches to the freshly-created group
+        window.dispatchEvent(new CustomEvent('cyco-select-node', {
+          detail: { object, objects: [object], type: existing.type }
+        }));
+      }
       return;
     }
 
@@ -300,15 +314,17 @@ export class LeftPanel extends BasePanel {
       visible: true,
     });
 
-    // Auto-select the new object
-    this._selectedIds.clear();
-    this._selectedIds.add(object.userData.cycoId);
-    this._lastClickId = object.userData.cycoId;
-    this._renderTree();
+    if (!suppressAutoSelect) {
+      // Auto-select the new object
+      this._selectedIds.clear();
+      this._selectedIds.add(object.userData.cycoId);
+      this._lastClickId = object.userData.cycoId;
+      this._renderTree();
 
-    window.dispatchEvent(new CustomEvent('cyco-select-node', {
-      detail: { object, type: nodeType }
-    }));
+      window.dispatchEvent(new CustomEvent('cyco-select-node', {
+        detail: { object, type: nodeType }
+      }));
+    }
   }
 
   _onHierarchyRemove(e) {
@@ -535,14 +551,12 @@ export class LeftPanel extends BasePanel {
       .filter(o => o && !o.userData?._isGizmo);
     if (objects.length < 2) return;
 
-    // ── Macro step 1: Create Empty using the SAME path as the right-click
-    // "Create Empty" command. We use the editor's ObjectFactory so the new
-    // node goes through the standard addObject → cyco-hierarchy-add flow
-    // and ends up with a normal cycoId, normal UI row, and the same
-    // properties panel support as any other Empty. This is intentionally NOT
-    // a special-purpose "Group" type — grouping is just a reparenting
-    // operation, and the resulting Empty can be dragged into / out of any
-    // other Empty infinitely, exactly like any other scene object.
+    // ── Macro step 1: Create a container (Empty) via the same factory path
+    // the right-click "Create Folder" menu uses, so the new node goes through
+    // the standard addObject → cyco-hierarchy-add flow and ends up with a
+    // normal cycoId and UI row like any other folder. Grouping is just a
+    // reparenting operation — the resulting folder can be dragged into / out
+    // of any other folder infinitely.
     const factory = window.__cyco?.objectFactory;
     if (!factory) return;
     const groupObj = factory.create('Empty');
@@ -550,10 +564,11 @@ export class LeftPanel extends BasePanel {
     this._groupCounter++;
     groupObj.name = `Group ${this._groupCounter}`;
 
-    // sm.addObject dispatches cyco-hierarchy-add synchronously, which makes
-    // _onHierarchyAdd append a new UI row at the END of this._nodes. We'll
-    // reposition the row below so the Empty appears just above the items it
-    // will contain, matching the user's mental model.
+    // Suppress _onHierarchyAdd's auto-select-dispatch — that would briefly
+    // attach the green Box Gizmo to the new container (the "second folder"
+    // flash) before _group's own multi-select dispatch takes over. We only
+    // need the row appended; selection happens in step 4.
+    this._suppressHierarchyAutoSelect = true;
     sm.addObject(groupObj, targetParent);
     const groupId = groupObj.userData.cycoId;
 
@@ -583,16 +598,71 @@ export class LeftPanel extends BasePanel {
     this._syncChildrenOrder(groupObj, groupId);
     sm._markDirty?.();
 
-    // ── Macro step 4: select the new Empty so the Properties panel shows
-    // its Add-Component UI, matching the experience of creating an Empty
-    // by right-click.
+    // ── Macro step 4: select the grouped children so the viewport shows
+    // the same multi-selection outline that a marquee select would (first
+    // mesh = primary outline, the rest = secondary outline). We also keep
+    // the new Empty selected in the hierarchy so the Properties panel
+    // shows its Add-Component UI — but the live selection dispatched to
+    // the engine targets the descendant meshes, which is what the user
+    // expects to see highlighted. Selecting the Empty itself would draw a
+    // green Box Gizmo AABB around the whole cluster (via setFromObject)
+    // and a fallback Box3 outline shell — neither matches the marquee
+    // multi-select look.
+    const descendantIds = this._collectDescendantIds(groupObj, groupId);
     this._selectedIds.clear();
     this._selectedIds.add(groupId);
+    for (const id of descendantIds) this._selectedIds.add(id);
     this._lastClickId = groupId;
     this._renderTree();
-    window.dispatchEvent(new CustomEvent('cyco-select-node', {
-      detail: { object: groupObj, type: 'object' }
-    }));
+
+    const descendantObjects = descendantIds
+      .map(id => sm._findById(id))
+      .filter(o => o && !o.userData?._isGizmo);
+    if (descendantObjects.length >= 2) {
+      const first = descendantObjects[0];
+      const lastType = first.isLight ? 'light'
+        : first.isCamera ? 'camera'
+        : (first.isMesh || first.isLine || first.isPoints) ? 'mesh'
+        : 'object';
+      window.dispatchEvent(new CustomEvent('cyco-select-node', {
+        detail: { object: first, objects: descendantObjects, type: lastType }
+      }));
+    } else {
+      // Fallback (group with only one / no mesh descendants) — keep
+      // the original Empty-selection behaviour so the Properties panel
+      // still targets the new Empty.
+      window.dispatchEvent(new CustomEvent('cyco-select-node', {
+        detail: { object: groupObj, type: 'object' }
+      }));
+    }
+  }
+
+  /**
+   * Walk the live Three.js subtree under `root` and return the cycoIds of
+   * every selectable descendant — meshes, lines, points, instanced meshes,
+   * lights, cameras — in scene-graph (depth-first) order. Skips editor-only
+   * helpers and gizmo internals. Used by `_group()` to build the multi-
+   * selection set that mirrors the marquee outline behaviour.
+   * @param {THREE.Object3D} root
+   * @returns {string[]}
+   */
+  _collectDescendantIds(root, excludeRootId) {
+    const ids = [];
+    if (!root) return ids;
+    root.traverse(obj => {
+      if (!obj || obj === root) return;
+      if (obj.userData?._isGizmo)      return;
+      if (obj.userData?._isHelper)     return;
+      if (obj.userData?._editorOnly)   return;
+      if (obj.userData?.cycoId === excludeRootId) return;
+      const sel = obj.isMesh || obj.isLine || obj.isPoints
+        || obj.isInstancedMesh || obj.isBatchedMesh
+        || obj.isLight || obj.isCamera;
+      if (!sel) return;
+      const id = obj.userData?.cycoId;
+      if (id && !ids.includes(id)) ids.push(id);
+    });
+    return ids;
   }
 
   _startRename() {
@@ -1052,9 +1122,49 @@ export class LeftPanel extends BasePanel {
           if (objects.length === 0) {
             window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
           } else {
-            const last = objects[objects.length - 1];
+            // If the user clicked a container row (Group / Empty / LOD /
+            // Prefab root) and it has selectable mesh / light / camera
+            // descendants, expand the selection to those descendants so
+            // the viewport shows the same multi-select outline look as
+            // a marquee selection — the FIRST descendant gets the
+            // primary outline colour, the rest get the secondary colour.
+            // Without this expansion, clicking a Group would dispatch a
+            // single-object selection of the (mesh-less) container and
+            // the Box Gizmo would draw a green wireframe AABB around the
+            // whole cluster via setFromObject(target), which is the wrong
+            // visual feedback.
+            let dispatchedObjects = objects;
+            const lastClicked = objects[objects.length - 1];
+            // Expand the selection to a container's selectable descendants for
+            // ANY non-mesh folder-like row (Empty / Group / LOD / Prefab
+            // root). Without this expansion, clicking a folder would
+            // dispatch a single-object selection of the (mesh-less)
+            // container and the Box Gizmo would draw a wireframe AABB
+            // around the whole cluster — the user wants the same
+            // marquee-multi-select outline look instead.
+            const isContainer = lastClicked && (
+              lastClicked.isGroup || lastClicked.isLOD
+              || lastClicked.type === 'Object3D' || lastClicked.type === 'Group'
+              || lastClicked.userData?.cycoPrefabSource
+              || lastClicked.userData?.cycoEmptyRoot
+            );
+            if (isContainer
+                && !(lastClicked.isMesh || lastClicked.isLight || lastClicked.isCamera)) {
+              const expandedIds = this._collectDescendantIds(lastClicked, lastClicked.userData?.cycoId);
+              const expanded = expandedIds
+                .map(id => sm._findById(id))
+                .filter(o => o && !o.userData?._isGizmo);
+              if (expanded.length >= 2) {
+                dispatchedObjects = expanded;
+                const first = expanded[0];
+                if (first.isLight)         lastType = 'light';
+                else if (first.isCamera)   lastType = 'camera';
+                else if (first.isMesh || first.isLine || first.isPoints) lastType = 'mesh';
+              }
+            }
+            const dispatchLast = dispatchedObjects[dispatchedObjects.length - 1];
             window.dispatchEvent(new CustomEvent('cyco-select-node', {
-              detail: { object: last, objects, type: lastType }
+              detail: { object: dispatchLast, objects: dispatchedObjects, type: lastType }
             }));
           }
         } else if (node.id === 'root') {
