@@ -1758,21 +1758,44 @@ export class ViewportEngine {
     // Accept `application/x-cyco-prefab` MIME-type drops anywhere on the
     // viewport canvas. The drop position is converted to a world-space point
     // on a ground plane (y=0) for the most common authoring workflow.
+    //
+    // Listeners are attached to `window` (not the canvas) because the canvas
+    // is a child of a dockable container that may receive its own pointer
+    // events from dockview. Attaching to the canvas directly missed drops
+    // whenever the cursor passed over a sibling overlay. A target guard
+    // keeps the prefab MIME from triggering anywhere outside the viewport.
     const canvas2 = this.rendererManager.renderer?.domElement;
+    const isInViewport = (target) => {
+      if (!canvas2) return false;
+      return target === canvas2 || canvas2.contains(target) ||
+             this._contextMenuContainer?.contains?.(target);
+    };
+    const hasPrefabPayload = (dt) => {
+      if (!dt) return false;
+      const types = Array.from(dt.types || []);
+      return types.includes('application/x-cyco-prefab') ||
+             types.includes('text/plain');
+    };
     this._onDragOver = (e) => {
-      const types = e.dataTransfer?.types;
-      if (!types) return;
-      if (Array.from(types).includes('application/x-cyco-prefab')) {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'copy';
-        canvas2?.classList?.add('is-prefab-drop-target');
+      if (!hasPrefabPayload(e.dataTransfer)) return;
+      if (!isInViewport(e.target)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      canvas2?.classList?.add('is-prefab-drop-target');
+    };
+    this._onDragLeave = (e) => {
+      // Only clear the highlight when the cursor actually leaves the
+      // viewport — firing on every child element bubbles through.
+      if (!e.relatedTarget || !isInViewport(e.relatedTarget)) {
+        canvas2?.classList?.remove('is-prefab-drop-target');
       }
     };
-    this._onDragLeave = () => {
-      canvas2?.classList?.remove('is-prefab-drop-target');
-    };
     this._onDrop = (e) => {
-      const fileName = e.dataTransfer?.getData('application/x-cyco-prefab');
+      if (!isInViewport(e.target)) return;
+      // Try the custom MIME first, then fall back to text/plain (set by the
+      // AssetBrowser and many browsers expose text/plain for cross-app drag).
+      const fileName = e.dataTransfer?.getData('application/x-cyco-prefab')
+                    || e.dataTransfer?.getData('text/plain');
       if (!fileName) return;
       e.preventDefault();
       canvas2?.classList?.remove('is-prefab-drop-target');
@@ -1794,9 +1817,9 @@ export class ViewportEngine {
         detail: { fileName, worldPos }
       }));
     };
-    canvas2.addEventListener('dragover',  this._onDragOver);
-    canvas2.addEventListener('dragleave', this._onDragLeave);
-    canvas2.addEventListener('drop',      this._onDrop);
+    window.addEventListener('dragover',  this._onDragOver);
+    window.addEventListener('dragleave', this._onDragLeave);
+    window.addEventListener('drop',      this._onDrop);
 
     this._contextMenuContainer = container;
   }

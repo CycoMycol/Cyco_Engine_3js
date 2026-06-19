@@ -607,7 +607,7 @@ export class AssetBrowser {
         this._refresh();
       }});
     } else if (node.type === 'prefab') {
-      items.push({ label: 'Instantiate in Scene', onClick: () => {
+      items.push({ label: 'Add Prefab to Scene', onClick: () => {
         window.dispatchEvent(new CustomEvent('cyco-instantiate-prefab', {
           detail: { fileName: name }
         }));

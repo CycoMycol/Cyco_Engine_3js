@@ -739,7 +739,28 @@ const ProjectManager = {
     if (!this._project || !fileName) return null;
     const node = this._getNodeAt(['prefabs', fileName]);
     if (!node || !this.isFileNode(node)) return null;
-    try { return JSON.parse(node.data || 'null'); }
+    // Project files saved on disk wrap `data` as a `data:;base64,...` URL.
+    // Plain in-memory creates leave it as raw JSON. Accept both forms.
+    const raw = node.data || 'null';
+    let payload = raw;
+    if (typeof raw === 'string' && raw.startsWith('data:')) {
+      const comma = raw.indexOf(',');
+      if (comma < 0) return null;
+      const meta  = raw.slice(5, comma);              // "mime/type;base64" or ";base64"
+      const body  = raw.slice(comma + 1);
+      try {
+        if (/;base64/i.test(meta)) {
+          // atob on binary string then percent-decode to UTF-8
+          const binary = atob(body);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          payload = new TextDecoder('utf-8').decode(bytes);
+        } else {
+          payload = decodeURIComponent(body);
+        }
+      } catch (_) { return null; }
+    }
+    try { return JSON.parse(payload); }
     catch (_) { return null; }
   },
 

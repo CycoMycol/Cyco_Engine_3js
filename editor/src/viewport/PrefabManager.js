@@ -174,34 +174,68 @@ export class PrefabManager {
 
     if (!loaded) return null;
 
-    // Assign fresh cycoIds and mark the lineage so right-click can navigate back
-    loaded.userData.cycoId = `prefab_inst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-    loaded.userData.cycoPrefabSource = fileName;
-    loaded.userData.cycoPrefabName = metadata?.prefabName ?? fileName.replace(/\.cyprefab$/, '');
-    loaded.traverse(child => {
+    const prefabName = metadata?.prefabName ?? fileName.replace(/\.cyprefab$/, '');
+    const instanceTag = `prefab_inst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+    // The prefab is just a group of objects. The parsed root IS the folder
+    // — do NOT wrap it in an extra container, that would produce a useless
+    // double-nested row in the hierarchy (folder > inner-folder > meshes).
+    // Use the parsed root directly, name it after the prefab, and stamp
+    // it so the LeftPanel can recognize it as a prefab instance.
+    const root = loaded;
+    root.name = prefabName;
+    root.userData.cycoId = instanceTag;
+    root.userData.cycoPrefabSource = fileName;
+    root.userData.cycoPrefabName  = prefabName;
+    root.userData.cycoPrefabRoot  = true;
+
+    // Stamp every descendant with a fresh cycoId + lineage so the hierarchy
+    // and Properties panel can address each node individually.
+    root.traverse(child => {
       if (!child.userData.cycoId) {
-        child.userData.cycoId = `prefab_inst_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+        child.userData.cycoId = `${instanceTag}_${Math.random().toString(36).slice(2, 7)}`;
       }
       child.userData.cycoPrefabSource = fileName;
+      child.userData.cycoPrefabName  = prefabName;
     });
 
     // Add to parent / scene
     const target = opts.parent ?? this.sceneManager.getActiveScene();
     if (target) {
-      target.add(loaded);
       if (opts.worldPos) {
-        loaded.position.set(
+        root.position.set(
           opts.worldPos.x ?? 0,
           opts.worldPos.y ?? 0,
           opts.worldPos.z ?? 0
         );
-        loaded.updateMatrixWorld(true);
       }
+      root.updateMatrixWorld(true);
+      target.add(root);
       this.sceneManager._markDirty?.();
-      this.sceneManager._broadcastHierarchyAdd?.(loaded);
+
+      // Broadcast hierarchy-add for the prefab root AND every selectable
+      // descendant so the LeftPanel renders the full nested tree, not just
+      // the collapsed root. Dispatch in pre-order with the correct
+      // parentId so each row is filed under its actual Three.js parent.
+      // NOTE: must be called as a method (sm._broadcastHierarchyAdd(...))
+      // so its internal `this._markDirty()` resolves to SceneManager.
+      // Detaching it as `const b = sm._broadcastHierarchyAdd` would leave
+      // `this` undefined and throw on the first call.
+      const broadcast = this.sceneManager._broadcastHierarchyAdd?.bind(this.sceneManager);
+      if (broadcast) {
+        broadcast(root, target);
+        const emit = (obj, parent) => {
+          for (const child of obj.children) {
+            if (child.userData?._isGizmo) continue;
+            broadcast(child, parent);
+            if (child.children?.length) emit(child, child);
+          }
+        };
+        emit(root, root);
+      }
     }
 
-    return loaded;
+    return root;
   }
 
   // ─── Internals ────────────────────────────────────────────────────────────

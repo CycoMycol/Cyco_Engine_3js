@@ -61,6 +61,18 @@ const TYPE_ICON_SVG = {
     <rect x="3" y="8.5" width="7" height="1" rx="0.5" fill="#fff" opacity="0.55"/>
     <rect x="3" y="10.5" width="4" height="1" rx="0.5" fill="#fff" opacity="0.55"/>
   </svg>`,
+
+  // Prefab folder + cube overlay — visually marks an instance root so the
+  // user can tell it apart from a regular group at a glance. A prefab is
+  // otherwise a plain group (open/close chevron, drag, reparent, etc.).
+  prefab: `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
+    <path d="M1 3.5 L1 11.5 L13 11.5 L13 5 L7 5 L6 3.5 Z" fill="#d4a040" stroke="#8a6520" stroke-width="0.8" stroke-linejoin="round"/>
+    <path d="M1 3.5 L6 3.5 L7 5 L1 5 Z" fill="#e8b858"/>
+    <rect x="6.5" y="7.5" width="5" height="5" rx="0.5" fill="#e07840" stroke="#8a4010" stroke-width="0.6"/>
+    <rect x="6.5" y="7.5" width="2.5" height="2.5" fill="#f09050"/>
+    <line x1="9" y1="7.5" x2="9" y2="12.5" stroke="#fff" stroke-width="0.4" opacity="0.3"/>
+    <line x1="6.5" y1="10" x2="11.5" y2="10" stroke="#fff" stroke-width="0.4" opacity="0.3"/>
+  </svg>`,
 };
 
 const FALLBACK_ICON_SVG = `<svg viewBox="0 0 14 14" width="13" height="13" xmlns="http://www.w3.org/2000/svg">
@@ -359,7 +371,8 @@ export class LeftPanel extends BasePanel {
     if (existing) {
       existing.pid   = parentId ?? existing.pid ?? 'root';
       existing.name  = object.name || existing.name;
-      existing.type  = (object.isGroup ? 'group' : existing.type);
+      if (object.userData?.cycoPrefabRoot)  existing.type = 'prefab';
+      else if (object.isGroup)              existing.type = 'group';
       if (!suppressAutoSelect) {
         this._selectedIds.clear();
         this._selectedIds.add(existing.id);
@@ -373,11 +386,24 @@ export class LeftPanel extends BasePanel {
       return;
     }
 
-    const pid = this._pendingAddPid ?? 'root';
-    this._pendingAddPid = null;
+    // Resolve the parent for this new row. _pendingAddPid is set by the
+    // explicit "right-click on a row → create child" flow. For broadcasts
+    // (prefab instantiate, group, scene restore) the dispatcher's
+    // `parentId` is authoritative — honour it when it points at a real
+    // Three.js cycoId we already know about. Falls back to 'root' if neither
+    // is set (e.g. addObject() with no parent → scene root).
+    let pid = this._pendingAddPid;
+    if (pid) {
+      this._pendingAddPid = null;
+    } else if (parentId && parentId !== 'scene_root' && this._nodes.find(n => n.id === parentId)) {
+      pid = parentId;
+    } else {
+      pid = 'root';
+    }
 
     let nodeType = 'object';
-    if (object.isLight)                          nodeType = 'light';
+    if (object.userData?.cycoPrefabRoot)         nodeType = 'prefab';
+    else if (object.isLight)                     nodeType = 'light';
     else if (object.isCamera)                    nodeType = 'camera';
     else if (object.isInstancedMesh)             nodeType = 'instanced';
     else if (object.isLOD)                       nodeType = 'lod';
@@ -517,10 +543,11 @@ export class LeftPanel extends BasePanel {
 
   // ── Action handler ────────────────────────────────────────────────────────
   _handleAction(action) {
-    if (action === 'rename')    { this._startRename();    return; }
-    if (action === 'duplicate') { this._duplicate();      return; }
-    if (action === 'delete')    { this._deleteSelected(); return; }
-    if (action === 'group')     { this._group();          return; }
+    if (action === 'rename')        { this._startRename();    return; }
+    if (action === 'duplicate')     { this._duplicate();      return; }
+    if (action === 'delete')        { this._deleteSelected(); return; }
+    if (action === 'group')         { this._group();          return; }
+    if (action === 'create-prefab') { this._createPrefabFromSelection(); return; }
 
     const factoryType = LeftPanel._ACTION_FACTORY_MAP[action];
     if (factoryType) {

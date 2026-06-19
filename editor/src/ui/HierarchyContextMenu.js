@@ -141,10 +141,14 @@ export function showHierarchyMenu(e, onAction, hasTarget = false, isScene = fals
     schema = [
       ...CREATE_SCHEMA,
       { separator: true },
-      { label: 'Rename',    action: 'rename'    },
-      { label: 'Duplicate', action: 'duplicate' },
-      // Delete is hidden for the Scene root
-      ...(isScene ? [] : [{ label: 'Delete', action: 'delete', danger: true }]),
+      { label: 'Rename',        action: 'rename'        },
+      { label: 'Duplicate',     action: 'duplicate'     },
+      // Create Prefab is hidden for the Scene root (nothing meaningful to prefab)
+      ...(isScene ? [] : [
+        { label: 'Create Prefab', action: 'create-prefab' },
+        { separator: true },
+        { label: 'Delete',        action: 'delete', danger: true },
+      ]),
     ];
   } else {
     schema = CREATE_SCHEMA;

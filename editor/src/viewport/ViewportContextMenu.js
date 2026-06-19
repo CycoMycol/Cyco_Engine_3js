@@ -169,6 +169,15 @@ export class ViewportContextMenu {
         }
       }));
 
+      // Create Prefab (single object)
+      menu.appendChild(this._makeItem('Create Prefab', () => {
+        this._hide();
+        window.dispatchEvent(new CustomEvent('cyco-select-node', { detail: { object: hit, type: hit.isLight ? 'light' : 'mesh' } }));
+        window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+          detail: { objects: [hit] }
+        }));
+      }));
+
       menu.appendChild(this._makeSeparator());
 
       // Delete

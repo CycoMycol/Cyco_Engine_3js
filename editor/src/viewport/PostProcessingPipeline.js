@@ -2098,7 +2098,13 @@ export class PostProcessingPipeline {
       const obj = this._selectedObjects[0];
       if (obj && this._isContainerLike(obj)) {
         const descendants = this._collectSelectableDescendants(obj);
-        if (descendants.length >= 2) {
+        // Expand the outline target to the descendants whenever the
+        // container has at least one selectable descendant. Without this
+        // expansion a folder / prefab root with a single mesh child (or
+        // with several) would draw an inverted-hull BoxGeometry around
+        // the whole subtree's AABB (the "green silhouette box" the user
+        // reported) instead of outlining the actual mesh.
+        if (descendants.length >= 1) {
           this._selectedObjects = descendants;
         }
       }

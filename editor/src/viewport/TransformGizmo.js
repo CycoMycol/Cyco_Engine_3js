@@ -980,23 +980,44 @@ export class TransformGizmo {
     // gizmo + outline purposes.  The dispatched `cyco-select-node` event still
     // carries `{ object: folder, objects: [folder] }` so the RightPanel keeps
     // showing the folder's own Properties and the hierarchy keeps the folder
-    // highlighted.  This avoids the user-reported "green bounding box around
-    // the whole folder" — instead, each descendant gets its own outline and
-    // the multi-gizmo (virtual centroid) is used for transforms.
+    // highlighted.  This way a prefab (or any folder) looks and behaves
+    // exactly like a group of objects — the gizmo always targets the real
+    // geometry inside the folder, never the empty folder wrapper itself.
+    //
+    // Special case: a *prefab root* (userData.cycoPrefabRoot) is always
+    // treated as a multi-select of its descendants, even when it has just
+    // one.  The user wants a prefab to look and behave exactly like a
+    // "Group Selected" — i.e. the multi-centroid gizmo, not the
+    // single-object BoxGizmo with its red/green/blue axis arrows.
+    const isPrefabRoot = !!object?.userData?.cycoPrefabRoot;
     if (objects.length === 1 && object && !this._physicsEdit
-        && TransformGizmo._isContainerWithSelectableDescendants(object)) {
+        && (isPrefabRoot || TransformGizmo._isContainerLike(object))) {
       const expanded = TransformGizmo._collectSelectableDescendants(object);
-      if (expanded.length >= 2) {
+      if (expanded.length >= 1) {
         const locked = expanded.filter(o => !o.userData?.cycoLocked);
-        if (locked.length >= 2) {
+        const useMulti = isPrefabRoot || locked.length >= 2;
+        if (useMulti && locked.length >= 1) {
+          // Build a virtual multi-group (or reuse the single descendant as
+          // the centroid target for the 1-descendant prefab case). The
+          // multi-gizmo is used for transforms; the OutlinePass outlines
+          // every descendant.
           this._destroyMultiGroup();
-          this._attachToMulti(locked);
+          // `asMulti: true` is what makes a single-descendant prefab show
+          // the multi-centroid gizmo (no BoxGizmo, no green axis arrows)
+          // — matching the "Group Selected" visual.
+          this._attachToMulti(locked, { asMulti: isPrefabRoot || locked.length >= 2 });
+          this._scheduleBoxPaletteUpdate();
+          return;
+        }
+        if (locked.length === 1 && !useMulti) {
+          this._destroyMultiGroup();
+          this._attachTo(locked[0]);
           this._scheduleBoxPaletteUpdate();
           return;
         }
       }
-      // Fallback: container with no selectable descendants (e.g. an Empty
-      // with no children) — just hide the box so we don't draw a degenerate
+      // Container with no selectable descendants (e.g. an Empty with no
+      // children) — just hide the box so we don't draw a degenerate
       // wireframe at the folder's position.
       this._destroyMultiGroup();
       this._targetObject = object;
@@ -1069,8 +1090,8 @@ export class TransformGizmo {
     });
   }
 
-  _attachToMulti(objects) {
-    if (!Array.isArray(objects) || objects.length < 2) {
+  _attachToMulti(objects, { asMulti = false } = {}) {
+    if (!Array.isArray(objects) || (objects.length < 2 && !asMulti)) {
       this._attachTo(objects[0] ?? null);
       return;
     }
@@ -1091,6 +1112,12 @@ export class TransformGizmo {
     if (this._mode !== 'select' && this._mode !== 'universal' && this._tc) {
       this._tc.attach(this._multiGroup);
     }
+    // Hide the BoxGizmo + its red/green/blue axis arrows: a multi-group
+    // selection (or a single-descendant prefab rendered as a multi) is
+    // already represented by the multi-centroid TransformControls. The
+    // BoxGizmo would only show a redundant, confusing "green axis box"
+    // around the centroid that has no purpose.
+    this._hideBox();
   }
 
   _destroyMultiGroup() {
