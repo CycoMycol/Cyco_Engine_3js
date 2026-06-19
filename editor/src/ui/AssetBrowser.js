@@ -445,6 +445,7 @@ export class AssetBrowser {
     const item   = document.createElement('div');
     item.className = 'ce-ab-grid-item' + (isSel ? ' selected' : '') + (isPrefab ? ' is-prefab' : '');
     item.dataset.name = name;
+    item.title = name;
     if (isPrefab) item.draggable = true;
     item.insertAdjacentHTML('beforeend', isFile ? _svgFileLg(icSize, node.type) : _svgFolderLg(icSize));
     const lbl = document.createElement('span');
@@ -484,6 +485,7 @@ export class AssetBrowser {
     const row   = document.createElement('div');
     row.className = 'ce-ab-list-item' + (isSel ? ' selected' : '') + (isPrefab ? ' is-prefab' : '');
     row.dataset.name = name;
+    row.title = name;
     row.innerHTML = `
       <span class="ce-ab-list-icon">${isFile ? _svgFileSm(node.type) : _svgFolderSm()}</span>
       <span class="ce-ab-list-name">${_esc(name)}</span>
