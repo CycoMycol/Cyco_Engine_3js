@@ -11,27 +11,36 @@ export class TransformGizmo {
     this._targetObject = null;
     this._isDragging   = false;
     this._matrixBefore = null;
+    // Multi-select: tracks the multiGroup matrix after the previous frame's
+    // delta was applied. Lets `_applyMultiFromCurrentGroup` compute the
+    // PER-FRAME delta (so multi-select moves track the gizmo 1:1) instead
+    // of double-counting the cumulative offset from drag start. Distinct
+    // from `_matrixBefore`, which is the drag-start snapshot used for undo.
+    this._multiLastAppliedMatrix = null;
     this._prefs        = loadPrefs();
 
     this._tc      = null;
     this._gizmo   = null;
     this._controls = null;
 
-    // Multi-selection state. When the selection contains 2+ objects, the gizmo
-    // attaches to a hidden `_multiGroup` Object3D positioned at the centroid
-    // of the selection, and every selected object follows the same delta.
-    // `_multiMode` is the pivot strategy:
-    //   'group'    → all selected objects move as one; pivot = group centroid
-    //   'individual' → gizmo attaches to a virtual "primary"; each object is
-    //                  transformed relative to its own pivot while keeping the
-    //                  group centroid fixed.
+    // Multi-selection state. When the selection contains 2+ objects, the
+    // gizmo attaches to a hidden `_multiGroup` Object3D positioned at the
+    // centroid of the selection, and the gizmo's full delta is applied to
+    // every selected object — so the cluster always transforms as one.
     this._multiGroup    = null;
     this._multiTargets  = [];   // Array<Object3D> the gizmo is currently driving
-    this._multiMode     = 'group';
     this._multiCentroid = new THREE.Vector3();
-    this._multiPivots   = [];   // original world positions when transform began
-    this._multiRots     = [];   // original world quaternions
-    this._multiScales   = [];   // original world scales
+    this._multiPivots   = [];   // per-frame world positions — mutated by
+                                 // `_applyMultiMatricesFromGroupDelta` so
+                                 // the next frame's delta accumulates correctly.
+    this._multiRots     = [];   // per-frame world quaternions
+    this._multiScales   = [];   // per-frame world scales
+    // Drag-start snapshot — frozen on mouseDown / TC.mouseDown and used
+    // exclusively for the undo command on mouseUp. Distinct from
+    // `_multiPivots` which advances every frame.
+    this._multiDragStartPivots = [];
+    this._multiDragStartRots   = [];
+    this._multiDragStartScales = [];
 
     this._boxGroup      = null;
     this._boxHandles    = [];
@@ -198,16 +207,21 @@ export class TransformGizmo {
         const before = this._matrixBefore;
         const after  = this._targetObject.matrix.clone();
         const obj    = this._targetObject;
-        // If we're driving a multi-select, apply the group delta to every target
+        // If we're driving a multi-select, capture each target's post-drag
+        // matrix for undo. The targets were already updated incrementally
+        // every frame during the drag, so by mouseUp they're sitting at
+        // the gizmo's final transform — re-applying the drag-start delta
+        // here would double the motion.
         if (this._multiTargets.length >= 2) {
           const targets = this._multiTargets.slice();
-          const pivots  = this._multiPivots.slice();
-          const rots    = this._multiRots.slice();
-          const scales  = this._multiScales.slice();
-          const beforeMatrices = pivots.map(p => p.clone());
-          // Re-apply pivot positions to undo current (post-drag) world changes
-          this._applyMultiMatricesFromGroupDelta(before, after);
-          const afterMatrices = this._multiTargets.map(o => o.matrix.clone());
+          const afterMatrices  = this._multiTargets.map(o => o.matrix.clone());
+          // Use the frozen drag-start snapshot, NOT `_multiPivots` (which
+          // was advanced frame-by-frame and now equals the post-drag state).
+          const beforeMatrices = this._multiDragStartPivots.map((p, i) => {
+            const m = new THREE.Matrix4();
+            m.compose(p, this._multiDragStartRots[i], this._multiDragStartScales[i]);
+            return m;
+          });
           window.dispatchEvent(new CustomEvent('cyco-command-execute', {
             detail: {
               name: `Transform ${targets.length} objects`,
@@ -241,6 +255,10 @@ export class TransformGizmo {
         this._updateBoxGizmo();
       }
       this._matrixBefore = null;
+      this._multiLastAppliedMatrix = null;
+      this._multiDragStartPivots = [];
+      this._multiDragStartRots = [];
+      this._multiDragStartScales = [];
     });
 
     this._tc = tc;
@@ -443,6 +461,7 @@ export class TransformGizmo {
     }
 
     const hasTarget = !!this._targetObject;
+
     if (this._mode === 'universal' || this._mode === 'select') {
       if (this._tc) {
         this._tc.detach();
@@ -485,9 +504,10 @@ export class TransformGizmo {
       this._applyMode();
       return;
     }
-    // If we're in multi-select mode, single-attach is a no-op — the multi
-    // group is the target. Caller should use _attachToMulti() if it really
-    // wants to switch the selection.
+    // Multi-select gizmo is driven by the virtual centroid group, not the
+    // individual objects.  Ignore per-target attach calls when the multi
+    // state is active so the per-target events from selection don't
+    // inadvertently re-target the gizmo on a single object.
     if (this._multiTargets.length >= 2 && obj) return;
     this._targetObject = obj;
     if (this._mode === 'universal' || this._mode === 'select') {
@@ -835,6 +855,11 @@ export class TransformGizmo {
     this._boxActive = false;
   }
 
+  /**
+   * Single-object Box Gizmo update — multi-select no longer renders any
+   * extra box outline (the selection highlight on the individual objects is
+   * the only multi-select visual).
+   */
   _updateBoxGizmo() {
     if (!this._boxActive || !this._targetObject || !this._boxGroup) return;
 
@@ -1039,16 +1064,6 @@ export class TransformGizmo {
     // ── Multi-select: drive a virtual group object ─────────────────────────
     const locked = objects.filter(o => !o.userData?.cycoLocked);
     if (locked.length >= 2) {
-      if (this._multiMode === 'individual') {
-        // Individual pivot: gizmo on first selected object, pivot markers on the rest.
-        this._destroyMultiGroup();
-        this._multiTargets = locked.slice();
-        this._attachTo(locked[0]);
-        this._updatePivotIndicators(locked);
-        this._scheduleBoxPaletteUpdate();
-        return;
-      }
-      this._hidePivotIndicators();
       this._attachToMulti(locked);
       this._scheduleBoxPaletteUpdate();
       return;
@@ -1112,11 +1127,10 @@ export class TransformGizmo {
     if (this._mode !== 'select' && this._mode !== 'universal' && this._tc) {
       this._tc.attach(this._multiGroup);
     }
-    // Hide the BoxGizmo + its red/green/blue axis arrows: a multi-group
-    // selection (or a single-descendant prefab rendered as a multi) is
-    // already represented by the multi-centroid TransformControls. The
-    // BoxGizmo would only show a redundant, confusing "green axis box"
-    // around the centroid that has no purpose.
+    // The multi-centroid TransformControls gizmo (translate / rotate /
+    // scale) drives every selected object in unison.  No multi-box
+    // outline is rendered — the per-object selection highlight is the
+    // only multi-select visual.
     this._hideBox();
   }
 
@@ -1128,90 +1142,10 @@ export class TransformGizmo {
     this._multiPivots = [];
     this._multiRots = [];
     this._multiScales = [];
-    this._hidePivotIndicators();
-  }
-
-  /**
-   * Individual-pivot mode: show a small 3-axis crosshair on every
-   * multi-selected object EXCEPT the one the gizmo is attached to
-   * (the first selected).  This makes it obvious that the gizmo
-   * only controls the primary object, but rotation/scale still applies
-   * to every selected object around its own centre.
-   */
-  _updatePivotIndicators(objects) {
-    this._hidePivotIndicators();
-    if (!Array.isArray(objects) || objects.length < 2) return;
-    if (this._multiMode !== 'individual') return;
-    const scene = this.engine?.scene;
-    if (!scene) return;
-
-    this._pivotIndicators = [];
-    // skip index 0 — the gizmo already sits on it
-    for (let i = 1; i < objects.length; i++) {
-      const obj = objects[i];
-      if (!obj) continue;
-      const marker = this._buildPivotMarker();
-      // Position the marker at the object's world position so the indicator
-      // visually represents the per-object pivot.
-      obj.getWorldPosition(marker.position);
-      marker.userData._target = obj;
-      scene.add(marker);
-      this._pivotIndicators.push(marker);
-    }
-  }
-
-  _buildPivotMarker() {
-    const g = new THREE.Group();
-    g.name = '__cyco_pivot_indicator__';
-    g.userData._isGizmo = true;
-    const len = 0.18;
-    const mat = (hex) => new THREE.LineBasicMaterial({
-      color: hex,
-      depthTest: false,
-      depthWrite: false,
-      transparent: true,
-      opacity: 0.85,
-      toneMapped: false,
-    });
-    const xAxis = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(-len, 0, 0), new THREE.Vector3(len, 0, 0),
-    ]);
-    const yAxis = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, -len, 0), new THREE.Vector3(0, len, 0),
-    ]);
-    const zAxis = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0, -len), new THREE.Vector3(0, 0, len),
-    ]);
-    const xLine = new THREE.Line(xAxis, mat(0xff4040));
-    const yLine = new THREE.Line(yAxis, mat(0x40ff40));
-    const zLine = new THREE.Line(zAxis, mat(0x4080ff));
-    // Make the marker always face the camera (billboard behaviour isn't critical,
-    // but at least render it on top of everything else).
-    xLine.renderOrder = yLine.renderOrder = zLine.renderOrder = 9999;
-    g.add(xLine); g.add(yLine); g.add(zLine);
-    // Tiny centre sphere
-    const dot = new THREE.Mesh(
-      new THREE.SphereGeometry(0.025, 8, 8),
-      new THREE.MeshBasicMaterial({
-        color: 0xffd060, depthTest: false, transparent: true,
-        opacity: 0.95, toneMapped: false,
-      }),
-    );
-    dot.renderOrder = 9999;
-    g.add(dot);
-    return g;
-  }
-
-  _hidePivotIndicators() {
-    if (!this._pivotIndicators) return;
-    for (const m of this._pivotIndicators) {
-      m.parent?.remove(m);
-      m.traverse?.((c) => {
-        if (c.geometry) c.geometry.dispose?.();
-        if (c.material) c.material.dispose?.();
-      });
-    }
-    this._pivotIndicators = [];
+    this._multiDragStartPivots = [];
+    this._multiDragStartRots = [];
+    this._multiDragStartScales = [];
+    this._multiLastAppliedMatrix = null;
   }
 
   _recomputeMultiCentroid() {
@@ -1227,10 +1161,12 @@ export class TransformGizmo {
     v.multiplyScalar(1 / objs.length);
     this._multiCentroid.copy(v);
     // Snap the virtual group to the centroid so the gizmo appears at center
-    this._multiGroup.position.copy(v);
-    this._multiGroup.quaternion.identity();
-    this._multiGroup.scale.set(1, 1, 1);
-    this._multiGroup.updateMatrixWorld(true);
+    if (this._multiGroup) {
+      this._multiGroup.position.copy(v);
+      this._multiGroup.quaternion.identity();
+      this._multiGroup.scale.set(1, 1, 1);
+      this._multiGroup.updateMatrixWorld(true);
+    }
   }
 
   _onDeselectAll() {
@@ -1252,11 +1188,8 @@ export class TransformGizmo {
       if (this._multiTargets.length < 2) {
         this._destroyMultiGroup();
         this._attachTo(this._multiTargets[0] ?? null);
-      } else if (this._multiMode === 'individual') {
-        // Refresh pivot markers for the new (still multi) selection.
-        this._attachTo(this._multiTargets[0]);
-        this._updatePivotIndicators(this._multiTargets);
       } else {
+        // Cluster still has 2+ — keep using the centroid virtual group.
         this._recomputeMultiCentroid();
       }
     }
@@ -1324,6 +1257,11 @@ export class TransformGizmo {
       startPlanePoint = this._raycaster.ray.intersectPlane(dragPlane, planePoint) ? planePoint : null;
     }
     this._matrixBefore = this._targetObject?.matrix.clone();
+    // Box-tool drags drive the multi-centroid group as well.  Capture the
+    // per-target world transforms up front so we can replay the same delta
+    // on every selected object (mirrors how TransformControls drag is
+    // handled in `_applyMultiFromCurrentGroup`).
+    this._captureMultiPivots();
     this._interaction = {
       pointerId: event.pointerId,
       type: hit.object.userData.handleRole || 'translate',
@@ -1394,13 +1332,50 @@ export class TransformGizmo {
     if (this._physicsEdit) {
       this._syncPhysicsComponentFromProxy();
     } else if (obj && before && after && !before.equals(after)) {
-      window.dispatchEvent(new CustomEvent('cyco-command-execute', {
-        detail: {
-          name: `${this._interaction.type.charAt(0).toUpperCase() + this._interaction.type.slice(1)} ${obj.name}`,
-          do()   { obj.matrix.copy(after); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
-          undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
-        }
-      }));
+      const isMulti = this._multiTargets.length >= 2;
+      if (isMulti) {
+        // Snapshot per-target matrices so undo restores every selected
+        // object, not just the virtual multi-group.
+        const targets = this._multiTargets.slice();
+        const beforeMatrices = this._multiPivots.map((pivot, i) => {
+          const m = new (after.constructor)();
+          m.compose(pivot, this._multiRots[i], this._multiScales[i]);
+          const parent = targets[i].parent;
+          if (parent) {
+            parent.updateMatrixWorld(true);
+            const inv = new (after.constructor)().copy(parent.matrixWorld).invert();
+            m.premultiply(inv);
+          }
+          return m;
+        });
+        const afterMatrices = targets.map(o => o.matrix.clone());
+        const typeLabel = this._interaction.type.charAt(0).toUpperCase() + this._interaction.type.slice(1);
+        window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+          detail: {
+            name: `${typeLabel} ${targets.length} objects`,
+            do() {
+              for (let i = 0; i < targets.length; i++) {
+                targets[i].matrix.copy(afterMatrices[i]);
+                targets[i].matrix.decompose(targets[i].position, targets[i].quaternion, targets[i].scale);
+              }
+            },
+            undo() {
+              for (let i = 0; i < targets.length; i++) {
+                targets[i].matrix.copy(beforeMatrices[i]);
+                targets[i].matrix.decompose(targets[i].position, targets[i].quaternion, targets[i].scale);
+              }
+            },
+          }
+        }));
+      } else {
+        window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+          detail: {
+            name: `${this._interaction.type.charAt(0).toUpperCase() + this._interaction.type.slice(1)} ${obj.name}`,
+            do()   { obj.matrix.copy(after); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+            undo() { obj.matrix.copy(before); obj.matrix.decompose(obj.position, obj.quaternion, obj.scale); },
+          }
+        }));
+      }
     }
 
     this._matrixBefore = null;
@@ -1513,6 +1488,14 @@ export class TransformGizmo {
       this._updateScaleUniform(dx, dy);
     }
     if (this._physicsEdit) this._syncPhysicsComponentFromProxy();
+    // Multi-select: replay the gizmo's matrix delta onto every target so
+    // each object receives the same translate / rotate / scale the Box
+    // handle produced.  Mirrors `_applyMultiFromCurrentGroup` for
+    // TransformControls drag — keeps cluster behaviour consistent across
+    // every tool (Move / Rotate / Scale / Box).
+    if (this._multiTargets.length >= 2 && this._matrixBefore) {
+      this._applyMultiFromCurrentGroup();
+    }
     this._updateBoxGizmo();
   }
 
@@ -1691,41 +1674,76 @@ export class TransformGizmo {
       this._multiPivots = [];
       this._multiRots = [];
       this._multiScales = [];
+      this._multiDragStartPivots = [];
+      this._multiDragStartRots = [];
+      this._multiDragStartScales = [];
+      this._multiLastAppliedMatrix = null;
       return;
     }
-    this._multiPivots = this._multiTargets.map(o => o.getWorldPosition(new THREE.Vector3()));
-    this._multiRots   = this._multiTargets.map(o => o.getWorldQuaternion(new THREE.Quaternion()));
-    this._multiScales = this._multiTargets.map(o => o.getWorldScale(new THREE.Vector3()));
+    const pivots = this._multiTargets.map(o => o.getWorldPosition(new THREE.Vector3()));
+    const rots   = this._multiTargets.map(o => o.getWorldQuaternion(new THREE.Quaternion()));
+    const scales = this._multiTargets.map(o => o.getWorldScale(new THREE.Vector3()));
+    this._multiPivots = pivots;
+    this._multiRots   = rots;
+    this._multiScales = scales;
+    // Drag-start snapshot — frozen here, never mutated. The undo command
+    // captures `beforeMatrices` from these arrays so it restores the
+    // pre-drag world transforms even after `_multiPivots` advances frame
+    // by frame.
+    this._multiDragStartPivots = pivots.map(p => p.clone());
+    this._multiDragStartRots   = rots.map(r => r.clone());
+    this._multiDragStartScales = scales.map(s => s.clone());
+    // Seed per-frame delta anchor with the multiGroup's current world matrix.
+    // Subsequent `_applyMultiFromCurrentGroup` calls will diff against this
+    // so each frame's delta is incremental (matches pointer motion) instead
+    // of compounding the cumulative drag offset.
+    this._multiLastAppliedMatrix = this._targetObject ? this._targetObject.matrix.clone() : null;
   }
 
   /**
    * Apply the gizmo's current delta (relative to `_matrixBefore`) to every
    * multi-select target. Called from the `change` event while dragging.
+   *
+   * Delta is computed per-frame against `_multiLastAppliedMatrix` (the
+   * multiGroup matrix AFTER the previous frame's delta was applied) so
+   * multi-select tracks the gizmo 1:1. `_matrixBefore` (the drag-start
+   * snapshot) is preserved separately for the undo command on mouseUp.
    */
   _applyMultiFromCurrentGroup() {
     if (!this._matrixBefore || this._multiTargets.length < 2) return;
+    if (!this._multiLastAppliedMatrix) return;
+    // Box-tool handlers modify position/quaternion/scale directly without
+    // calling updateMatrixWorld(); flush so `this._targetObject.matrix`
+    // reflects the latest state before we compute the delta.
+    this._targetObject.updateMatrixWorld(true);
     const after = this._targetObject.matrix.clone();
-    this._applyMultiMatricesFromGroupDelta(this._matrixBefore, after);
+    this._applyMultiMatricesFromGroupDelta(this._multiLastAppliedMatrix, after);
+    // Refresh the per-frame anchor so the next frame's delta is incremental.
+    this._multiLastAppliedMatrix.copy(after);
     // Recompute the centroid so the gizmo's drag handle stays centered.
-    // In individual mode the gizmo is on the first selected object, so the
-    // "centroid" used for the toolbar status indicator still tracks the
-    // actual selection centre.
-    if (this._multiMode !== 'individual') this._recomputeMultiCentroid();
+    this._recomputeMultiCentroid();
   }
 
   /**
    * For every multi-select target, compute its post-transform world matrix.
    *
-   * Two modes:
-   *  • _multiMode === 'group' (default — "Combined"):
-   *      Apply the gizmo's delta to every target as one rigid cluster. All
-   *      objects rotate / scale / move around the shared centroid pivot.
-   *  • _multiMode === 'individual':
-   *      Translate still uses the gizmo's translation delta (move-as-one),
-   *      but rotation and scale are applied around each object's OWN world
-   *      pivot. So each object keeps its own centre and its own local
-   *      orientation. The gizmo target (the first selected object) is left
-   *      alone — the gizmo's transform controls already drove it directly.
+   * The gizmo sits on a virtual `_multiGroup` Object3D positioned at the
+   * cluster centroid, and the user wants every target to behave like a
+   * single object would under the same gizmo:
+   *
+   *  • Translate gizmo → apply ONLY the delta translation to every target.
+   *    Each selected object moves by the same delta in world space.
+   *  • Rotate gizmo    → apply ONLY the delta rotation to every target.
+   *    Each object rotates around its own local pivot — positions stay put.
+   *  • Scale gizmo     → apply ONLY the delta scale to every target.
+   *    Each object scales around its own local pivot — positions stay put.
+   *
+   * Without the per-component decomposition, a pure 2x scale on the
+   * virtual centroid group decomposes into deltaPos = (-origin.x, 0, 0),
+   * which when composed onto every target would teleport them across
+   * the scene.  Isolating the active component keeps the cluster locked
+   * in place for rotate / scale while still letting translate carry
+   * every object together.
    */
   _applyMultiMatricesFromGroupDelta(beforeGroupMatrix, afterGroupMatrix) {
     if (this._multiTargets.length < 2) return;
@@ -1735,101 +1753,63 @@ export class TransformGizmo {
       new THREE.Matrix4().copy(beforeGroupMatrix).invert()
     );
 
-    // Decompose the delta once. For 'individual' mode we apply only the
-    // translation to each target's pivot and rebuild rotation/scale per
-    // object around its own centre.
+    // Decompose the delta once and apply ONLY the component matching the
+    // active gizmo tool to every secondary target — positions stay locked
+    // during scale / rotate, translation moves every object by the same
+    // delta so the cluster stays in sync.
     const deltaPos  = new THREE.Vector3();
     const deltaQuat = new THREE.Quaternion();
     const deltaScale = new THREE.Vector3();
     delta.decompose(deltaPos, deltaQuat, deltaScale);
-    const deltaMode = (this._multiMode === 'individual');
+
+    const applyTranslate = (this._mode === 'translate') || (this._mode === 'universal');
+    const applyRotate    = (this._mode === 'rotate')    || (this._mode === 'universal');
+    const applyScale     = (this._mode === 'scale')     || (this._mode === 'universal');
+
+    // Scale / rotate around a non-origin centroid produce a non-zero
+    // `deltaPos` because `T(c)*S(b) = T(c + b*0) * S(b)` is NOT how matrix
+    // multiplication works — `T(c)*S(b)` is the matrix that scales THEN
+    // translates, equivalent to scale-around-origin + a translation. That
+    // bogus translation, if applied to each pivot, would drift the cluster
+    // away from the centroid (the "jerking" on multi-select scale) and
+    // make the gizmo chase its own tail.  Anchor the centroid by zeroing
+    // `deltaPos` whenever the active tool is NOT pure translate.
+    if (!applyTranslate) deltaPos.set(0, 0, 0);
 
     const newWorld = new THREE.Matrix4();
     const parentWorldInverse = new THREE.Matrix4();
 
     for (let i = 0; i < this._multiTargets.length; i++) {
-      const obj = this._multiTargets[i];
-      const pivot  = this._multiPivots[i];
-      const rot    = this._multiRots[i];
-      const scale  = this._multiScales[i];
+      const obj   = this._multiTargets[i];
+      const pivot = this._multiPivots[i];
+      const rot   = this._multiRots[i];
+      const scale = this._multiScales[i];
 
-      // In individual mode the gizmo itself has already transformed index 0
-      // (the primary selected object). Re-applying the delta would double-move
-      // it, so skip the per-target transform for the gizmo's own target.
-      if (deltaMode && i === 0) continue;
+      const newPivot = applyTranslate ? pivot.clone().add(deltaPos) : pivot.clone();
+      const newRot   = applyRotate    ? rot.clone().premultiply(deltaQuat) : rot.clone();
+      const newScale = applyScale     ? scale.clone().multiply(deltaScale) : scale.clone();
+      newWorld.compose(newPivot, newRot, newScale);
 
-      let newPivot, newRot, newScale;
-
-      if (!deltaMode) {
-        // Combined pivot: post-multiply the captured world matrix by the full delta.
-        newWorld.compose(pivot, rot, scale);
-        newWorld.multiply(delta);
-        // Convert world → local
-        const parent = obj.parent;
-        if (parent) {
-          parent.updateMatrixWorld(true);
-          parentWorldInverse.copy(parent.matrixWorld).invert();
-          newWorld.premultiply(parentWorldInverse);
-        }
-        newPivot  = null; // decomposed below
-      } else {
-        // Individual pivot: apply translation to the pivot point, but rotate
-        // and scale around the object's own (newly-translated) centre.
-        newPivot = pivot.clone().add(deltaPos);
-        newRot   = rot.clone().premultiply(deltaQuat);
-        newScale = scale.clone().multiply(deltaScale);
-        newWorld.compose(newPivot, newRot, newScale);
-        const parent = obj.parent;
-        if (parent) {
-          parent.updateMatrixWorld(true);
-          parentWorldInverse.copy(parent.matrixWorld).invert();
-          newWorld.premultiply(parentWorldInverse);
-        }
+      const parent = obj.parent;
+      if (parent) {
+        parent.updateMatrixWorld(true);
+        parentWorldInverse.copy(parent.matrixWorld).invert();
+        newWorld.premultiply(parentWorldInverse);
       }
-
       obj.matrix.copy(newWorld);
       obj.matrix.decompose(obj.position, obj.quaternion, obj.scale);
       obj.matrixAutoUpdate = true;
-
-      if (deltaMode) {
-        // Refresh captured pivots so subsequent drags accumulate correctly.
-        this._multiPivots[i] = newPivot;
-      }
+      // Refresh captured pivots so subsequent drags accumulate correctly.
+      this._multiPivots[i] = newPivot;
+      // Refresh captured scales so the per-frame `deltaScale =
+      // afterScale/beforeScale` multiplies onto the LIVE scale and
+      // accumulates across frames instead of resetting to (1,1,1) every
+      // frame (which made the cube visually shrink while scaling up —
+      // the "jerking" on multi-select scale).
+      this._multiScales[i] = newScale;
     }
   }
 
-  /**
-   * Programmatic toggle between "Group" (centroid pivot, move all together)
-   * and "Individual" (gizmo attaches to first selected object; rotations and
-   * scales apply per-object around each object's own pivot).
-   */
-  setMultiMode(mode) {
-    if (mode !== 'group' && mode !== 'individual') return;
-    if (this._multiMode === mode) return;
-    this._multiMode = mode;
-    // Rebuild gizmo target for the new pivot strategy.
-    if (this._multiTargets && this._multiTargets.length >= 2) {
-      // Snapshot before destroying so we still know which objects to attach / mark.
-      const targets = this._multiTargets.slice();
-      if (mode === 'individual') {
-        // Attach gizmo to first selected object; show small pivot markers on the rest.
-        this._destroyMultiGroup();
-        // Temporarily clear so _attachTo's multi-guard doesn't block the
-        // single-object attach. Restore immediately after so the multi
-        // set is intact for drag / scale / rotate propagation.
-        this._multiTargets = [];
-        this._attachTo(targets[0]);
-        this._multiTargets = targets;
-        this._updatePivotIndicators(targets);
-      } else {
-        // Combined: rebuild the centroid virtual group.
-        this._hidePivotIndicators();
-        this._attachToMulti(targets);
-      }
-    }
-  }
-
-  getMultiMode() { return this._multiMode; }
   restore() { if (this._targetObject && this._mode !== 'select') this._attachTo(this._targetObject); }
 
   dispose() {

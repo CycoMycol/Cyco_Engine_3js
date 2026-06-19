@@ -146,13 +146,6 @@ export class RightPanel extends BasePanel {
         <button class="ce-btn primary ce-props-multi-prefab">Create Prefab</button>
         <button class="ce-btn ghost danger ce-props-multi-delete">Delete All</button>
       </div>
-      <div class="ce-props-multi-pivot-row">
-        <label class="ce-props-multi-pivot-label" title="When combined, all selected objects share one centered pivot point. When individual, each object rotates and scales around its own center.">Pivot</label>
-        <div class="ce-props-multi-pivot-toggle" role="tablist">
-          <button class="ce-btn ghost ce-props-multi-pivot-combined active" data-mode="group">Combined</button>
-          <button class="ce-btn ghost ce-props-multi-pivot-individual" data-mode="individual">Individual</button>
-        </div>
-      </div>
       <div class="ce-props-multi-transform">
         <div class="ce-props-multi-tlabel">Position</div>
         <div class="ce-props-multi-row-xyz ce-props-multi-pos"></div>
@@ -164,26 +157,6 @@ export class RightPanel extends BasePanel {
       <div class="ce-props-multi-list"></div>
     `;
     this._contentEl.appendChild(wrap);
-
-    // ── Pivot toggle (Combined ↔ Individual) ──────────────────────────────
-    const pivotBtns = wrap.querySelectorAll('.ce-props-multi-pivot-toggle button');
-    const tg = window.__cyco?.transformGizmo;
-    const syncPivotBtnState = (mode) => {
-      pivotBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
-    };
-    if (tg?.getMultiMode) syncPivotBtnState(tg.getMultiMode());
-    pivotBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mode = btn.dataset.mode;
-        if (tg?.setMultiMode) tg.setMultiMode(mode);
-        syncPivotBtnState(mode);
-        this._refreshMultiTransformDisplay(wrap, objects);
-        // Notify the viewport toolbar (if present) so it stays in sync.
-        window.dispatchEvent(new CustomEvent('cyco-multi-pivot-change', {
-          detail: { mode }
-        }));
-      });
-    });
 
     // ── XYZ inputs (driven by the live selection + gizmo state) ───────────
     this._buildMultiTransformRows(wrap, objects);

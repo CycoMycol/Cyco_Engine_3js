@@ -1596,42 +1596,6 @@ dialog.ce-prefab-dialog {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ce-props-multi-pivot-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 6px 2px;
-}
-.ce-props-multi-pivot-label {
-  font-size: 11px;
-  color: var(--ce-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  min-width: 44px;
-}
-.ce-props-multi-pivot-toggle {
-  display: inline-flex;
-  flex: 1;
-  gap: 0;
-  border: var(--ce-border-width) solid var(--ce-border);
-  border-radius: 6px;
-  overflow: hidden;
-  background: var(--ce-bg-raised);
-}
-.ce-props-multi-pivot-toggle .ce-btn {
-  flex: 1;
-  border: none;
-  border-radius: 0;
-  background: transparent;
-  color: var(--ce-text-primary);
-  padding: 6px 8px;
-  font-size: 11px;
-  cursor: pointer;
-}
-.ce-props-multi-pivot-toggle .ce-btn.active {
-  background: var(--ce-accent-orange);
-  color: #fff;
-}
 .ce-props-multi-transform {
   display: flex;
   flex-direction: column;
