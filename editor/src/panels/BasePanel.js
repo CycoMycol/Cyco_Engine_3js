@@ -37,6 +37,11 @@ export class BasePanel {
   }
 
   init(params) {
+    if (typeof window === 'undefined' || window.__CYCO_GROUP_DEBUG !== false) {
+      this._initCount = (this._initCount ?? 0) + 1;
+      // eslint-disable-next-line no-console
+      console.log(`[group-debug] BasePanel.init ctor=${this.constructor.name} instanceId=${this._instanceId} panelId=${params?.api?.id} initCount=${this._initCount}`);
+    }
     this._panelApi = params.api;
     this._floating = this._panelApi?.group?.api?.location?.type === 'floating';
 

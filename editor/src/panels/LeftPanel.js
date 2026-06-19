@@ -70,9 +70,86 @@ const FALLBACK_ICON_SVG = `<svg viewBox="0 0 14 14" width="13" height="13" xmlns
 // IDs that can never be deleted or dragged away
 const PROTECTED = new Set(['root']);
 
+// Module-level registry of currently-active window listeners for the
+// LeftPanel. Each LeftPanel instance has its own bound functions
+// (bind() returns a new fn reference), so the per-instance `_built` guard
+// alone cannot prevent multiple instances — created by dockview layout
+// restore (api.fromJSON is called twice during startup: once in initLayout,
+// once in LayoutManager.restoreAutoSaved) — from each registering their
+// own copy of every listener. Without a global guard, a single
+// `cyco-action` dispatch runs _group() once per instance, producing one
+// extra Empty per panel instance (the "second group folder" bug).
+//
+// We track the *current* listener (the most recently added one) per
+// (target, type) tuple. When a new instance is about to register a
+// listener for an event that already has an active one, we remove the
+// old listener from the target so only the new instance handles the
+// event. The new instance becomes the active one. This keeps the visible
+// (last-rendered) LeftPanel in charge of the editor and prevents both
+// the "duplicate listener" symptom and the "new instance silently has
+// no listeners" symptom.
+const _activeListeners = new Map(); // key = `${target.constructor.name}::${type}` → { handler, target, type }
+
+// Group-flow debug logging. Default ON while the duplicate-folder bug is
+// being investigated. To silence: `window.__CYCO_GROUP_DEBUG = false`
+// in devtools, then reload.
+const _groupDebug = () => (typeof window === 'undefined' || window.__CYCO_GROUP_DEBUG !== false);
+function _glog(tag, data) {
+  if (!_groupDebug()) return;
+  // Serialize inline so the captured log shows the actual fields instead of
+  // `[object Object]` (the browser log transport strips the second arg).
+  let payload = '';
+  if (data !== undefined && data !== null) {
+    try { payload = ' ' + JSON.stringify(data, (_k, v) => {
+      // Drop Three.js object refs / cycles that would explode the JSON.stringify
+      if (v && typeof v === 'object' && v.isObject3D) return `[Obj3D:${v.name || v.type}]`;
+      if (typeof v === 'function') return '[fn]';
+      if (v instanceof Error)     return v.stack?.split('\n').slice(0, 4).join(' | ');
+      return v;
+    }); } catch { payload = ' [unserializable]'; }
+  }
+  // eslint-disable-next-line no-console
+  console.log(`[group-debug] ${tag}${payload}`);
+}
+let _groupCallSeq = 0;
+let _leftPanelInstanceSeq = 0;
+
+function _addWindowListener(target, type, handler) {
+  // Replace any previously-registered listener for this (target, type)
+  // with the new one. This is what makes the most-recently-constructed
+  // LeftPanel the sole owner of hierarchy events. Without it, dockview's
+  // double-fromJSON startup (initLayout + restoreAutoSaved) would leave
+  // two instances both listening, and a single `cyco-action` dispatch
+  // would call _group() twice → "second group folder" bug.
+  const key = `${target.constructor?.name || 't'}::${type}`;
+  const prev = _activeListeners.get(key);
+  if (prev && prev.handler === handler) {
+    _glog('listener-already-active', { key, handler: handler.name || '(anon)' });
+    return;
+  }
+  if (prev) {
+    try { prev.target.removeEventListener(prev.type, prev.handler); } catch {}
+    _glog('listener-replaced', { key, prevHandler: prev.handler.name, newHandler: handler.name || '(anon)' });
+  }
+  target.addEventListener(type, handler);
+  _activeListeners.set(key, { handler, target, type });
+  _glog('listener-registered', {
+    key,
+    handler: handler.name || '(anon)',
+    totalActive: _activeListeners.size,
+    stack: (new Error()).stack?.split('\n').slice(1, 6).join(' | '),
+  });
+}
+
 export class LeftPanel extends BasePanel {
   constructor() {
     super();
+    // Per-instance debug id — lets us tell whether two calls are coming from
+    // the same LeftPanel instance or from two different ones (the suspected
+    // cause of the duplicate-folder bug when dockview layout restore creates
+    // more than one instance).
+    this._instanceId = ++_leftPanelInstanceSeq;
+    _glog('LeftPanel:new', { instanceId: this._instanceId });
     // Bind listener handlers ONCE so the same function reference can be added
     // and removed across multiple BasePanel.init() calls (dockview layout
     // restore triggers init() more than once on the same instance).
@@ -228,25 +305,25 @@ export class LeftPanel extends BasePanel {
     tree.addEventListener('dragend',   ()  => this._onDragEnd());
 
     // ── Sync Three.js scene adds → hierarchy ──────────────────────────────
-    window.addEventListener('cyco-hierarchy-add', this._onHierarchyAdd);
+    _addWindowListener(window, 'cyco-hierarchy-add', this._onHierarchyAdd);
 
     // ── Sync Three.js scene removes → hierarchy ──────────────────────────
-    window.addEventListener('cyco-hierarchy-remove', this._onHierarchyRemove);
+    _addWindowListener(window, 'cyco-hierarchy-remove', this._onHierarchyRemove);
 
     // Allow the viewport context menu's "Group Selected" entry to delegate
     // to the hierarchy's group implementation.
-    window.addEventListener('cyco-action', this._onAction);
+    _addWindowListener(window, 'cyco-action', this._onAction);
 
     // ── Sync viewport selection → hierarchy highlight ─────────────────────
-    window.addEventListener('cyco-select-node', this._onViewportSelect);
-    window.addEventListener('cyco-selection-changed', this._onSelectionChanged);
-    window.addEventListener('cyco-deselect-all', this._onDeselectAll);
+    _addWindowListener(window, 'cyco-select-node', this._onViewportSelect);
+    _addWindowListener(window, 'cyco-selection-changed', this._onSelectionChanged);
+    _addWindowListener(window, 'cyco-deselect-all', this._onDeselectAll);
 
     // ── Sync external scene changes → hierarchy scene label ───────────────
-    window.addEventListener('cyco-scene-switch', this._onSceneSwitch);
+    _addWindowListener(window, 'cyco-scene-switch', this._onSceneSwitch);
 
     // ── Seed initial scene ID from SceneManager on viewport ready ────────
-    window.addEventListener('cyco-vp-ready', this._onVpReadySyncScene);
+    _addWindowListener(window, 'cyco-vp-ready', this._onVpReadySyncScene);
     // Also try on next frame in case cyco-vp-ready already fired
     requestAnimationFrame(this._onVpReadySyncScene);
 
@@ -257,6 +334,12 @@ export class LeftPanel extends BasePanel {
   _onHierarchyAdd(e) {
     const { object, parentId } = e.detail ?? {};
     if (!object?.userData?.cycoId) return;
+    _glog('_onHierarchyAdd:enter', {
+      cycoId: object.userData.cycoId,
+      name: object.name,
+      parentId,
+      suppressAutoSelect: !!this._suppressHierarchyAutoSelect,
+    });
 
     // When this flag is set the caller (typically _group()) is about to do
     // its own selection step and the auto-select-dispatch below would
@@ -313,6 +396,13 @@ export class LeftPanel extends BasePanel {
       locked:  false,
       visible: true,
     });
+    _glog('_onHierarchyAdd:pushed', {
+      cycoId: object.userData.cycoId,
+      pid,
+      nodeType,
+      name,
+      suppressAutoSelect,
+    });
 
     if (!suppressAutoSelect) {
       // Auto-select the new object
@@ -336,6 +426,7 @@ export class LeftPanel extends BasePanel {
   }
 
   _onAction(e) {
+    _glog('_onAction', { detail: e.detail, type: e.type });
     if (e.detail === 'hierarchy-group') this._group();
   }
 
@@ -519,11 +610,18 @@ export class LeftPanel extends BasePanel {
   }
 
   _group() {
+    const _callId = ++_groupCallSeq;
+    _glog('_group:enter', {
+      callId: _callId,
+      instanceId: this._instanceId ?? '(no-id)',
+      stack: (new Error()).stack?.split('\n').slice(1, 8).join(' | '),
+    });
     const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
-    if (ids.length < 2) return;
+    _glog('_group:enter-selection', { callId: _callId, idsCount: ids.length, ids: [...ids] });
+    if (ids.length < 2) { _glog('_group:exit-too-few', { callId: _callId }); return; }
 
     const sm = window.__cyco?.sceneManager;
-    if (!sm) return;
+    if (!sm) { _glog('_group:exit-no-sm', { callId: _callId }); return; }
 
     // Only move top-level selected nodes (whose parent is not also selected)
     const selSet   = new Set(ids);
@@ -531,7 +629,7 @@ export class LeftPanel extends BasePanel {
       const node = this._nodes.find(n => n.id === id);
       return !selSet.has(node?.pid);
     });
-    if (topLevel.length < 2) return;
+    if (topLevel.length < 2) { _glog('_group:exit-not-toplevel', { callId: _callId, topLevel }); return; }
 
     // The new Empty's parent is the common parent of the first top-level
     // selected node. If the selected nodes already share a parent we use it
@@ -542,14 +640,20 @@ export class LeftPanel extends BasePanel {
     if (groupParentNode) groupParentNode.open = true;
 
     const firstObj = sm._findById(topLevel[0]);
-    if (!firstObj || !firstObj.parent) return;
+    if (!firstObj || !firstObj.parent) { _glog('_group:exit-no-firstobj', { callId: _callId }); return; }
     const targetParent = firstObj.parent;
+    _glog('_group:targetParent', {
+      callId: _callId,
+      targetParentId: targetParent.userData?.cycoId,
+      targetParentName: targetParent.name,
+      topLevel,
+    });
 
     // Resolve the actual Three.js objects we will reparent.
     const objects = topLevel
       .map(id => sm._findById(id))
       .filter(o => o && !o.userData?._isGizmo);
-    if (objects.length < 2) return;
+    if (objects.length < 2) { _glog('_group:exit-too-few-objects', { callId: _callId, objectsCount: objects.length }); return; }
 
     // ── Macro step 1: Create a container (Empty) via the same factory path
     // the right-click "Create Folder" menu uses, so the new node goes through
@@ -558,11 +662,16 @@ export class LeftPanel extends BasePanel {
     // reparenting operation — the resulting folder can be dragged into / out
     // of any other folder infinitely.
     const factory = window.__cyco?.objectFactory;
-    if (!factory) return;
+    if (!factory) { _glog('_group:exit-no-factory', { callId: _callId }); return; }
     const groupObj = factory.create('Empty');
-    if (!groupObj) return;
+    if (!groupObj) { _glog('_group:exit-create-null', { callId: _callId }); return; }
     this._groupCounter++;
     groupObj.name = `Group ${this._groupCounter}`;
+    _glog('_group:create-empty', {
+      callId: _callId,
+      groupCounter: this._groupCounter,
+      groupName: groupObj.name,
+    });
 
     // Suppress _onHierarchyAdd's auto-select-dispatch — that would briefly
     // attach the green Box Gizmo to the new container (the "second folder"
@@ -571,6 +680,11 @@ export class LeftPanel extends BasePanel {
     this._suppressHierarchyAutoSelect = true;
     sm.addObject(groupObj, targetParent);
     const groupId = groupObj.userData.cycoId;
+    _glog('_group:after-addObject', {
+      callId: _callId,
+      groupId,
+      groupParent: groupObj.parent?.userData?.cycoId,
+    });
 
     // ── Macro step 2: reparent the live Three.js objects under the new
     // Empty, preserving world transforms so the visible cluster stays put.
@@ -614,6 +728,12 @@ export class LeftPanel extends BasePanel {
     for (const id of descendantIds) this._selectedIds.add(id);
     this._lastClickId = groupId;
     this._renderTree();
+    _glog('_group:step4-selection', {
+      callId: _callId,
+      groupId,
+      descendantIds,
+      selectedCount: this._selectedIds.size,
+    });
 
     const descendantObjects = descendantIds
       .map(id => sm._findById(id))
@@ -624,6 +744,11 @@ export class LeftPanel extends BasePanel {
         : first.isCamera ? 'camera'
         : (first.isMesh || first.isLine || first.isPoints) ? 'mesh'
         : 'object';
+      _glog('_group:dispatch-select', {
+        callId: _callId,
+        descendantCount: descendantObjects.length,
+        type: lastType,
+      });
       window.dispatchEvent(new CustomEvent('cyco-select-node', {
         detail: { object: first, objects: descendantObjects, type: lastType }
       }));
@@ -631,10 +756,12 @@ export class LeftPanel extends BasePanel {
       // Fallback (group with only one / no mesh descendants) — keep
       // the original Empty-selection behaviour so the Properties panel
       // still targets the new Empty.
+      _glog('_group:dispatch-select-fallback', { callId: _callId, descendantCount: descendantObjects.length });
       window.dispatchEvent(new CustomEvent('cyco-select-node', {
         detail: { object: groupObj, type: 'object' }
       }));
     }
+    _glog('_group:done', { callId: _callId });
   }
 
   /**
@@ -993,7 +1120,7 @@ export class LeftPanel extends BasePanel {
       // ── Indent ───────────────────────────────────────────────────────────
       const indent = document.createElement('span');
       indent.className = 'ce-hier-indent';
-      indent.style.width = `${depthOf(node) * 16}px`;
+      indent.style.width = `${depthOf(node) * 10}px`;
       row.appendChild(indent);
 
       // ── Expand/collapse arrow ────────────────────────────────────────────

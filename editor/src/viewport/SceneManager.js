@@ -218,6 +218,11 @@ export class SceneManager {
     if (!target) return;
     target.add(object);
     this._markDirty();
+    if (typeof window === 'undefined' || window.__CYCO_GROUP_DEBUG !== false) {
+      // eslint-disable-next-line no-console
+      const stack = (new Error()).stack?.split('\n').slice(2, 7).join(' | ') ?? '';
+      console.log(`[group-debug] SceneManager.addObject name=${object.name} type=${object.type} cycoId=${object.userData.cycoId} parentId=${parent?.userData?.cycoId ?? 'scene_root'} stack=${stack}`);
+    }
     window.dispatchEvent(new CustomEvent('cyco-hierarchy-add', {
       detail: { object, parentId: parent?.userData.cycoId ?? 'scene_root' }
     }));

@@ -33,6 +33,23 @@
         try { window.__cyco_internal_log.push({ tag, payload, ts: Date.now() }); } catch (e) {}
         try { console.log(tag, payload); } catch (e) {}
       };
+      // Capture every console.log so we can read the [group-debug] trace
+      // after the page has reloaded (in-memory window.__consoleLog is
+      // wiped by reloads, but this array is exposed on window for our
+      // debug tool to read).
+      const _origLog = console.log;
+      console.log = function(...args) {
+        try {
+          const joined = args.map(a => {
+            if (typeof a === 'string') return a;
+            if (a && a.stack) return a.stack;
+            try { return JSON.stringify(a, (k,v)=>v&&typeof v==='object'&&v.isObject3D?'[O3D:'+v.name+']':v); }
+            catch { return '[unserializable]'; }
+          }).join(' ');
+          window.__cyco_internal_log.push({ tag: 'console', payload: joined, ts: Date.now() });
+        } catch (e) {}
+        return _origLog.apply(console, args);
+      };
     } catch (err) {}
   </script>
   <script type="module" src="./src/main.js"></script>

@@ -109,6 +109,10 @@ export class ViewportContextMenu {
       menu.appendChild(this._makeItem('Group Selected', () => {
         this._hide();
         // Re-use the hierarchy panel's _group() by dispatching the action
+        if (typeof window === 'undefined' || window.__CYCO_GROUP_DEBUG !== false) {
+          // eslint-disable-next-line no-console
+          console.log('[group-debug] dispatch:source=ViewportContextMenu:Group-Selected');
+        }
         window.dispatchEvent(new CustomEvent('cyco-action', { detail: 'hierarchy-group' }));
       }));
       menu.appendChild(this._makeItem('Create Prefab', () => {

@@ -194,6 +194,10 @@ export class RightPanel extends BasePanel {
     // Action buttons
     wrap.querySelector('.ce-props-multi-group').addEventListener('click', () => {
       // Group via hierarchy panel (real Three.js Group is created there)
+      if (typeof window === 'undefined' || window.__CYCO_GROUP_DEBUG !== false) {
+        // eslint-disable-next-line no-console
+        console.log('[group-debug] dispatch:source=RightPanel:group-button');
+      }
       window.dispatchEvent(new CustomEvent('cyco-action', { detail: 'hierarchy-group' }));
     });
     wrap.querySelector('.ce-props-multi-prefab').addEventListener('click', () => {
