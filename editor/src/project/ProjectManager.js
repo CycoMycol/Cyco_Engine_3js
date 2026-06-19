@@ -5,12 +5,24 @@ import { loadPrefs, savePrefs } from '../ui/PreferencesWindow.js';
 import ProjectDiskStorage from './ProjectDiskStorage.js';
 import ProjectLocalBridgeStorage from './ProjectLocalBridgeStorage.js';
 import ProjectSaveLog from './ProjectSaveLog.js';
+import { strToU8, zipSync } from '../../libs/three/addons/libs/fflate.module.js';
 
 const STORAGE_KEY_RECENTS = 'cyco-recents';
 const STORAGE_KEY_PREFIX  = 'cyco-proj-';
 const STORAGE_KEY_LEGACY  = 'cyco-project'; // migrated automatically on first load
 const PROJECT_FILE_FORMAT = 'cyco-project';
 const PROJECT_FILE_VERSION = 1;
+const ENGINE_FOLDER_NAME = 'engine';
+const ENGINE_STATE_FILE = 'cyco-engine.json';
+
+// Sanitize a string so it is safe to use as a file/folder name in a zip.
+function sanitizeName(name) {
+  const safe = String(name || 'project')
+    .trim()
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ');
+  return safe || 'project';
+}
 
 // Default folder structure for every new project
 const DEFAULT_TREE = {
@@ -211,6 +223,86 @@ const ProjectManager = {
       detail: { message: `Downloaded ${this._projectFileName(snapshot)} (no writable project folder attached)` },
     }));
     return true;
+  },
+
+  /**
+   * Save As: write the .cyco into the project's picked location.
+   * @param {{ exportMode?: 'file' | 'folder' | 'zip' }} [options]
+   *   - 'file' (default): write a single .cyco into the project folder.
+   *   - 'folder': write the project as a folder of the same name containing the .cyco.
+   *   - 'zip': build a .zip archive of the project in-memory and trigger the
+   *     browser's native save-as flow so the user picks where to put it.
+   */
+  async saveProjectAs(options = {}) {
+    if (!this._project) {
+      throw new Error('No project is open. Create or open a project before using Save As.');
+    }
+    const exportMode = options.exportMode || 'file';
+    const snapshot = this._buildSnapshot();
+    const fileName = this._projectFileName(snapshot);
+
+    // ZIP export: build the archive in-memory and hand it to the browser's
+    // download flow. The browser shows its native "Save As" dialog so the
+    // user picks the destination. This is independent of the local save
+    // bridge — a .zip export should always go to a user-chosen location.
+    if (exportMode === 'zip') {
+      const zipName = `${sanitizeName(snapshot?.name || 'project')}.zip`;
+      this._debug('save:zip-export', { fileName: zipName });
+      this._downloadBlob(this._buildProjectZip(snapshot), zipName, 'application/zip');
+      window.dispatchEvent(new CustomEvent('cyco-toast', {
+        detail: { message: `Exported ${zipName}` },
+      }));
+      this._debug('save:success', { fileName: zipName, mode: 'zip-export' });
+      return { ok: true, fileName: zipName, projectPath: null, mode: 'zip' };
+    }
+
+    // 1. Bridge attached (project was created with the local save bridge)
+    if (ProjectLocalBridgeStorage.hasTarget()) {
+      const projectPath = ProjectLocalBridgeStorage.getProjectPath();
+      try {
+        if (exportMode === 'file') {
+          await ProjectLocalBridgeStorage.writeSnapshot(snapshot);
+        } else if (exportMode === 'folder') {
+          await ProjectLocalBridgeStorage.exportAsFolder(snapshot);
+        } else {
+          throw new Error(`Save As mode "${exportMode}" is not supported yet.`);
+        }
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileName} → ${projectPath || 'project folder'}` },
+        }));
+        return { ok: true, fileName, projectPath, mode: exportMode };
+      } catch (err) {
+        throw new Error(`Could not Save As into the project folder: ${err.message || err}`);
+      }
+    }
+
+    // 2. Browser File System Access API
+    if (typeof window.showSaveFilePicker === 'function') {
+      try {
+        const fileHandle = await window.showSaveFilePicker({
+          suggestedName: fileName,
+          types: [{ description: 'Cyco Project', accept: { 'application/json': ['.cyco'] } }],
+        });
+        ProjectDiskStorage.reset();
+        ProjectLocalBridgeStorage.reset();
+        ProjectDiskStorage.attachFile(fileHandle, fileHandle?.name || fileName);
+        await ProjectDiskStorage.writeSnapshot(snapshot);
+        window.dispatchEvent(new CustomEvent('cyco-toast', {
+          detail: { message: `Saved ${fileHandle?.name || fileName}` },
+        }));
+        return { ok: true, fileName: fileHandle?.name || fileName, projectPath: null, mode: exportMode };
+      } catch (err) {
+        if (err?.name === 'AbortError') return { ok: false, cancelled: true };
+        throw new Error(`Could not Save As: ${err.message || err}`);
+      }
+    }
+
+    // 3. No writable target — fall back to download
+    this._downloadText(JSON.stringify(snapshot, null, 2), fileName);
+    window.dispatchEvent(new CustomEvent('cyco-toast', {
+      detail: { message: `Downloaded ${fileName} (browse to a folder & use New Project to enable Save As)` },
+    }));
+    return { ok: true, fileName, projectPath: null, mode: 'download' };
   },
 
   /**
@@ -1027,6 +1119,77 @@ const ProjectManager = {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  },
+
+  _downloadBlob(blob, filename, mimeType = 'application/octet-stream') {
+    const safeBlob = blob instanceof Blob ? blob : new Blob([blob], { type: mimeType });
+    const url = URL.createObjectURL(safeBlob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
+
+  /**
+   * Build a .zip archive of the project in-memory. The zip contains:
+   *   <projectName>/
+   *     <projectName>.cyco
+   *     .cyco-export
+   *     assets/...               (the project tree)
+   *     engine/cyco-engine.json  (only if engineState is present)
+   *
+   * The .cyco-export marker file makes it clear the archive is a Cyco
+   * export, and including the tree gives downstream tools a way to recover
+   * prefabs, materials, scripts etc. without parsing the .cyco JSON.
+   */
+  _buildProjectZip(snapshot) {
+    const projectName = sanitizeName(snapshot?.name || 'project');
+    const root = `${projectName}/`;
+    const files = {};
+
+    files[`${root}${this._projectFileName(snapshot)}`] =
+      strToU8(JSON.stringify(snapshot, null, 2));
+    files[`${root}.cyco-export`] = new Uint8Array(0);
+
+    const tree = snapshot?.tree || {};
+    this._appendTreeToZip(files, tree, `${root}assets/`, {
+      skipNames: new Set([ENGINE_FOLDER_NAME]),
+    });
+
+    const engineState = snapshot?.engineState || null;
+    if (engineState) {
+      files[`${root}${ENGINE_FOLDER_NAME}/${ENGINE_STATE_FILE}`] =
+        strToU8(JSON.stringify(engineState, null, 2));
+    }
+
+    return new Blob([zipSync(files, { level: 0 })], { type: 'application/zip' });
+  },
+
+  _appendTreeToZip(files, tree, currentPath, { skipNames = new Set() } = {}) {
+    if (!tree || typeof tree !== 'object') return;
+    const folderEntries = Object.entries(tree).filter(([name]) => !skipNames.has(name));
+    if (!folderEntries.length) {
+      files[`${currentPath}.keep`] = new Uint8Array(0);
+      return;
+    }
+    for (const [name, child] of folderEntries) {
+      const safeName = sanitizeName(name);
+      if (this._isFileNode(child)) {
+        const content = child?.data != null
+          ? strToU8(typeof child.data === 'string' ? child.data : JSON.stringify(child.data, null, 2))
+          : new Uint8Array(0);
+        files[`${currentPath}${safeName}`] = content;
+        continue;
+      }
+      this._appendTreeToZip(files, child, `${currentPath}${safeName}/`, { skipNames: new Set() });
+    }
+  },
+
+  _isFileNode(node) {
+    return !!node && typeof node === 'object' && node._cycoType === 'file';
   },
 
   _projectFileName(snapshot = this._project) {
