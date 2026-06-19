@@ -215,10 +215,9 @@ const ProjectManager = {
 
   /**
    * Save As: write the .cyco into the project's picked location.
-   * @param {{ exportMode?: 'file' | 'folder' | 'zip' }} [options]
+   * @param {{ exportMode?: 'file' | 'folder' }} [options]
    *   - 'file' (default): write a single .cyco into the project folder.
    *   - 'folder': write the project as a folder of the same name containing the .cyco.
-   *   - 'zip': reserved for future (not yet implemented).
    */
   async saveProjectAs(options = {}) {
     if (!this._project) {
