@@ -120,7 +120,7 @@ export class ObjectFactory {
   // ─── Event handlers ───────────────────────────────────────────────────────
 
   _onAddObject(event) {
-    const { objectType, options } = event.detail ?? {};
+    const { objectType, options, parentId } = event.detail ?? {};
     const obj = this.create(objectType, options);
     if (!obj) return;
 
@@ -132,10 +132,17 @@ export class ObjectFactory {
     }
     const cycoId = obj.userData.cycoId;
 
+    // Resolve the requested live parent (if any). The hierarchy's right-click
+    // Create menu forwards a parentId here so the live scene graph matches
+    // the UI hierarchy (otherwise the new object lands at the root in the
+    // viewport while the UI shows it nested under the right-clicked row).
+    // A null parentId means "add at scene root" — the default behavior.
+    const liveParent = parentId ? sm._findById(parentId) : null;
+
     window.dispatchEvent(new CustomEvent('cyco-command-execute', {
       detail: {
         name: `Add ${obj.name || objectType}`,
-        do:   () => sm.addObject(obj),
+        do:   () => sm.addObject(obj, liveParent || undefined),
         undo: () => sm.removeObjectKeepAlive(cycoId),
       }
     }));

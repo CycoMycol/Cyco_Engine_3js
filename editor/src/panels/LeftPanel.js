@@ -107,6 +107,12 @@ export class LeftPanel extends BasePanel {
     this._dropInfo     = null;        // { targetId, mode }
     this._groupCounter = 0;
     this._pendingAddPid   = null;        // parent id for the next cyco-hierarchy-add
+    // Parent id for the next cyco-hierarchy-add, set ONLY when the user
+    // explicitly right-clicks a row in the hierarchy (or invokes the context
+    // menu on a row). Regular left-click selection does NOT set this — adding
+    // a new object via the "+" button or the viewport context menu should
+    // always place the new object at the scene root unless the user said so.
+    this._contextMenuTargetId = null;
     this._activeScene     = 'Scene';   // currently active scene name
     this._scenes          = ['Scene']; // list of scene names
     this._pendingDelScene = null;      // scene name pending delete confirm
@@ -165,6 +171,7 @@ export class LeftPanel extends BasePanel {
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       this._lastClickId = null;
+      this._contextMenuTargetId = null;   // explicit: "+" always adds at root
       showHierarchyMenu(e, (action) => this._handleAction(action), false, false, false);
     });
 
@@ -181,6 +188,11 @@ export class LeftPanel extends BasePanel {
       const row = e.target.closest('.ce-hier-row');
       if (row) {
         const id = row.dataset.id;
+        // The hierarchy row the user right-clicked is the target for any
+        // "create child" action the menu dispatches. This is the ONLY place
+        // that should set _contextMenuTargetId — left-click selection must
+        // not influence the parent of a newly created object.
+        this._contextMenuTargetId = id;
         // If right-clicking something outside the current selection, select it alone
         if (!this._selectedIds.has(id)) {
           this._selectedIds.clear();
@@ -188,6 +200,9 @@ export class LeftPanel extends BasePanel {
           this._lastClickId = id;
           this._renderTree();
         }
+      } else {
+        // Right-click on empty tree area → add at root.
+        this._contextMenuTargetId = null;
       }
       const isScene = row?.dataset.id === 'root';
       const isMulti = this._selectedIds.size > 1;
@@ -267,15 +282,14 @@ export class LeftPanel extends BasePanel {
     else if (object.isMesh || object.isLine || object.isPoints) nodeType = 'mesh';
     else if (object.isGroup)                     nodeType = 'group';
 
-    // Layout-restore safety net: drop any pre-existing synthetic row whose
-    // name+pid+type matches this one. The pre-existing row was inserted by
-    // LeftPanel._group() with a synthetic `'grp-' + Date.now()` id before
-    // the live cycoId was known — replace it with the real row.
-    const name = object.name || object.type;
-    this._nodes = this._nodes.filter(n =>
-      !(n.name === name && n.pid === pid && n.type === nodeType && n.id !== object.userData.cycoId)
-    );
+    // No dedup on (name, pid, type): two boxes that share a name should both
+    // appear as distinct rows in the hierarchy, identical to how Unity/UE
+    // behave. The earlier dedup was a layout-restore safety net for synthetic
+    // `grp-…` ids that the old _group() method inserted; that code path is
+    // gone, so the dedup is no longer needed and was actively removing
+    // legitimate rows.
 
+    const name = object.name || object.type;
     this._nodes.push({
       id:      object.userData.cycoId,
       pid,
@@ -395,20 +409,23 @@ export class LeftPanel extends BasePanel {
     if (action === 'duplicate') { this._duplicate();      return; }
     if (action === 'delete')    { this._deleteSelected(); return; }
     if (action === 'group')     { this._group();          return; }
-    if (action === 'create-prefab') { this._createPrefabFromSelection(); return; }
-
-    const def = OBJECT_DEFAULTS[action];
-    if (!def) return;
 
     const factoryType = LeftPanel._ACTION_FACTORY_MAP[action];
     if (factoryType) {
-      // Dispatch to ObjectFactory — cyco-hierarchy-add will sync back the node
-      const pid = this._lastClickId ?? 'root';
+      // Dispatch to ObjectFactory — cyco-hierarchy-add will sync back the node.
+      // The parent is the row the user right-clicked (if any). Selecting a row
+      // by left-clicking does NOT make it the parent — only an explicit
+      // right-click on a hierarchy row does (handled in the contextmenu
+      // listener, which sets _contextMenuTargetId). The parentId is forwarded
+      // to ObjectFactory so the LIVE scene graph also reparented (otherwise
+      // the UI and the viewport would desync).
+      const pid = this._contextMenuTargetId ?? 'root';
       const parent = this._nodes.find(n => n.id === pid);
       if (parent) parent.open = true;
       this._pendingAddPid = pid;
+      this._contextMenuTargetId = null;   // one-shot — next add goes to root
       window.dispatchEvent(new CustomEvent('cyco-add-object', {
-        detail: { objectType: factoryType, options: {} }
+        detail: { objectType: factoryType, options: {}, parentId: pid === 'root' ? null : pid }
       }));
     }
   }
@@ -487,24 +504,10 @@ export class LeftPanel extends BasePanel {
 
   _group() {
     const ids = [...this._selectedIds].filter(id => !PROTECTED.has(id));
-    if (ids.length === 0) return;
+    if (ids.length < 2) return;
 
-    this._groupCounter++;
-    const groupName = `Group ${this._groupCounter}`;
-
-    // ── Resolve the actual Three.js objects and their common parent ────────
     const sm = window.__cyco?.sceneManager;
-    const cm = window.__cyco?.commandManager;
-    const objects = sm
-      ? ids.map(id => sm._findById(id)).filter(o => o && !o.userData?._isGizmo)
-      : [];
-
-    // ── UI tree bookkeeping ────────────────────────────────────────────────
-    // Use the parent of the first selected node as the group's parent
-    const firstNode  = this._nodes.find(n => n.id === ids[0]);
-    const groupPid   = firstNode?.pid ?? 'root';
-    const groupParent = this._nodes.find(n => n.id === groupPid);
-    if (groupParent) groupParent.open = true;
+    if (!sm) return;
 
     // Only move top-level selected nodes (whose parent is not also selected)
     const selSet   = new Set(ids);
@@ -512,111 +515,84 @@ export class LeftPanel extends BasePanel {
       const node = this._nodes.find(n => n.id === id);
       return !selSet.has(node?.pid);
     });
+    if (topLevel.length < 2) return;
 
-    // ── Create a "GameObject" container (same as the editor's Create Empty)
-    //     and reparent the live scene objects under it.
-    //
-    // We use `THREE.Object3D` (the editor's "Empty / GameObject" primitive,
-    // see `ObjectFactory.create('Empty')`) rather than `THREE.Group` so the
-    // resulting container behaves like any other scene object: it shows up
-    // in the hierarchy as type "object", the Properties panel renders the
-    // full Add-Component UI for it (Rigid Body, Collider, Script, etc.), and
-    // it matches the convention used by the rest of the editor (e.g. the
-    // "Create Empty" command in the hierarchy context menu).
-    let createdGroupId = null;
-    if (sm && objects.length >= 2) {
-      const groupObj = new THREE.Object3D();
-      groupObj.name = groupName;
-      groupObj.userData.cycoEmptyRoot = true;
-      // Pre-stamp the cycoId so the UI row we insert below can use the same
-      // id and the cyco-hierarchy-add listener recognises the row as
-      // already-present (idempotent update, not duplicate insert).
-      groupObj.userData.cycoId =
-        'grp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    // The new Empty's parent is the common parent of the first top-level
+    // selected node. If the selected nodes already share a parent we use it
+    // directly; otherwise we use the scene root.
+    const firstNode  = this._nodes.find(n => n.id === topLevel[0]);
+    const groupPid   = firstNode?.pid ?? 'root';
+    const groupParentNode = this._nodes.find(n => n.id === groupPid);
+    if (groupParentNode) groupParentNode.open = true;
 
-      // Use the first object's parent as the new group's parent so the group's
-      // world transform matches the cluster's old centre. We capture world
-      // transforms first because reparenting otherwise resets to local zero.
-      const firstObj = objects[0];
-      const targetParent = firstObj.parent ?? sm.getActiveScene?.();
-      const worldPos    = new THREE.Vector3();
-      const worldQuat   = new THREE.Quaternion();
-      const worldScale  = new THREE.Vector3();
-      firstObj.getWorldPosition(worldPos);
-      firstObj.getWorldQuaternion(worldQuat);
-      firstObj.getWorldScale(worldScale);
+    const firstObj = sm._findById(topLevel[0]);
+    if (!firstObj || !firstObj.parent) return;
+    const targetParent = firstObj.parent;
 
-      // Add the group under the same parent as the cluster so the visible
-      // centroid stays put, then re-parent the live children.
-      if (targetParent) targetParent.add(groupObj);
-      createdGroupId = groupObj.userData.cycoId;
+    // Resolve the actual Three.js objects we will reparent.
+    const objects = topLevel
+      .map(id => sm._findById(id))
+      .filter(o => o && !o.userData?._isGizmo);
+    if (objects.length < 2) return;
 
-      // Re-parent each live object under the new group, preserving world
-      // transform so the visual cluster doesn't shift.
-      for (const obj of objects) {
-        if (!obj.parent || obj === groupObj) continue;
-        const wp = new THREE.Vector3();
-        const wq = new THREE.Quaternion();
-        const ws = new THREE.Vector3();
-        obj.getWorldPosition(wp);
-        obj.getWorldQuaternion(wq);
-        obj.getWorldScale(ws);
-        obj.parent.remove(obj);
-        groupObj.add(obj);
-        // Restore world transform (now via the group's new transform)
-        groupObj.updateMatrixWorld(true);
-        const inv = new THREE.Matrix4().copy(groupObj.matrixWorld).invert();
-        const m = new THREE.Matrix4().compose(wp, wq, ws);
-        m.premultiply(inv);
-        m.decompose(obj.position, obj.quaternion, obj.scale);
-      }
-      // Place the group where the cluster used to live
-      groupObj.position.copy(worldPos);
-      groupObj.quaternion.copy(worldQuat);
-      groupObj.scale.copy(worldScale);
-      groupObj.updateMatrixWorld(true);
-      sm._markDirty?.();
-      // Broadcast AFTER the UI row is inserted so the listener takes the
-      // idempotent path (updates an existing row instead of duplicating it).
+    // ── Macro step 1: Create Empty using the SAME path as the right-click
+    // "Create Empty" command. We use the editor's ObjectFactory so the new
+    // node goes through the standard addObject → cyco-hierarchy-add flow
+    // and ends up with a normal cycoId, normal UI row, and the same
+    // properties panel support as any other Empty. This is intentionally NOT
+    // a special-purpose "Group" type — grouping is just a reparenting
+    // operation, and the resulting Empty can be dragged into / out of any
+    // other Empty infinitely, exactly like any other scene object.
+    const factory = window.__cyco?.objectFactory;
+    if (!factory) return;
+    const groupObj = factory.create('Empty');
+    if (!groupObj) return;
+    this._groupCounter++;
+    groupObj.name = `Group ${this._groupCounter}`;
+
+    // sm.addObject dispatches cyco-hierarchy-add synchronously, which makes
+    // _onHierarchyAdd append a new UI row at the END of this._nodes. We'll
+    // reposition the row below so the Empty appears just above the items it
+    // will contain, matching the user's mental model.
+    sm.addObject(groupObj, targetParent);
+    const groupId = groupObj.userData.cycoId;
+
+    // ── Macro step 2: reparent the live Three.js objects under the new
+    // Empty, preserving world transforms so the visible cluster stays put.
+    for (const obj of objects) {
+      if (!obj || obj === groupObj) continue;
+      this._reparentPreserveWorld(obj, groupObj);
     }
 
-    // ── Insert the UI node and re-parent UI rows ──────────────────────────
-    // Use the real groupId (cycoId of the new Three.js Group) when available
-    // so that the cyco-hierarchy-add listener below doesn't insert a duplicate.
-    const groupId = createdGroupId ?? ('grp-' + Date.now().toString(36));
-
-    // Insert the UI row immediately (using the real cycoId if we have one),
-    // then update existing top-level rows to point at it. The hierarchy-add
-    // listener will fire _broadcastHierarchyAdd below and update this row
-    // in place (no duplicate).
-    const insertIdx = this._nodes.findIndex(n => n.id === topLevel[0]);
-    this._nodes.splice(Math.max(0, insertIdx), 0, {
-      id:      groupId,
-      pid:     groupPid,
-      name:    groupName,
-      type:    createdGroupId ? 'object' : 'object',
-      open:    true,
-      locked:  false,
-      visible: true,
-    });
-
-    // Reparent top-level selected nodes into the group
-    topLevel.forEach(id => {
+    // ── Macro step 3: update the UI hierarchy to match the scene graph.
+    // The new row was appended at the end by _onHierarchyAdd; move it to the
+    // position of the first grouped item, then update the grouped items'
+    // pid to point at it. Finally, sync the live scene children order with
+    // the UI so the group displays consistently in both views.
+    const newRowIdx = this._nodes.findIndex(n => n.id === groupId);
+    if (newRowIdx >= 0) {
+      const newRow = this._nodes.splice(newRowIdx, 1)[0];
+      const firstTopIdx = this._nodes.findIndex(n => n.id === topLevel[0]);
+      const insertAt = Math.max(0, firstTopIdx);
+      this._nodes.splice(insertAt, 0, newRow);
+    }
+    for (const id of topLevel) {
       const node = this._nodes.find(n => n.id === id);
       if (node) node.pid = groupId;
-    });
-
-    if (createdGroupId && sm) {
-      // Now broadcast — the listener will see the matching id and update
-      // the row we just inserted instead of creating a duplicate.
-      const groupObj = sm._findById(createdGroupId);
-      if (groupObj) sm._broadcastHierarchyAdd(groupObj);
     }
+    this._syncChildrenOrder(groupObj, groupId);
+    sm._markDirty?.();
 
+    // ── Macro step 4: select the new Empty so the Properties panel shows
+    // its Add-Component UI, matching the experience of creating an Empty
+    // by right-click.
     this._selectedIds.clear();
     this._selectedIds.add(groupId);
     this._lastClickId = groupId;
     this._renderTree();
+    window.dispatchEvent(new CustomEvent('cyco-select-node', {
+      detail: { object: groupObj, type: 'object' }
+    }));
   }
 
   _startRename() {
@@ -746,8 +722,102 @@ export class LeftPanel extends BasePanel {
     const insertAt = mode === 'before' ? tIdx : tIdx + 1;
     this._nodes.splice(insertAt, 0, ...allSubtrees);
 
+    // ── Reparent the live Three.js objects so the scene graph matches the
+    //    UI hierarchy. Without this step the viewport would still draw the
+    //    objects at their original parent and any subsequent scene sync
+    //    would desync from the hierarchy panel. (e.g. dragging a group
+    //    into an Empty would visually appear to do nothing.)
+    const sm = window.__cyco?.sceneManager;
+    if (sm) {
+      // Resolve the new Three.js parent: the scene root, or the matching
+      // live node for the target.
+      const newParent = (newPid === 'root')
+        ? sm.getActiveScene()
+        : sm._findById(newPid);
+      if (newParent) {
+        for (const id of topLevel) {
+          const obj = sm._findById(id);
+          if (!obj || obj === newParent) continue;
+          // Skip any descendant of a reparented ancestor (subtree rows are
+          // moved along with their top-level ancestor below).
+          let cur = obj.parent;
+          let alreadyMoving = false;
+          while (cur && cur !== newParent) {
+            if (allSubtreeIds.has(cur.userData?.cycoId)) { alreadyMoving = true; break; }
+            cur = cur.parent;
+          }
+          if (alreadyMoving) continue;
+          this._reparentPreserveWorld(obj, newParent);
+        }
+        // Re-order children of newParent to match the UI order (so before/after
+        // and inside drops both produce a sensible scene-graph child order).
+        this._syncChildrenOrder(newParent, newPid);
+      }
+      sm._markDirty?.();
+    }
+
     this._clearDragState();
     this._renderTree();
+  }
+
+  /**
+   * Move `obj` to live under `newParent` while keeping its world transform
+   * unchanged (so the visual layout does not shift when reparenting).
+   */
+  _reparentPreserveWorld(obj, newParent) {
+    if (!obj || !newParent) return;
+    const wp = new THREE.Vector3();
+    const wq = new THREE.Quaternion();
+    const ws = new THREE.Vector3();
+    obj.getWorldPosition(wp);
+    obj.getWorldQuaternion(wq);
+    obj.getWorldScale(ws);
+    if (obj.parent) obj.parent.remove(obj);
+    newParent.add(obj);
+    if (newParent.isScene) {
+      obj.position.copy(wp);
+      obj.quaternion.copy(wq);
+      obj.scale.copy(ws);
+    } else {
+      newParent.updateMatrixWorld(true);
+      const inv = new THREE.Matrix4().copy(newParent.matrixWorld).invert();
+      const m = new THREE.Matrix4().compose(wp, wq, ws);
+      m.premultiply(inv);
+      m.decompose(obj.position, obj.quaternion, obj.scale);
+    }
+  }
+
+  /**
+   * Reorder the live Three.js children of `parent` so the scene-graph order
+   * matches the UI `_nodes` order under the same parent. Called after a
+   * drag-drop reparent so before/after/inside drops all produce a consistent
+   * scene-graph layout that mirrors the hierarchy panel.
+   */
+  _syncChildrenOrder(parent, parentUiId) {
+    if (!parent) return;
+    // Gather UI nodes that are direct children of parentUiId, in UI order.
+    const uiChildIds = this._nodes
+      .filter(n => n.pid === parentUiId)
+      .map(n => n.id);
+    // Map each id to its live Three.js object.
+    const sm = window.__cyco?.sceneManager;
+    if (!sm) return;
+    // Re-insert into parent.children in the UI order. Children that are not
+    // represented in the UI (e.g. editor-only helpers) are appended at the end.
+    const uiSet   = new Set(uiChildIds);
+    const ordered = [];
+    for (const id of uiChildIds) {
+      const o = sm._findById(id);
+      if (o) ordered.push(o);
+    }
+    // Keep the rest of the live children that are not in the UI (helpers etc.).
+    for (const c of parent.children) {
+      if (!uiSet.has(c.userData?.cycoId)) ordered.push(c);
+    }
+    // Splice back into parent.children in order. Assigning a new array on
+    // Object3D would break internal invariants, so we clear + push.
+    parent.children.length = 0;
+    for (const c of ordered) parent.children.push(c);
   }
 
   _onDragEnd() {
@@ -773,43 +843,23 @@ export class LeftPanel extends BasePanel {
     const container = this._tree;
     container.innerHTML = '';
 
-    // De-duplicate nodes. This is a safety net for a layout-restore edge
-    // case where the same window listener can be registered twice and a
-    // single cyco-hierarchy-add ends up pushing a fallback row AND a real
-    // row for the same scene object (different ids because the fallback
-    // uses a synthetic `'grp-' + Date.now()` id). Prefer the row whose id
-    // matches a live scene object over a synthetic one.
+    // Drop orphan rows whose id is no longer present in the live scene.
+    // This is the only safe dedup step: a row that points at a non-existent
+    // Three.js object is a stale row, and keeping it would let the user
+    // drag it around (creating a real object on drop that the user did not
+    // intend) or, conversely, attempt operations on a non-existent node.
     if (this._nodes.length) {
       const sm = window.__cyco?.sceneManager;
-      const liveIds = new Set();
       if (sm) {
+        const liveIds = new Set();
         sm.getActiveScene()?.traverse(o => {
           if (o.userData?.cycoId) liveIds.add(o.userData.cycoId);
         });
+        this._nodes = this._nodes.filter(n => {
+          if (n.id === 'root') return true;
+          return liveIds.has(n.id);
+        });
       }
-      const seenId   = new Set();
-      const seenKey  = new Map();   // name+pid+type → live row (preferred) or first row
-      this._nodes = this._nodes.filter(n => {
-        if (!n || !n.id) return false;
-        if (seenId.has(n.id)) return false;
-        const key = `${n.name}__${n.pid}__${n.type}`;
-        const prior = seenKey.get(key);
-        if (prior) {
-          // Drop the row whose id is NOT in the live scene (the synthetic one).
-          if (liveIds.has(n.id) && !liveIds.has(prior.id)) {
-            // Replace: filter out prior by id, then keep this
-            this._nodes = this._nodes.filter(x => x.id !== prior.id);
-            seenId.delete(prior.id);
-            seenKey.set(key, n);
-            seenId.add(n.id);
-            return true;
-          }
-          return false;
-        }
-        seenId.add(n.id);
-        seenKey.set(key, n);
-        return true;
-      });
     }
 
     const nodes   = this._nodes;
