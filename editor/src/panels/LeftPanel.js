@@ -290,10 +290,15 @@ export class LeftPanel extends BasePanel {
       showHierarchyMenu(e, (action) => this._handleAction(action), !!row, isScene, isMulti);
     });
 
-    // click on empty area: clear confirm state
+    // click on empty area: clear confirm state AND deselect everything
     tree.addEventListener('click', (e) => {
       if (!e.target.closest('.ce-hier-row')) {
         this._confirmDelId = null;
+        if (this._selectedIds.size > 0) {
+          this._selectedIds.clear();
+          this._lastClickId = null;
+          window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
+        }
         this._renderTree();
       }
     });
@@ -1249,49 +1254,17 @@ export class LeftPanel extends BasePanel {
           if (objects.length === 0) {
             window.dispatchEvent(new CustomEvent('cyco-deselect-all'));
           } else {
-            // If the user clicked a container row (Group / Empty / LOD /
-            // Prefab root) and it has selectable mesh / light / camera
-            // descendants, expand the selection to those descendants so
-            // the viewport shows the same multi-select outline look as
-            // a marquee selection — the FIRST descendant gets the
-            // primary outline colour, the rest get the secondary colour.
-            // Without this expansion, clicking a Group would dispatch a
-            // single-object selection of the (mesh-less) container and
-            // the Box Gizmo would draw a green wireframe AABB around the
-            // whole cluster via setFromObject(target), which is the wrong
-            // visual feedback.
-            let dispatchedObjects = objects;
+            // Clicking a folder/container row (Group / Empty / LOD / Prefab
+            // root) selects the FOLDER itself, not its descendants. The
+            // Properties panel then shows the folder's own component list
+            // and a "Group Selected" button, instead of the inner objects
+            // + a "Group Selected" button (which made folder clicks feel
+            // like a re-grouping of the contents). Descendant expansion
+            // is reserved for marquee / shift-range selection flows.
             const lastClicked = objects[objects.length - 1];
-            // Expand the selection to a container's selectable descendants for
-            // ANY non-mesh folder-like row (Empty / Group / LOD / Prefab
-            // root). Without this expansion, clicking a folder would
-            // dispatch a single-object selection of the (mesh-less)
-            // container and the Box Gizmo would draw a wireframe AABB
-            // around the whole cluster — the user wants the same
-            // marquee-multi-select outline look instead.
-            const isContainer = lastClicked && (
-              lastClicked.isGroup || lastClicked.isLOD
-              || lastClicked.type === 'Object3D' || lastClicked.type === 'Group'
-              || lastClicked.userData?.cycoPrefabSource
-              || lastClicked.userData?.cycoEmptyRoot
-            );
-            if (isContainer
-                && !(lastClicked.isMesh || lastClicked.isLight || lastClicked.isCamera)) {
-              const expandedIds = this._collectDescendantIds(lastClicked, lastClicked.userData?.cycoId);
-              const expanded = expandedIds
-                .map(id => sm._findById(id))
-                .filter(o => o && !o.userData?._isGizmo);
-              if (expanded.length >= 2) {
-                dispatchedObjects = expanded;
-                const first = expanded[0];
-                if (first.isLight)         lastType = 'light';
-                else if (first.isCamera)   lastType = 'camera';
-                else if (first.isMesh || first.isLine || first.isPoints) lastType = 'mesh';
-              }
-            }
-            const dispatchLast = dispatchedObjects[dispatchedObjects.length - 1];
+            const dispatchLast = lastClicked;
             window.dispatchEvent(new CustomEvent('cyco-select-node', {
-              detail: { object: dispatchLast, objects: dispatchedObjects, type: lastType }
+              detail: { object: dispatchLast, objects: [dispatchLast], type: lastType }
             }));
           }
         } else if (node.id === 'root') {

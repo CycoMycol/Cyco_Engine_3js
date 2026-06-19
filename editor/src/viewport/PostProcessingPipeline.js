@@ -1402,6 +1402,49 @@ export class PostProcessingPipeline {
     return [];
   }
 
+  /**
+   * True when `obj` is a non-mesh container (Group / Empty / LOD / Prefab
+   * root) — an editor folder that has no own selectable geometry but may
+   * contain selectable descendants.  Mirrors the same test used in
+   * TransformGizmo to expand folder selections to descendants for outline
+   * purposes (per-child outlines, no AABB around the whole folder).
+   */
+  _isContainerLike(obj) {
+    if (!obj) return false;
+    if (obj.isMesh || obj.isLine || obj.isPoints) return false;
+    if (obj.isInstancedMesh || obj.isBatchedMesh) return false;
+    if (obj.isLight || obj.isCamera) return false;
+    return (obj.isGroup || obj.isLOD
+      || obj.type === 'Object3D' || obj.type === 'Group'
+      || obj.userData?.cycoPrefabSource
+      || obj.userData?.cycoEmptyRoot);
+  }
+
+  /**
+   * Walk the live Three.js subtree under `root` and return the selectable
+   * objects (meshes, lines, points, instanced meshes, lights, cameras) that
+   * are NOT gizmo / helper / editor-only.  Mirrors the same collector used
+   * by LeftPanel / TransformGizmo so all three components expand a folder
+   * selection identically.
+   */
+  _collectSelectableDescendants(root) {
+    const out = [];
+    if (!root) return out;
+    root.traverse(obj => {
+      if (!obj || obj === root) return;
+      if (obj.userData?._isGizmo)    return;
+      if (obj.userData?._isHelper)   return;
+      if (obj.userData?._editorOnly) return;
+      const sel = obj.isMesh || obj.isLine || obj.isPoints
+        || obj.isInstancedMesh || obj.isBatchedMesh
+        || obj.isLight || obj.isCamera;
+      if (!sel) return;
+      if (!obj.userData?.cycoId) return;
+      if (!out.includes(obj)) out.push(obj);
+    });
+    return out;
+  }
+
   _hasPhysicsCollider(object) {
     const comps = object?.userData?.physics?.components;
     return Array.isArray(comps) && comps.some((comp) => {
@@ -2042,6 +2085,24 @@ export class PostProcessingPipeline {
 
   _onSelectNode(event) {
     this._selectedObjects = this._getSelectionObjects(event.detail);
+    // ── Folder / container short-circuit ──────────────────────────────────
+    // If the dispatch targets a single container (Group / Empty / LOD /
+    // Prefab root) that has NO own selectable geometry but HAS selectable
+    // descendants, expand the outline list internally to those descendants
+    // so each child gets its own outline (matches the multi-select look)
+    // instead of a degenerate AABB around the empty folder.  The dispatched
+    // `cyco-select-node` event still carries `{ object: folder, objects:
+    // [folder] }` so RightPanel keeps showing the folder's Properties and
+    // the hierarchy keeps the folder highlighted.
+    if (this._selectedObjects.length === 1) {
+      const obj = this._selectedObjects[0];
+      if (obj && this._isContainerLike(obj)) {
+        const descendants = this._collectSelectableDescendants(obj);
+        if (descendants.length >= 2) {
+          this._selectedObjects = descendants;
+        }
+      }
+    }
     // Recompute the cached single/first-selected outline state from the
     // current prefs on every selection change.  This MUST run regardless
     // of renderer type: in WebGPU mode there's no OutlinePass, but the

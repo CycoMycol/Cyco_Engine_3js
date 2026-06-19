@@ -90,6 +90,55 @@ export class TransformGizmo {
   get controls() { return this._controls; }
   set controls(v) { this._controls = v; }
 
+  /**
+   * True when `obj` is a non-mesh container (Group / Empty / LOD / Prefab
+   * root) — i.e. an editor folder that has no own selectable geometry but
+   * may contain selectable descendants.  Used to decide whether the
+   * single-select dispatch should be expanded to descendants for gizmo +
+   * outline purposes.
+   */
+  static _isContainerLike(obj) {
+    if (!obj) return false;
+    if (obj.isMesh || obj.isLine || obj.isPoints) return false;
+    if (obj.isInstancedMesh || obj.isBatchedMesh) return false;
+    if (obj.isLight || obj.isCamera) return false;
+    return (obj.isGroup || obj.isLOD
+      || obj.type === 'Object3D' || obj.type === 'Group'
+      || obj.userData?.cycoPrefabSource
+      || obj.userData?.cycoEmptyRoot);
+  }
+
+  /**
+   * Walk the live Three.js subtree under `root` and return the selectable
+   * objects (meshes, lines, points, instanced meshes, lights, cameras) that
+   * are NOT gizmo / helper / editor-only.  Used to expand a folder selection
+   * to its visible children so the gizmo and outline pass can target them
+   * individually instead of drawing a wireframe AABB around the whole
+   * subtree.
+   */
+  static _collectSelectableDescendants(root) {
+    const out = [];
+    if (!root) return out;
+    root.traverse(obj => {
+      if (!obj || obj === root) return;
+      if (obj.userData?._isGizmo)    return;
+      if (obj.userData?._isHelper)   return;
+      if (obj.userData?._editorOnly) return;
+      const sel = obj.isMesh || obj.isLine || obj.isPoints
+        || obj.isInstancedMesh || obj.isBatchedMesh
+        || obj.isLight || obj.isCamera;
+      if (!sel) return;
+      if (!obj.userData?.cycoId) return;
+      if (!out.includes(obj)) out.push(obj);
+    });
+    return out;
+  }
+
+  static _isContainerWithSelectableDescendants(obj) {
+    if (!TransformGizmo._isContainerLike(obj)) return false;
+    return TransformGizmo._collectSelectableDescendants(obj).length >= 2;
+  }
+
   _build() {
     const renderer = this.engine.rendererManager?.renderer;
     const camera   = this.engine.camera;
@@ -923,6 +972,38 @@ export class TransformGizmo {
     // Respect per-object lock
     if (object && object.userData.cycoLocked) { this.detach(); return; }
     if (objects.length > 0 && objects.every(o => o.userData?.cycoLocked)) { this.detach(); return; }
+
+    // ── Folder / container short-circuit ────────────────────────────────────
+    // If the dispatch targets a single container (Group / Empty / LOD / Prefab
+    // root) that has NO own selectable geometry but HAS selectable
+    // descendants, expand the selection internally to those descendants for
+    // gizmo + outline purposes.  The dispatched `cyco-select-node` event still
+    // carries `{ object: folder, objects: [folder] }` so the RightPanel keeps
+    // showing the folder's own Properties and the hierarchy keeps the folder
+    // highlighted.  This avoids the user-reported "green bounding box around
+    // the whole folder" — instead, each descendant gets its own outline and
+    // the multi-gizmo (virtual centroid) is used for transforms.
+    if (objects.length === 1 && object && !this._physicsEdit
+        && TransformGizmo._isContainerWithSelectableDescendants(object)) {
+      const expanded = TransformGizmo._collectSelectableDescendants(object);
+      if (expanded.length >= 2) {
+        const locked = expanded.filter(o => !o.userData?.cycoLocked);
+        if (locked.length >= 2) {
+          this._destroyMultiGroup();
+          this._attachToMulti(locked);
+          this._scheduleBoxPaletteUpdate();
+          return;
+        }
+      }
+      // Fallback: container with no selectable descendants (e.g. an Empty
+      // with no children) — just hide the box so we don't draw a degenerate
+      // wireframe at the folder's position.
+      this._destroyMultiGroup();
+      this._targetObject = object;
+      this._applyMode();
+      this._hideBox();
+      return;
+    }
 
     if (this._physicsEdit) {
       this._physicsOwner = object;
