@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 6d412f8b70d53224786a44e5ee924e8a
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_InvisibleGrid.mat
+  uploadId: 722914

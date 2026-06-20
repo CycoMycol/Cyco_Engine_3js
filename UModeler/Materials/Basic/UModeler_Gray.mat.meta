@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 2af6cbb1c5d7d5e43bad406ef5e61a3c
+timeCreated: 1542698989
+licenseType: Store
+NativeFormatImporter:
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_Gray.mat
+  uploadId: 722914

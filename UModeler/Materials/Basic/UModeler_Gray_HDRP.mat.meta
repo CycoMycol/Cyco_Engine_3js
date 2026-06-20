@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: a04e3f344883040b985ac2d5290d3dfc
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_Gray_HDRP.mat
+  uploadId: 722914

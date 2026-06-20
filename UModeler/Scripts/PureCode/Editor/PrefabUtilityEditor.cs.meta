@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: 152f5f6381cf78a4fa281586037cc0c5
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Scripts/PureCode/Editor/PrefabUtilityEditor.cs
+  uploadId: 722914

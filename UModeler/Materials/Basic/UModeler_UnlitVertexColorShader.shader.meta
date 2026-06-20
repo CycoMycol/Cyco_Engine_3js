@@ -1,0 +1,16 @@
+fileFormatVersion: 2
+guid: 76b82dd1e513dd94caabbe1d0ce2cf15
+ShaderImporter:
+  externalObjects: {}
+  defaultTextures: []
+  nonModifiableTextures: []
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_UnlitVertexColorShader.shader
+  uploadId: 722914

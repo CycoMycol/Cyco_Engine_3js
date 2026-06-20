@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: d7421381b5c3c49eebe5e7aac5e4e554
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_InvisibleGrid_HDRP.mat
+  uploadId: 722914

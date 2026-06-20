@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 81cfb516a7bfe46e1b0050624c9baa7d
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_Black_URP.mat
+  uploadId: 722914

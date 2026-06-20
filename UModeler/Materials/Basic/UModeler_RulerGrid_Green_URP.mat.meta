@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 7bb18ec6e864941f4876b900e37fbfde
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_RulerGrid_Green_URP.mat
+  uploadId: 722914

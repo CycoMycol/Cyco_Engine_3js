@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 1fbb4a1a03a301c439a629dc7371e9ac
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_OnlyVC.mat
+  uploadId: 722914

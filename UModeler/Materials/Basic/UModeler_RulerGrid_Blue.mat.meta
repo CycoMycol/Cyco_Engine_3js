@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 774a28e8c6c332d4aaff38f866b61482
+NativeFormatImporter:
+  externalObjects: {}
+  mainObjectFileID: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Materials/Basic/UModeler_RulerGrid_Blue.mat
+  uploadId: 722914

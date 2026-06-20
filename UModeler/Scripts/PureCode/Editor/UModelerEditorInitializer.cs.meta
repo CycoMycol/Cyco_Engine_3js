@@ -1,0 +1,18 @@
+fileFormatVersion: 2
+guid: a2a77e62a520a954da6e5c49eb7ffd8d
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences: []
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 80868
+  packageName: UModeler
+  packageVersion: 2.11.10
+  assetPath: Assets/tripolygon/UModeler/Scripts/PureCode/Editor/UModelerEditorInitializer.cs
+  uploadId: 722914
