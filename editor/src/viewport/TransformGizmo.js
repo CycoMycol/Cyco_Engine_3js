@@ -170,6 +170,19 @@ export class TransformGizmo {
     const scene    = this.engine.scene;
     if (!renderer || !camera || !scene) return;
 
+    if (window.CYCO_DEBUG_GIZMO_CAMSWAP) {
+      try {
+        console.log('[CYCO:GIZMO:build:start]', {
+          cameraType: camera.type || (camera.isOrthographicCamera ? 'OrthographicCamera' : 'PerspectiveCamera'),
+          cameraIsOrtho: !!camera.isOrthographicCamera,
+          cameraIsWebGPURenderer: !!renderer.isWebGPURenderer,
+          rendererDom: renderer.domElement?.tagName,
+          mode: this._mode,
+          space: this._space,
+          hasTarget: !!this._targetObject,
+        });
+      } catch (_) { /* noop */ }
+    }
     this._teardown();
 
     const tc = new TransformControls(camera, renderer.domElement);
@@ -386,9 +399,60 @@ export class TransformGizmo {
       // `_dragFreezeGizmoSize` is set true on `dragging-changed` and
       // cleared on release, so the gizmo stays constant-size while held
       // and is allowed to re-scale once the user lets go of the mouse.
+      //
+      // ── ORTHO SIZE SCALING FIX ─────────────────────────────────────────
+      // Three.js's stock TransformControlsGizmo auto-scales every frame
+      // using `factor = (top - bottom) / zoom` for ortho cameras
+      // (vs. `distance * tan(fov/2)` for perspective). That makes
+      // `setSize(prefSize)` MULTIPLY the user's already-tuned size onto
+      // a base factor that's ~25% of the viewport height — so a default
+      // `size=1.0` ends up with arrows roughly 25% of the screen tall,
+      // and the handles overlap so badly that clicking one handle hits
+      // its neighbour instead.  In perspective the same `size=1.0` is
+      // fine because the per-frame factor is bounded by the tan(fov/2)
+      // term.  Compensate by SCALING the user's size pref DOWN for
+      // ortho so the on-screen handle footprint matches perspective.
       if (!this._dragFreezeGizmoSize) {
-        this._tc.setSize(p.size ?? 1);
-        this._tc.setDistance(p.distance ?? 1);
+        const cam = this.engine?.camera;
+        const requestedSize    = p.size     ?? 1;
+        const requestedDist    = p.distance ?? 1;
+        if (cam?.isOrthographicCamera) {
+          // Empirical scaling: perspective size=1 → ~`halfH / 5` handle
+          // reach.  Match it in ortho by computing what size would
+          // produce the same world footprint, given ortho factor =
+          // (top - bottom) / zoom.
+          const halfH = Math.max(0.001, Math.abs((cam.top - cam.bottom) * 0.5));
+          const zoom  = cam.zoom ?? 1;
+          // Target world footprint ≈ halfH / 5.  TransformControls
+          // multiplies factor (= 2*halfH/zoom for ortho) by size/4, so
+          // solve for size that yields halfH/5: size = (halfH/5) * 4 /
+          // (2*halfH/zoom) = (4 * zoom) / 10.  Clamp so the user's
+          // tuned size can still scale up/down via prefs — only the
+          // default scale is corrected, not the user's relative tweaks.
+          const orthoBaseSize = Math.max(0.15, Math.min(2.0, (4 * zoom) / 10));
+          // Honor the user's pref as a multiplier on the ortho base —
+          // this preserves their intent ("I like a larger gizmo") while
+          // keeping the absolute pixel footprint in the sensible range.
+          const correctedSize = Math.max(0.15, Math.min(3.5,
+            orthoBaseSize * Math.max(0.25, requestedSize)
+          ));
+          this._tc.setSize(correctedSize);
+          // Distance also needs a tighter clamp — in ortho, distance
+          // multiplies the handle radius, so a pref `distance=2` would
+          // double the already-too-big handle.  Pull it back into range.
+          this._tc.setDistance(Math.max(0.5, Math.min(1.5, requestedDist)));
+          if (window.CYCO_DEBUG_GIZMO_CAMSWAP) {
+            console.log('[CYCO:GIZMO:applyPrefs:ortho]', {
+              halfH, zoom,
+              orthoBaseSize,
+              requestedSize, correctedSize,
+              requestedDist,
+            });
+          }
+        } else {
+          this._tc.setSize(requestedSize);
+          this._tc.setDistance(requestedDist);
+        }
       }
       this._tc.setColors(p.x ?? '#ff4444', p.y ?? '#44ff44', p.z ?? '#4444ff', p.active ?? '#ffd54a');
       if (this._gizmo) {
@@ -461,6 +525,29 @@ export class TransformGizmo {
   }
 
   _teardown() {
+    // ── Debug: log teardown so camera-toggle stale-state issues are visible.
+    // Set `window.CYCO_DEBUG_GIZMO_CAMSWAP = true` in devtools to enable.
+    if (window.CYCO_DEBUG_GIZMO_CAMSWAP) {
+      try {
+        console.log('[CYCO:GIZMO:teardown]', {
+          hasTc: !!this._tc,
+          hasBoxGroup: !!this._boxGroup,
+          mode: this._mode,
+          isDragging: this._isDragging,
+          hasInteraction: !!this._interaction,
+          hasMultiGroup: !!this._multiGroup,
+          hasMultiTargets: this._multiTargets.length,
+          cameraIsOrtho: !!this.engine?.camera?.isOrthographicCamera,
+          cameraType: this.engine?.camera?.type || null,
+          // Snapshot stale state that could leak across a camera rebuild
+          staleDragFreeze: this._dragFreezeGizmoSize,
+          staleDragMax: this._dragMaxDistance,
+          staleDragStartCamDist: this._dragStartCamDist,
+          staleMatrixBefore: !!this._matrixBefore,
+          staleMultiLastAppliedMatrix: !!this._multiLastAppliedMatrix,
+        });
+      } catch (_) { /* noop */ }
+    }
     if (this._rcHandler) {
       const renderer = this.engine.rendererManager?.renderer;
       if (renderer?.domElement) {
@@ -500,6 +587,44 @@ export class TransformGizmo {
       this._hoveredHandle = null;
       this._interaction = null;
     }
+    // ── STALE-STATE FIX ────────────────────────────────────────────────────
+    // Tear down must clear EVERY per-drag / per-camera cache, otherwise
+    // toggling perspective↔orthographic (which dispatches
+    // `cyco-editor-camera-changed` and re-enters `_build()`) leaves
+    // leftover state that corrupts the next raycast / next drag:
+    //
+    //   • `_interaction`      → pointermove reuses the OLD camera's
+    //                           dragPlane/startPlanePoint and translates
+    //                           objects into nothing.
+    //   • `_isDragging`       → SelectionManager click-suppress flag stays
+    //                           set, so the user can't reselect after swap.
+    //   • `_matrixBefore`     → next undo command restores the stale matrix.
+    //   • `_multiPivots/_multiRots/_multiScales` → multi-select undo re-bakes
+    //                           against the OLD camera basis.
+    //   • `_dragFreezeGizmoSize/_dragMaxDistance/_dragStartCamDist` →
+    //                           the ortho gizmo's per-frame resize is frozen
+    //                           at the OLD perspective's pixel size, so the
+    //                           arrows visibly grow / shrink on every swap.
+    //   • `_multiLastAppliedMatrix` → multi-select delta anchor points into
+    //                           the old camera's matrix.
+    this._interaction = null;
+    this._isDragging = false;
+    this._matrixBefore = null;
+    this._multiPivots = [];
+    this._multiRots = [];
+    this._multiScales = [];
+    this._multiDragStartPivots = [];
+    this._multiDragStartRots = [];
+    this._multiDragStartScales = [];
+    this._multiLastAppliedMatrix = null;
+    this._dragFreezeGizmoSize = false;
+    this._dragMaxDistance = null;
+    this._dragStartCamDist = null;
+    this._clearHoveredHandle();
+    if (window.__cyco) {
+      try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
+    }
+    if (this.selectionManager) this.selectionManager._gizmoDragging = false;
   }
 
   _applyMode() {
@@ -1015,9 +1140,30 @@ export class TransformGizmo {
     const defaultFaceRadius = baseSize * 0.11;
     const minWorldFaceRadius = Math.max(0.12, defaultFaceRadius * 0.75);
     const maxWorldFaceRadius = Math.max(defaultFaceRadius, 0.35);
-    const screenFaceRadius = renderer && camera
-      ? 2 * camera.position.distanceTo(this._boxGroup.position) * Math.tan(THREE.MathUtils.degToRad(camera.fov * 0.5)) * 40 / renderer.domElement.clientHeight
-      : minWorldFaceRadius;
+    // ── ORTHO FACE-RADIUS FIX ──────────────────────────────────────────────
+    // The original formula was:
+    //   `2 * dist * tan(fov * 0.5) * 40 / renderer.domElement.clientHeight`
+    // In an OrthographicCamera `camera.fov` is undefined, so this collapses
+    // to `2 * dist * tan(NaN * 0.5) * 40 / H = NaN`, producing NaN face
+    // radii — handles render at zero size and become invisible to the
+    // raycaster, which is why the Box Gizmo disappears entirely in ortho.
+    // Branch on camera type: in ortho the on-screen pixel size is
+    // independent of camera distance, so we drive the handle radius from
+    // the world-units-per-pixel (already computed above as `worldPerPixel`)
+    // times a fixed pixel target.
+    let screenFaceRadius;
+    if (renderer && camera) {
+      if (camera.isOrthographicCamera) {
+        // Target ~22 px handle radius in screen space.
+        screenFaceRadius = worldPerPixel * 22;
+      } else {
+        screenFaceRadius = 2 * camera.position.distanceTo(this._boxGroup.position) *
+          Math.tan(THREE.MathUtils.degToRad((camera.fov ?? 60) * 0.5)) *
+          40 / Math.max(1, renderer.domElement.clientHeight);
+      }
+    } else {
+      screenFaceRadius = minWorldFaceRadius;
+    }
     const faceRadius = Math.min(maxWorldFaceRadius, Math.max(minWorldFaceRadius, screenFaceRadius));
     const handleThickness = Math.max(0.05, boxPrefs.thickness ?? 1);
     const handleDistance = Math.max(0.05, boxPrefs.distance ?? 1);

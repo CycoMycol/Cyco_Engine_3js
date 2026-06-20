@@ -1653,28 +1653,49 @@ export class ViewportEngine {
     // the overlay in a removed subtree even after the MutationObserver
     // fires — this interval is the final safety net so the gizmo never
     // silently disappears.
-    this._helperOverlayInterval?.__stop?.();
+    //
+    // FIX: stop the previous interval FIRST (via __stop) before creating
+    // a new one. The previous code assigned `__stop` directly to the
+    // `setInterval` return value, which is a number — `number.__stop = fn`
+    // throws `TypeError: Cannot create property '__stop' on number 'N'`.
+    // That crashed the camera swap path and left the gizmo rebuild half-
+    // done, which is one of the sources of "raycast is off / handles are
+    // gone" the user reported when toggling perspective↔orthographic.
+    if (this._helperOverlayInterval && typeof this._helperOverlayInterval === 'object') {
+      this._helperOverlayInterval.__stop?.();
+    } else if (this._helperOverlayInterval != null) {
+      clearInterval(this._helperOverlayInterval);
+    }
+    this._helperOverlayInterval = null;
     let _intervalTicks = 0;
+    const _intervalHolder = { id: null };
+    this._helperOverlayInterval = _intervalHolder;
     const _tick = () => {
       _intervalTicks++;
       if (_intervalTicks > 30) { // stop after ~3 seconds (100ms cadence)
-        clearInterval(this._helperOverlayInterval);
-        this._helperOverlayInterval = null;
+        if (_intervalHolder.id != null) clearInterval(_intervalHolder.id);
+        _intervalHolder.id = null;
         return;
       }
       try { this._ensureHelperOverlayAttached(); } catch (_) { /* noop */ }
     };
-    this._helperOverlayInterval = setInterval(_tick, 100);
-    this._helperOverlayInterval.__stop = () => {
-      clearInterval(this._helperOverlayInterval);
-      this._helperOverlayInterval = null;
+    _intervalHolder.id = setInterval(_tick, 100);
+    _intervalHolder.__stop = () => {
+      if (_intervalHolder.id != null) clearInterval(_intervalHolder.id);
+      _intervalHolder.id = null;
     };
   }
 
   _disposeHelperOverlay() {
     this._helperOverlayObserver?.disconnect?.();
     this._helperOverlayObserver = null;
-    this._helperOverlayInterval?.__stop?.();
+    // `_helperOverlayInterval` is now a wrapper object (not a raw number),
+    // but legacy code paths can still leave a number behind — handle both.
+    if (this._helperOverlayInterval && typeof this._helperOverlayInterval === 'object') {
+      this._helperOverlayInterval.__stop?.();
+    } else if (this._helperOverlayInterval != null) {
+      clearInterval(this._helperOverlayInterval);
+    }
     this._helperOverlayInterval = null;
     this._helperOverlayRenderer?.dispose();
     this._helperOverlayCanvas?.remove();
