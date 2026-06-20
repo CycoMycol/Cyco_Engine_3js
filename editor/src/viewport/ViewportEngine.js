@@ -105,6 +105,9 @@ export class ViewportEngine {
     /** Secondary WebGLRenderer + canvas for the ViewHelper gizmo overlay (WebGPU mode) */
     this._helperOverlayRenderer = null;
     this._helperOverlayCanvas   = null;
+    /** MutationObserver that re-attaches the overlay canvas if dockview
+     *  detaches it during a panel-toggle animation. */
+    this._helperOverlayObserver = null;
 
     /** CameraGizmoHelper — wraps three.js ViewHelper with click-to-align
      *  + live prefs application (color, size, position, opacity, labels). */
@@ -1605,9 +1608,74 @@ export class ViewportEngine {
 
     this._helperOverlayRenderer = helperRenderer;
     this._helperOverlayCanvas   = overlayCanvas;
+
+    // Watch the container's children list so we can re-attach the overlay
+    // if dockview detaches it during a panel-toggle animation. Without
+    // this, toggling the left/right panel would silently strand the
+    // overlay in a removed DOM subtree and the gizmo would vanish.
+    if (typeof MutationObserver !== 'undefined') {
+      this._helperOverlayObserver?.disconnect?.();
+      this._helperOverlayObserver = new MutationObserver((mutations) => {
+        for (const m of mutations) {
+          for (const node of m.removedNodes) {
+            if (node === overlayCanvas) {
+              if (window.CYCO_DEBUG_GIZMO) {
+                console.log('[CYCO:GIZMO:overlay-detected-removed]', {
+                  containerStillConnected: container.isConnected,
+                  containerId: container.id || container.className,
+                });
+              }
+              // Defer the re-attach to a microtask so we don't fight
+              // dockview's own reattach logic on the same tick.
+              queueMicrotask(() => {
+                if (!container.isConnected) return;
+                try {
+                  container.appendChild(overlayCanvas);
+                  if (this._cameraGizmoHelper) {
+                    this._cameraGizmoHelper.repositionOverlay?.(overlayCanvas, container);
+                  }
+                } catch (err) {
+                  console.warn('[ViewportEngine] overlay re-attach after removal failed:', err);
+                }
+              });
+              return;
+            }
+          }
+        }
+      });
+      try {
+        this._helperOverlayObserver.observe(container, { childList: true });
+      } catch (_) { /* container not observable yet — skip */ }
+    }
+
+    // Belt-and-braces: a low-frequency interval that double-checks the
+    // overlay is attached. Dockview's layout-animation can briefly leave
+    // the overlay in a removed subtree even after the MutationObserver
+    // fires — this interval is the final safety net so the gizmo never
+    // silently disappears.
+    this._helperOverlayInterval?.__stop?.();
+    let _intervalTicks = 0;
+    const _tick = () => {
+      _intervalTicks++;
+      if (_intervalTicks > 30) { // stop after ~3 seconds (100ms cadence)
+        clearInterval(this._helperOverlayInterval);
+        this._helperOverlayInterval = null;
+        return;
+      }
+      try { this._ensureHelperOverlayAttached(); } catch (_) { /* noop */ }
+    };
+    this._helperOverlayInterval = setInterval(_tick, 100);
+    this._helperOverlayInterval.__stop = () => {
+      clearInterval(this._helperOverlayInterval);
+      this._helperOverlayInterval = null;
+    };
   }
 
   _disposeHelperOverlay() {
+    this._helperOverlayObserver?.disconnect?.();
+    this._helperOverlayObserver = null;
+    this._helperOverlayInterval?.__stop?.();
+    this._helperOverlayInterval = null;
     this._helperOverlayRenderer?.dispose();
     this._helperOverlayCanvas?.remove();
     this._helperOverlayRenderer = null;
@@ -1639,15 +1707,19 @@ export class ViewportEngine {
    * Live-apply cameraGizmo prefs.
    *
    * Three categories of change:
-   *   1. Color fields (colorX/Y/Z/Negative) → full rebuild. The stock
-   *      three.js ViewHelper bakes the sprite disc colour into a
-   *      CanvasTexture that has no public rebuild path, so live-tinting
-   *      the discs requires disposing+recreating the wrapper.
-   *   2. Size / position → rebuild the WebGPU overlay <canvas> so its
-   *      backing WebGLRenderer is re-sized & re-anchored. The wrapper
-   *      itself is also re-created to pick up the new size cleanly.
-   *   3. Everything else (opacity, labels, dim, click-to-align) →
-   *      live-applied via `applyPrefs` with no rebuild.
+   *   1. Color fields (colorX/Y/Z/Negative) → live-apply via the
+   *      wrapper's `_applyAxisColors` (paints into the existing sprite
+   *      CanvasTextures). The previous code did a full wrapper rebuild
+   *      for colour changes, but that destroyed the WebGPU overlay
+   *      canvas mid-frame and re-anchored it from scratch, which is the
+   *      reason colour-picker drags caused the gizmo to flash and the
+   *      size slider to "move" the gizmo to a different corner.
+   *   2. Size / position → live-applied via `applyPrefs` (no full rebuild).
+   *      The WebGPU overlay canvas is resized + re-anchored in place so
+   *      the gizmo stays glued to its current corner.
+   *   3. Everything else (opacity, labels, dim, click-to-align,
+   *      letter colors, outline) → live-applied via `applyPrefs` with
+   *      no rebuild.
    *
    * @param {object} prefs - The new cameraGizmo prefs (a partial is fine).
    */
@@ -1657,33 +1729,76 @@ export class ViewportEngine {
                      ('colorZ' in prefs) || ('colorNegative' in prefs);
     const hasSizeOrPos = ('size' in prefs) || ('position' in prefs);
 
-    if (hasColor || hasSizeOrPos) {
-      // Full rebuild — tear down the overlay + wrapper, then reconstruct
-      // with the new prefs. Pass the override through so the live update
-      // works even when the prefs haven't been committed to localStorage
-      // yet (i.e. the slider is still being dragged).
-      // Wrapped in try/catch so a single bad color string or out-of-range
-      // size doesn't take down the whole viewport render loop.
-      try {
-        this._buildViewHelper(prefs);
-      } catch (err) {
-        console.error('[ViewportEngine] applyCameraGizmoPrefs rebuild failed:', err);
-        // Restore the previous helper so the next frame still has something
-        // to render. A null/disposed helper is what causes the "viewport
-        // disappears" symptom the user reported.
-        if (!this._cameraGizmoHelper) {
-          try { this._buildViewHelper(); } catch (_) { /* give up */ }
-        }
-      }
-      return;
+    if (window.CYCO_DEBUG_GIZMO) {
+      try { console.log('[CYCO:GIZMO:viewport-applyPrefs]', { hasColor, hasSizeOrPos, prefs }); } catch (_) {}
     }
 
+    // Live-apply via the existing wrapper. No full rebuild — preserves
+    // the WebGPU overlay canvas + the gizmo's screen anchor across
+    // every prefs change, fixing the "gizmo disappears / jumps on
+    // slider drag" symptom.
     if (this._cameraGizmoHelper) {
       try {
         this._cameraGizmoHelper.applyPrefs(prefs);
+        // Resize the WebGPU overlay renderer in-place. The overlay canvas's
+        // CSS width/height + corner anchor are updated by the helper's
+        // repositionOverlay hook (registered at overlay-build time).
+        if (hasSizeOrPos && this._helperOverlayRenderer && this._helperOverlayCanvas && this._container) {
+          const dim = Math.max(48, Math.min(256, this._cameraGizmoHelper.getPrefs().size || 128));
+          this._helperOverlayRenderer.setSize(dim, dim, false);
+          this._helperOverlayCanvas.style.width  = `${dim}px`;
+          this._helperOverlayCanvas.style.height = `${dim}px`;
+          // Re-anchor to the new corner. Same helper API used at build time.
+          this._cameraGizmoHelper.repositionOverlay?.(this._helperOverlayCanvas, this._container);
+        }
+        // Size/position change without a WebGPU overlay means we render
+        // the helper inline to the main canvas. The renderer's `setViewport`
+        // call inside ViewHelper.render() picks up the new helper size
+        // automatically, but we also need to clear any stale pixels the
+        // previous size drew — do it now so the next frame is clean.
+        if (hasSizeOrPos && !this._helperOverlayRenderer && this.rendererManager?.renderer) {
+          try { this.rendererManager.renderer.clear(); } catch (_) { /* noop */ }
+        }
       } catch (err) {
         console.error('[ViewportEngine] applyCameraGizmoPrefs live-update failed:', err);
+        // Last-ditch: rebuild the helper so the next frame has something
+        // to draw. Without this fallback a single bad color string or
+        // out-of-range size would leave the gizmo permanently broken.
+        try { this._buildViewHelper(); } catch (_) { /* give up */ }
       }
+    }
+  }
+
+  /**
+   * Make sure the WebGPU helper overlay canvas is attached to the live
+   * viewport container. Called from the ResizeObserver, from
+   * _onContainerReady, and from a MutationObserver that watches for the
+   * overlay being orphaned by dockview's panel-toggle animations. This
+   * is the "gizmo disappears when I toggle left/right panels" fix.
+   */
+  _ensureHelperOverlayAttached() {
+    if (!this._helperOverlayCanvas || !this._helperOverlayRenderer) return;
+    const container = this._container;
+    if (!container) return;
+    const overlay = this._helperOverlayCanvas;
+    // Parent either gone, or attached to a stale container element.
+    if (!overlay.isConnected || overlay.parentElement !== container) {
+      try {
+        if (overlay.parentElement) overlay.parentElement.removeChild(overlay);
+        container.appendChild(overlay);
+        if (window.CYCO_DEBUG_GIZMO) {
+          console.log('[CYCO:GIZMO:overlay-reattached]', {
+            reason: !overlay.isConnected ? 'detached' : 'wrong-parent',
+            container: container.id || container.className,
+          });
+        }
+      } catch (err) {
+        console.warn('[ViewportEngine] overlay re-attach failed:', err);
+      }
+    }
+    // Re-apply position so the anchor is correct after re-attach.
+    if (this._cameraGizmoHelper) {
+      this._cameraGizmoHelper.repositionOverlay?.(overlay, container);
     }
   }
 
@@ -2504,6 +2619,21 @@ export class ViewportEngine {
       const w = Math.max(1, Math.floor(width));
       const h = Math.max(1, Math.floor(height));
       if (w > 1 && h > 1) this._handleResize(w, h);
+      // Re-attach WebGPU overlay canvas if it got orphaned during the
+      // panel-toggle transition (dockview may briefly detach/reattach
+      // the viewport body, leaving the overlay stranded).
+      try { this._ensureHelperOverlayAttached(); } catch (_) { /* noop */ }
+      // Build the WebGPU overlay canvas if it was never created (the
+      // deferred-overlay check inside init() only runs on the first-time
+      // init path; the "renderer-moved" path was missing this fallback
+      // and was the source of the "gizmo has a black background, no
+      // outline ring, no white outline" symptom on a reload / layout-
+      // restore where the renderer was already alive when the container
+      // became ready).
+      const _r2 = this.rendererManager?.renderer;
+      if (_r2?.isWebGPURenderer && this._cameraGizmoHelper && !this._helperOverlayCanvas) {
+        try { this._buildHelperOverlay(); } catch (_) { /* noop */ }
+      }
       this._debug('containerReady:renderer-moved', this._viewportSummary());
       return;
     }

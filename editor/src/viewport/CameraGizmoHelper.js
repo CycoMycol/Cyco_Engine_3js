@@ -77,6 +77,12 @@ function _makeRingTexture(strokeColor, thickness) {
   return tex;
 }
 
+const _DBG = (tag, payload) => {
+  if (window.CYCO_DEBUG_GIZMO) {
+    try { console.log(`[CYCO:GIZMO:${tag}]`, payload); } catch (_) { /* noop */ }
+  }
+};
+
 /**
  * Map a position key to a `viewHelper.location` object matching three.js's
  * ViewHelper API (where `null` on a side means "use the opposite side").
@@ -104,10 +110,21 @@ export class CameraGizmoHelper {
     this._camera = camera;
 
     // Apply initial size/location/labels/opacity/dim before the first render
-    // so we never see a default-styled helper on screen.
+    // so we never see a default-styled helper on screen. Order matters:
+    // _applyLabels rebuilds the positive sprite materials, so axis-disc
+    // colours + letter colours must run AFTER it.
     this._applySize(this._prefs.size);
     this._applyLocation(this._prefs.position);
     this._applyLabels(this._prefs.labelX, this._prefs.labelY, this._prefs.labelZ);
+    // STOCK BUG WORKAROUND: ViewHelper creates SpriteMaterial WITHOUT
+    // `transparent: true`, so the canvas pixels outside the disc (which
+    // default to RGB 0,0,0) render as OPAQUE BLACK SQUARES around each
+    // disc. Force `transparent: true` on every sprite material so alpha=0
+    // pixels are skipped. Must run AFTER _applyLabels (which rebuilds
+    // the positive sprite materials) and AFTER _applyNegativeRing (which
+    // rebuilds the negative sprite textures).
+    this._applySpriteTransparency();
+    this._applyAxisColors(this._prefs.colorX, this._prefs.colorY, this._prefs.colorZ);
     this._applyLabelStyle(
       this._prefs.letterColorX, this._prefs.letterColorY, this._prefs.letterColorZ,
     );
@@ -120,6 +137,25 @@ export class CameraGizmoHelper {
       this._prefs.outlineColor,
       this._prefs.outlineThickness,
     );
+    // Re-apply transparency after the negative-ring texture swap, since
+    // _applyNegativeRing creates fresh SpriteMaterials for the negative
+    // axes (via canvas replacement) and they default to transparent:false.
+    this._applySpriteTransparency();
+
+    _DBG('ctor', {
+      size: this._prefs.size,
+      position: this._prefs.position,
+      opacity: this._prefs.opacity,
+      outlineEnabled: this._prefs.outlineEnabled,
+      outlineColor: this._prefs.outlineColor,
+      letterColorX: this._prefs.letterColorX,
+      letterColorY: this._prefs.letterColorY,
+      letterColorZ: this._prefs.letterColorZ,
+      colorX: this._prefs.colorX,
+      colorY: this._prefs.colorY,
+      colorZ: this._prefs.colorZ,
+      childCount: this._helper.children?.length,
+    });
 
     // Click handler — installed on a per-instance basis so the stock helper
     // stays untouched and can keep being used elsewhere.
@@ -199,18 +235,36 @@ export class CameraGizmoHelper {
     if (!prefs) return;
     this._prefs = { ...this._prefs, ...prefs };
 
-    // Labels via the stock helper's `setLabels` — must run BEFORE
-    // opacity so we can re-apply opacity to the freshly-rebuilt
-    // positive-sprite materials.
+    // Order matters here. The stock helper's `setLabels` rebuilds the
+    // positive-sprite materials (fresh CanvasTexture, fresh SpriteMaterial),
+    // which RESETS the disc colour we just painted via `_applyAxisColors`.
+    // We therefore call `_applyLabels` FIRST so the new materials exist,
+    // then re-paint the disc + letter colours into the freshly-created
+    // canvases.
     this._applyLabels(this._prefs.labelX, this._prefs.labelY, this._prefs.labelZ);
 
-    // Letter color (X/Y/Z character) — stock helper exposes `setLabelStyle`
-    // which rebuilds the positive sprite canvas with the new text colour.
+    // STOCK BUG WORKAROUND: ViewHelper creates SpriteMaterial WITHOUT
+    // `transparent: true`. Force it on every sprite after _applyLabels
+    // rebuilds them, so canvas pixels outside the disc are skipped
+    // (otherwise they render as opaque black squares).
+    this._applySpriteTransparency();
+
+    // Axis disc colours (positive X/Y/Z sprite fill). Paint into the
+    // freshly-rebuilt sprite canvas — `_applyLabels` just disposed the
+    // previous material, so this is the first colour the user will see.
+    this._applyAxisColors(
+      this._prefs.colorX, this._prefs.colorY, this._prefs.colorZ,
+    );
+
+    // Letter color (X/Y/Z character) — paint on top of the disc fill so
+    // the letter stays legible regardless of the disc colour.
     this._applyLabelStyle(
       this._prefs.letterColorX, this._prefs.letterColorY, this._prefs.letterColorZ,
     );
 
-    // Opacity — applied to every material in the helper.
+    // Opacity — applied to every material in the helper. NOTE: this must
+    // run AFTER _applyLabels/_applyAxisColors because both of those reset
+    // the material's opacity back to 1.
     this._applyOpacity(this._prefs.opacity);
 
     // Dim-negative toggle (stock helper hard-codes 0.2 on the negative
@@ -225,6 +279,10 @@ export class CameraGizmoHelper {
       this._prefs.outlineColor,
       this._prefs.outlineThickness,
     );
+
+    // Re-apply transparency after _applyNegativeRing swaps textures and
+    // may replace SpriteMaterials on the negative sprites.
+    this._applySpriteTransparency();
 
     // Position — update the helper's location so the renderer chooses the
     // right viewport rect next frame.
@@ -317,6 +375,10 @@ export class CameraGizmoHelper {
     this._helper.location.right  = loc.right;
     this._helper.location.bottom = loc.bottom;
     this._helper.location.left   = loc.left;
+    _DBG('applyLocation', {
+      position,
+      resolved: { ...loc },
+    });
   }
 
   _applyOpacity(opacity) {
@@ -325,13 +387,29 @@ export class CameraGizmoHelper {
     // Walk the helper's children. The 3 axis meshes use MeshBasicMaterial
     // (in closure — but their materials are reachable via .material).
     // The 6 sprites use SpriteMaterial; same approach.
+    //
+    // IMPORTANT: negative-axis sprites have an alpha-only texture (the
+    // ring). If we ever set `transparent=false` on those, three.js
+    // composites them as opaque black, which is the "black background"
+    // symptom the user reported. We therefore ALWAYS keep `transparent=true`
+    // on negative sprites regardless of opacity. We still apply the user's
+    // opacity value so the slider works correctly.
+    let touched = 0;
     for (const child of this._helper.children) {
-      if (child.material) {
+      if (!child.material) continue;
+      const type = child.userData?.type || '';
+      const isNegative = type.startsWith('neg');
+      if (isNegative) {
+        // Always force transparent for alpha-textured negative sprites.
+        child.material.transparent = true;
+      } else {
         child.material.transparent = o < 1;
-        child.material.opacity     = o;
-        child.material.needsUpdate = true;
       }
+      child.material.opacity = o;
+      child.material.needsUpdate = true;
+      touched++;
     }
+    _DBG('applyOpacity', { opacity: o, touched });
   }
 
   _applyDimNegative(dim) {
@@ -378,6 +456,18 @@ export class CameraGizmoHelper {
       posY: this._prefs.labelY,
       posZ: this._prefs.labelZ,
     };
+    // Read the current disc colour from each sprite's own canvas so we
+    // can wipe the previous letter without changing the disc fill.  The
+    // disc fill is whatever was last painted (the stock helper's hard-
+    // coded colour at construction, or the user-customised colour via
+    // `_applyAxisColors`).  We probe a single pixel inside the disc to
+    // recover it.
+    const discColorForType = {
+      posX: this._prefs.colorX || '#ff4466',
+      posY: this._prefs.colorY || '#88ff44',
+      posZ: this._prefs.colorZ || '#4488ff',
+    };
+    let touched = 0;
     for (const child of this._helper.children) {
       const type = child.userData?.type;
       if (!type || !letterColorForType[type]) continue;
@@ -388,33 +478,128 @@ export class CameraGizmoHelper {
       if (!ctx) continue;
       const labelText = labelTextForType[type];
       if (!labelText) continue;
-      // The disc fill colour is whatever the stock helper baked from the
-      // axis colour — read a single edge pixel of the disc (top edge) so
-      // we don't have to dig into the ViewHelper closure to find the
-      // axis colour directly.
-      const edgePixel = ctx.getImageData(32, 20, 1, 1).data;
-      const discCss = `rgb(${edgePixel[0]},${edgePixel[1]},${edgePixel[2]})`;
+      // Restore the disc fill (this also wipes the existing black letter
+      // baked by the stock helper).
       ctx.save();
       // Clip to the disc circle so we don't paint the surrounding alpha.
       ctx.beginPath();
       ctx.arc(32, 32, 14, 0, 2 * Math.PI);
       ctx.clip();
-      // Restore the disc fill (this also wipes the existing black letter
-      // baked by the stock helper).
       ctx.beginPath();
       ctx.arc(32, 32, 14, 0, 2 * Math.PI);
       ctx.closePath();
-      ctx.fillStyle = discCss;
+      ctx.fillStyle = discColorForType[type];
       ctx.fill();
       // Now redraw the letter at the centre with the user's chosen colour.
       ctx.font = '24px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = letterColorForType[type] || '#ffffff';
-      ctx.fillText(labelText, 32, 41);
+      // Disc center is at (32,32). With textBaseline='middle', the text's
+      // vertical center sits at the y-coordinate, so y=32 puts the letter
+      // exactly on the disc center.
+      ctx.fillText(labelText, 32, 32);
       ctx.restore();
       tex.needsUpdate = true;
+      touched++;
     }
+    _DBG('applyLabelStyle', { colorX, colorY, colorZ, touched });
+  }
+
+  /**
+   * Repaint the disc fill colour on each positive-sprite canvas. The
+   * stock ViewHelper bakes the disc colour into a CanvasTexture at
+   * construction time and never repaints it; without this method the
+   * user's `colorX/Y/Z` prefs would have no visible effect.
+   *
+   * Like `_applyLabelStyle`, we don't tear down the helper — we just
+   * edit the existing 64×64 sprite canvas. Order matters: paint the disc
+   * first, then the letter on top, so the letter stays legible against
+   * any disc colour.
+   */
+  _applyAxisColors(colorX, colorY, colorZ) {
+    this._prefs.colorX = colorX;
+    this._prefs.colorY = colorY;
+    this._prefs.colorZ = colorZ;
+
+    const discColorForType = { posX: colorX, posY: colorY, posZ: colorZ };
+    const letterColorForType = {
+      posX: this._prefs.letterColorX,
+      posY: this._prefs.letterColorY,
+      posZ: this._prefs.letterColorZ,
+    };
+    const labelTextForType = {
+      posX: this._prefs.labelX,
+      posY: this._prefs.labelY,
+      posZ: this._prefs.labelZ,
+    };
+    let touched = 0;
+    for (const child of this._helper.children) {
+      const type = child.userData?.type;
+      if (!type || !discColorForType[type]) continue;
+      const tex = child.material?.map;
+      if (!tex || !tex.image) continue;
+      const canvas = tex.image;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) continue;
+      const labelText = labelTextForType[type];
+      ctx.save();
+      // Clear the previous disc + letter by painting the whole disc with
+      // the new disc colour first.
+      ctx.beginPath();
+      ctx.arc(32, 32, 14, 0, 2 * Math.PI);
+      ctx.closePath();
+      ctx.fillStyle = discColorForType[type] || '#888888';
+      ctx.fill();
+      // Re-draw the letter on top so the colour picker for `letterColorX/Y/Z`
+      // is still respected after a disc-colour change.
+      if (labelText) {
+        ctx.font = '24px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = letterColorForType[type] || '#ffffff';
+        // Disc center is at (32,32). With textBaseline='middle', the text's
+        // vertical center sits at the y-coordinate, so y=32 puts the letter
+        // exactly on the disc center.
+        ctx.fillText(labelText, 32, 32);
+      }
+      ctx.restore();
+      tex.needsUpdate = true;
+      touched++;
+    }
+    _DBG('applyAxisColors', { colorX, colorY, colorZ, touched });
+  }
+
+  /**
+   * Force `transparent: true` on every SpriteMaterial in the helper.
+   *
+   * STOCK BUG WORKAROUND: three.js's ViewHelper builds SpriteMaterial
+   * instances with `transparent` defaulting to false. A 2D canvas
+   * defaults to fully transparent black (RGBA 0,0,0,0) outside any
+   * drawn region, so when the SpriteMaterial is opaque, those
+   * transparent pixels render as opaque black RGB(0,0,0). The visible
+   * symptom is a black square larger than the disc around every axis
+   * label. Setting `transparent: true` lets the GPU discard alpha=0
+   * fragments and the viewport shows through.
+   *
+   * This must run AFTER every method that creates or replaces a sprite
+   * material — namely `_applyLabels` (rebuilds positive sprite materials)
+   * and `_applyNegativeRing` (replaces negative sprite textures and may
+   * allocate a fresh SpriteMaterial). The constructor and `applyPrefs`
+   * call this twice to cover both events.
+   */
+  _applySpriteTransparency() {
+    let touched = 0;
+    for (const child of this._helper.children) {
+      const mat = child.material;
+      if (!mat || !mat.isSpriteMaterial) continue;
+      if (mat.transparent !== true) {
+        mat.transparent = true;
+        mat.needsUpdate = true;
+        touched++;
+      }
+    }
+    _DBG('applySpriteTransparency', { touched });
   }
 
   /**
@@ -429,6 +614,7 @@ export class CameraGizmoHelper {
    * @param {number}  thickness   - Stroke width in pixels.
    */
   _applyNegativeRing(enabled, color, thickness) {
+    let touched = 0;
     for (const child of this._helper.children) {
       const type = child.userData?.type;
       if (!type || !type.startsWith('neg')) continue;
@@ -438,12 +624,15 @@ export class CameraGizmoHelper {
         const oldMap = child.material.map;
         if (oldMap) oldMap.dispose();
         child.material.map = _makeRingTexture(color, thickness);
+        // CRITICAL: transparent MUST stay true so the ring's alpha
+        // shows the viewport underneath instead of composite-black.
         child.material.transparent = true;
         child.material.needsUpdate = true;
         // Remember so we can revert if the user disables the outline.
         this._prefs.outlineEnabled = true;
         this._prefs.outlineColor = color;
         this._prefs.outlineThickness = thickness;
+        touched++;
       } else {
         // User disabled the outline — hide the negative axis sprites
         // entirely. Restoring the stock disc would re-introduce the
@@ -452,8 +641,10 @@ export class CameraGizmoHelper {
         child.material.transparent = true;
         child.material.needsUpdate = true;
         this._prefs.outlineEnabled = false;
+        touched++;
       }
     }
+    _DBG('applyNegativeRing', { enabled, color, thickness, touched });
   }
 }
 
