@@ -157,6 +157,43 @@ export const DEFAULT_PREFS = {
       glowIntensity: 0.45,
       glowColor: '#45ffd0',
     },
+    // Camera gizmo (Three.js ViewHelper) — bottom-right axis cube.
+    // Mirrors the editor values from three.js's ViewHelper so the user
+    // can retheme the helper to match their editor palette.
+    cameraGizmo: {
+      // Size in pixels of the on-screen gizmo (128 = three.js default).
+      size: 128,
+      // Anchor corner. Mirrors `viewHelper.location` (top/right/bottom/left).
+      // Allowed values: 'bottom-right' (default), 'bottom-left',
+      //                 'top-right', 'top-left'.
+      position: 'bottom-right',
+      // Master opacity of the helper meshes/sprites (0..1).
+      opacity: 1,
+      // Whether to dim the negative axes like the stock helper does.
+      dimNegativeAxes: true,
+      // Axis colors (matching the three.js defaults — user can retheme).
+      colorX: '#ff4466',
+      colorY: '#88ff44',
+      colorZ: '#4488ff',
+      colorNegative: '#000000',
+      // Color of the X / Y / Z letter glyph drawn inside the positive disc.
+      letterColorX: '#ffffff',
+      letterColorY: '#ffffff',
+      letterColorZ: '#ffffff',
+      // Ring outline drawn around the negative axis discs. Replaces the
+      // stock solid black fill so the viewport shows through. When
+      // `outlineEnabled` is false the negative axes are hidden entirely.
+      outlineEnabled: true,
+      outlineColor: '#cccccc',
+      outlineThickness: 2,
+      // Optional text labels for the positive axes (X / Y / Z by default).
+      // Empty string = unlabeled.
+      labelX: 'X',
+      labelY: 'Y',
+      labelZ: 'Z',
+      // Whether pointer clicks on the gizmo snap the camera to that axis.
+      enableClickToAlign: true,
+    },
   },
   renderer: {
     defaultType: 'webgpu',

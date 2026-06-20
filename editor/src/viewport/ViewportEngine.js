@@ -21,6 +21,7 @@
 import * as THREE from 'three';
 import { OrbitControls }   from 'three/addons/controls/OrbitControls.js';
 import { ViewHelper }      from 'three/addons/helpers/ViewHelper.js';
+import { CameraGizmoHelper } from './CameraGizmoHelper.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { RGBELoader }      from 'three/addons/loaders/RGBELoader.js';
 import { HDRLoader }       from 'three/addons/loaders/HDRLoader.js';
@@ -104,6 +105,17 @@ export class ViewportEngine {
     /** Secondary WebGLRenderer + canvas for the ViewHelper gizmo overlay (WebGPU mode) */
     this._helperOverlayRenderer = null;
     this._helperOverlayCanvas   = null;
+
+    /** CameraGizmoHelper — wraps three.js ViewHelper with click-to-align
+     *  + live prefs application (color, size, position, opacity, labels). */
+    this._cameraGizmoHelper = null;
+
+    /** Live-in-memory cache of the latest cameraGizmo prefs. Updated on
+     *  every `cyco-preferences-change` so a wrapper rebuild (e.g. when
+     *  the user changes `position` or `size`) picks up the in-progress
+     *  values of the other sliders, not the still-unsaved localStorage
+     *  copy. Falls back to localStorage on first read. */
+    this._cameraGizmoLivePrefs = null;
 
     // ── event bindings ──
     this._onRendererChanged    = this._onRendererChanged.bind(this);
@@ -204,6 +216,19 @@ export class ViewportEngine {
 
   _onPrefsChange(event) {
     this._applyMouseButtonPrefs();
+    // Live-apply camera gizmo prefs (colors, opacity, labels, position,
+    // size, click-to-align). Cheap when the section is unchanged.
+    const cameraGizmoPrefs = event?.detail?.prefs?.gizmo?.cameraGizmo;
+    if (cameraGizmoPrefs) {
+      // Cache the latest prefs so a subsequent wrapper rebuild (e.g. for
+      // a position/size/color change) reads the in-progress values, not
+      // the still-unsaved localStorage copy.
+      this._cameraGizmoLivePrefs = {
+        ...(this._cameraGizmoLivePrefs || this._getCameraGizmoPrefs()),
+        ...cameraGizmoPrefs,
+      };
+      this.applyCameraGizmoPrefs(cameraGizmoPrefs);
+    }
   }
 
   _debug(step, payload = {}) {
@@ -371,6 +396,16 @@ export class ViewportEngine {
         const w = Math.max(1, Math.floor(width));
         const h = Math.max(1, Math.floor(height));
         if (w > 1 && h > 1) this._handleResize(w, h);
+        // Also ensure the WebGPU helper overlay is built. `_buildViewHelper`
+        // is called above but a subsequent `cyco-renderer-changed` (which
+        // runs after init in some paths) disposes+rebuilds the helper and
+        // the overlay-creation step can run before the container is laid
+        // out — leaving the WebGPU gizmo un-overlaid. This re-creates the
+        // overlay only when missing, so it's idempotent.
+        const r = this.rendererManager?.renderer;
+        if (r?.isWebGPURenderer && this._cameraGizmoHelper && !this._helperOverlayCanvas) {
+          try { this._buildHelperOverlay(); } catch (_) { /* noop */ }
+        }
       });
     });
 
@@ -1490,11 +1525,29 @@ export class ViewportEngine {
     });
   }
 
-  _buildViewHelper() {
+  _buildViewHelper(prefsOverride) {
     this._disposeHelperOverlay();
+    // Dispose any prior wrapper.
+    if (this._cameraGizmoHelper) {
+      this._cameraGizmoHelper.dispose();
+      this._cameraGizmoHelper = null;
+    }
     const renderer = this.rendererManager.renderer;
     if (!renderer?.domElement || !this.camera) return;
-    this.viewHelper = new ViewHelper(this.camera, renderer.domElement);
+
+    // Prefs resolution order (later overrides earlier):
+    //   1. localStorage copy (committed prefs)
+    //   2. _cameraGizmoLivePrefs (in-progress edits that haven't been
+    //      committed yet — e.g. the user is dragging the opacity slider)
+    //   3. prefsOverride (the specific field being changed in *this* call,
+    //      so a live slider drag wins even when localStorage is stale)
+    const stored = this._getCameraGizmoPrefs();
+    const live   = this._cameraGizmoLivePrefs;
+    const prefs  = { ...stored, ...(live || {}), ...(prefsOverride || {}) };
+    this._cameraGizmoHelper = new CameraGizmoHelper(this.camera, renderer.domElement, prefs);
+    // Keep the legacy `this.viewHelper` reference so SelectionManager and
+    // any other consumer still see a non-null helper.
+    this.viewHelper = this._cameraGizmoHelper.viewHelper;
     if (renderer.isWebGPURenderer) this._buildHelperOverlay();
   }
 
@@ -1504,6 +1557,9 @@ export class ViewportEngine {
    * to a tiny overlay <canvas> using a secondary plain WebGLRenderer whose canvas
    * is absolutely positioned over the viewport container.  The secondary canvas has
    * alpha=true so transparent pixels show the main scene beneath it.
+   *
+   * Size + position honour the cameraGizmo prefs (size 48..256 px, any of the
+   * four corners).
    */
   _buildHelperOverlay() {
     const container = this._container;
@@ -1511,10 +1567,21 @@ export class ViewportEngine {
 
     if (getComputedStyle(container).position === 'static') container.style.position = 'relative';
 
-    const dim = 128;
+    const prefs = this._getCameraGizmoPrefs();
+    const dim = Math.max(48, Math.min(256, prefs.size || 128));
 
     // Let Three.js create and size the canvas — avoids setPixelRatio/setSize conflicts.
-    const helperRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
+    let helperRenderer;
+    try {
+      helperRenderer = new THREE.WebGLRenderer({ alpha: true, antialias: false });
+    } catch (err) {
+      // WebGLRenderer creation can fail if the browser hits the max-active-WebGL-context
+      // limit (typically 16). Without the overlay the gizmo would render to the main
+      // canvas in WebGPU mode and leave a black box, so swallow the error and bail
+      // gracefully — the user can reload to reclaim a context.
+      console.warn('[ViewportEngine] WebGLRenderer for helper overlay failed:', err.message);
+      return;
+    }
     helperRenderer.setPixelRatio(window.devicePixelRatio || 1);
     helperRenderer.setSize(dim, dim);
     helperRenderer.setClearColor(0x000000, 0);
@@ -1522,10 +1589,18 @@ export class ViewportEngine {
 
     const overlayCanvas = helperRenderer.domElement;
     Object.assign(overlayCanvas.style, {
-      position: 'absolute', bottom: '0', right: '0',
+      position: 'absolute',
       width: `${dim}px`, height: `${dim}px`,
       pointerEvents: 'none', zIndex: '10',
     });
+    // Apply position (bottom-right | bottom-left | top-right | top-left)
+    // through the helper so overlay + main-canvas helper stay in sync.
+    if (this._cameraGizmoHelper) {
+      this._cameraGizmoHelper.setRenderer?.(helperRenderer);
+      this._cameraGizmoHelper.repositionOverlay?.(overlayCanvas, container);
+    } else {
+      Object.assign(overlayCanvas.style, { bottom: '0', right: '0' });
+    }
     container.appendChild(overlayCanvas);
 
     this._helperOverlayRenderer = helperRenderer;
@@ -1537,6 +1612,79 @@ export class ViewportEngine {
     this._helperOverlayCanvas?.remove();
     this._helperOverlayRenderer = null;
     this._helperOverlayCanvas   = null;
+  }
+
+  /**
+   * Read the current cameraGizmo prefs (with sane defaults) so we can hand them
+   * to the wrapper at construction time. Called on every rebuild.
+   */
+  _getCameraGizmoPrefs() {
+    const def = {
+      size: 128, position: 'bottom-right', opacity: 1,
+      dimNegativeAxes: true,
+      colorX: '#ff4466', colorY: '#88ff44', colorZ: '#4488ff', colorNegative: '#000000',
+      letterColorX: '#ffffff', letterColorY: '#ffffff', letterColorZ: '#ffffff',
+      outlineEnabled: true, outlineColor: '#cccccc', outlineThickness: 2,
+      labelX: 'X', labelY: 'Y', labelZ: 'Z',
+      enableClickToAlign: true,
+    };
+    try {
+      const stored = loadPrefs()?.gizmo?.cameraGizmo;
+      if (stored && typeof stored === 'object') return { ...def, ...stored };
+    } catch (_) { /* noop */ }
+    return def;
+  }
+
+  /**
+   * Live-apply cameraGizmo prefs.
+   *
+   * Three categories of change:
+   *   1. Color fields (colorX/Y/Z/Negative) → full rebuild. The stock
+   *      three.js ViewHelper bakes the sprite disc colour into a
+   *      CanvasTexture that has no public rebuild path, so live-tinting
+   *      the discs requires disposing+recreating the wrapper.
+   *   2. Size / position → rebuild the WebGPU overlay <canvas> so its
+   *      backing WebGLRenderer is re-sized & re-anchored. The wrapper
+   *      itself is also re-created to pick up the new size cleanly.
+   *   3. Everything else (opacity, labels, dim, click-to-align) →
+   *      live-applied via `applyPrefs` with no rebuild.
+   *
+   * @param {object} prefs - The new cameraGizmo prefs (a partial is fine).
+   */
+  applyCameraGizmoPrefs(prefs) {
+    if (!prefs) return;
+    const hasColor = ('colorX' in prefs) || ('colorY' in prefs) ||
+                     ('colorZ' in prefs) || ('colorNegative' in prefs);
+    const hasSizeOrPos = ('size' in prefs) || ('position' in prefs);
+
+    if (hasColor || hasSizeOrPos) {
+      // Full rebuild — tear down the overlay + wrapper, then reconstruct
+      // with the new prefs. Pass the override through so the live update
+      // works even when the prefs haven't been committed to localStorage
+      // yet (i.e. the slider is still being dragged).
+      // Wrapped in try/catch so a single bad color string or out-of-range
+      // size doesn't take down the whole viewport render loop.
+      try {
+        this._buildViewHelper(prefs);
+      } catch (err) {
+        console.error('[ViewportEngine] applyCameraGizmoPrefs rebuild failed:', err);
+        // Restore the previous helper so the next frame still has something
+        // to render. A null/disposed helper is what causes the "viewport
+        // disappears" symptom the user reported.
+        if (!this._cameraGizmoHelper) {
+          try { this._buildViewHelper(); } catch (_) { /* give up */ }
+        }
+      }
+      return;
+    }
+
+    if (this._cameraGizmoHelper) {
+      try {
+        this._cameraGizmoHelper.applyPrefs(prefs);
+      } catch (err) {
+        console.error('[ViewportEngine] applyCameraGizmoPrefs live-update failed:', err);
+      }
+    }
   }
 
   _buildLoadingOverlay(container) {
@@ -1885,6 +2033,11 @@ export class ViewportEngine {
     // OrbitControls damping
     if (this.controls) this.controls.update();
 
+    // Camera gizmo per-frame animation (drives the click-to-align snap).
+    // Mirrors three.js's editor Viewport.js which calls viewHelper.update(delta)
+    // unconditionally and relies on `animating` to be a no-op when false.
+    if (this._cameraGizmoHelper) this._cameraGizmoHelper.update(delta);
+
     const renderer = this.rendererManager.renderer;
     if (!renderer || !this.scene || !this.camera) return;
 
@@ -2019,30 +2172,38 @@ export class ViewportEngine {
     // WebGLRenderer with alpha:true) — avoids the WebGPU output-blit overwriting
     // the main scene in the helper region.
     // In WebGL mode: render directly with autoClear=false so axes draw on top.
+    // Wrapped in try/catch so a transient helper error doesn't kill the
+    // main scene render (the "viewport disappears" symptom).
     if (this.viewHelper && renderer?.domElement instanceof HTMLCanvasElement) {
-      if (renderer.isWebGPURenderer && this._helperOverlayRenderer) {
-        // ── WebGPU: overlay canvas approach ──────────────────────────────────
-        const hr = this._helperOverlayRenderer;
-        hr.clear();                                // transparent-clear overlay
-        // Force location to (left=0, bottom=0) so the ViewHelper fills the
-        // 128×128 overlay canvas exactly, then restore after render.
-        const loc = this.viewHelper.location;
-        const savedLeft   = loc.left;
-        const savedBottom = loc.bottom;
-        const savedRight  = loc.right;
-        loc.left   = 0;
-        loc.bottom = 0;
-        loc.right  = null;
-        this.viewHelper.render(hr);
-        loc.left   = savedLeft;
-        loc.bottom = savedBottom;
-        loc.right  = savedRight;
-      } else {
-        // ── WebGL (or WebGPU overlay not ready): direct render ────────────────
-        renderer.autoClear = false;
-        this.viewHelper.render(renderer);
-        renderer.autoClear = true;
-        if (_D) window._cycoDbgCanvasWrites++;
+      try {
+        if (renderer.isWebGPURenderer && this._helperOverlayRenderer) {
+          // ── WebGPU: overlay canvas approach ──────────────────────────────────
+          const hr = this._helperOverlayRenderer;
+          hr.clear();                                // transparent-clear overlay
+          // Force location to (left=0, bottom=0) so the ViewHelper fills the
+          // overlay canvas exactly (the wrapper's setRenderer/repositionOverlay
+          // already set the overlay's CSS position to the user's chosen corner,
+          // so the helper just needs to know "render at viewport (0,0)").
+          const loc = this.viewHelper.location;
+          const savedLeft   = loc.left;
+          const savedBottom = loc.bottom;
+          const savedRight  = loc.right;
+          loc.left   = 0;
+          loc.bottom = 0;
+          loc.right  = null;
+          this.viewHelper.render(hr);
+          loc.left   = savedLeft;
+          loc.bottom = savedBottom;
+          loc.right  = savedRight;
+        } else {
+          // ── WebGL (or WebGPU overlay not ready): direct render ────────────────
+          renderer.autoClear = false;
+          this.viewHelper.render(renderer);
+          renderer.autoClear = true;
+          if (_D) window._cycoDbgCanvasWrites++;
+        }
+      } catch (err) {
+        if (_D) console.error('[ViewportEngine] ViewHelper render threw:', err);
       }
     }
 
@@ -2377,6 +2538,19 @@ export class ViewportEngine {
     if (this.controls) this.controls.dispose();
     this._buildControls();
     this._buildViewHelper();
+
+    // Defensive: ensure the WebGPU helper overlay canvas exists after a
+    // renderer swap. The renderer-changed path runs _disposeHelperOverlay
+    // then _buildViewHelper, which is supposed to recreate the overlay
+    // when isWebGPURenderer is true. If the container was not laid out at
+    // the moment the overlay was first appended, the rebuild runs into
+    // a 0×0 rect and the overlay silently fails. Re-attempting here
+    // (now that the new renderer has done at least one render) usually
+    // succeeds.
+    const r2 = this.rendererManager?.renderer;
+    if (r2?.isWebGPURenderer && this._cameraGizmoHelper && !this._helperOverlayCanvas) {
+      try { this._buildHelperOverlay(); } catch (_) { /* noop */ }
+    }
 
     // Rebuild sky/flare with new renderer (TSL mesh vs ShaderMaterial)
     // Physical sky uses TSL NodeMaterial — compatible with WebGL and WebGPU.

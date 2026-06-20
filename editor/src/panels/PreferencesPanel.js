@@ -79,6 +79,22 @@ export class PreferencesPanel extends BasePanel {
     }
   }
 
+  /**
+   * Make sure `this._prefs.gizmo.cameraGizmo` exists and has every field
+   * from the defaults. Called on tab build so older prefs files
+   * automatically pick up the new section.
+   */
+  _ensureCameraGizmoPrefs() {
+    const gizmo = this._prefs.gizmo;
+    if (!gizmo.cameraGizmo || typeof gizmo.cameraGizmo !== 'object') {
+      gizmo.cameraGizmo = JSON.parse(JSON.stringify(DEFAULT_PREFS.gizmo.cameraGizmo));
+    } else {
+      for (const [k, v] of Object.entries(DEFAULT_PREFS.gizmo.cameraGizmo)) {
+        if (gizmo.cameraGizmo[k] === undefined) gizmo.cameraGizmo[k] = v;
+      }
+    }
+  }
+
   _resetActiveTabDraft() {
     if (this._activeTab === 'grid') {
       this._gridProps?.resetToDefaults?.();
@@ -88,7 +104,20 @@ export class PreferencesPanel extends BasePanel {
     const defaults = this._getDefaultPrefsForTab(this._activeTab);
     if (defaults.keybindings) this._prefs.keybindings = defaults.keybindings;
     if (defaults.mouse) this._prefs.mouse = defaults.mouse;
-    if (defaults.gizmo) this._prefs.gizmo = defaults.gizmo;
+    if (defaults.gizmo) {
+      // Preserve user's per-tab drafts (cameraGizmo, box, bounds, ...) so
+      // resetting one gizmo tab doesn't blow away another tab's tuning.
+      const draft = JSON.parse(JSON.stringify(this._prefs.gizmo || {}));
+      this._prefs.gizmo = defaults.gizmo;
+      for (const k of Object.keys(draft)) {
+        if (this._prefs.gizmo[k] === undefined) this._prefs.gizmo[k] = draft[k];
+        else if (typeof draft[k] === 'object' && draft[k] !== null && !Array.isArray(draft[k])) {
+          for (const k2 of Object.keys(draft[k])) {
+            if (this._prefs.gizmo[k][k2] === undefined) this._prefs.gizmo[k][k2] = draft[k][k2];
+          }
+        }
+      }
+    }
     if (defaults.renderer) this._prefs.renderer = defaults.renderer;
     if (defaults.general) this._prefs.general = defaults.general;
     this._applyPrefsChange();
@@ -441,21 +470,25 @@ export class PreferencesPanel extends BasePanel {
     root.appendChild(hdr);
 
     const tabBar = document.createElement('div');
-    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
+    // Two-row flex grid so the smaller buttons fit cleanly inside the
+    // 490px-wide preferences window without horizontal scrolling.
+    tabBar.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:3px;padding:0;background:transparent;border:none;';
     this._gizmoTabBtns = {};
     const tabs = [
-      { id: 'move', label: 'Move' },
-      { id: 'scale', label: 'Scale' },
-      { id: 'rotate', label: 'Rotate' },
-      { id: 'box', label: 'Box Tool' },
-      { id: 'bounds', label: 'Outline' },
+      { id: 'move',     label: 'Move' },
+      { id: 'scale',    label: 'Scale' },
+      { id: 'rotate',   label: 'Rotate' },
+      { id: 'box',      label: 'Box' },
+      { id: 'bounds',   label: 'Outline' },
       { id: 'collider', label: 'Collider' },
+      { id: 'camera',   label: 'Camera' },
     ];
     for (const tab of tabs) {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
-      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:3px 2px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;line-height:1.1;min-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center;';
       btn.addEventListener('click', () => this._switchGizmoSubTab(tab.id));
+      btn.title = tab.label; // hover tooltip shows the full name
       tabBar.appendChild(btn);
       this._gizmoTabBtns[tab.id] = btn;
     }
@@ -486,6 +519,7 @@ export class PreferencesPanel extends BasePanel {
     else if (tabId === 'box') this._gizmoContentArea.appendChild(this._buildBoxToolTab());
     else if (tabId === 'bounds') this._gizmoContentArea.appendChild(this._buildBoundingBoxTab());
     else if (tabId === 'collider') this._gizmoContentArea.appendChild(this._buildColliderTab());
+    else if (tabId === 'camera') this._gizmoContentArea.appendChild(this._buildCameraGizmoTab());
   }
 
   _buildColliderTab() {
@@ -499,7 +533,7 @@ export class PreferencesPanel extends BasePanel {
     root.appendChild(hdr);
 
     const tabBar = document.createElement('div');
-    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
+    tabBar.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:0;background:transparent;border:none;';
     this._colliderTabBtns = {};
     const tabs = [
       { id: 'colliderBox', label: 'Collider' },
@@ -509,7 +543,7 @@ export class PreferencesPanel extends BasePanel {
     for (const tab of tabs) {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
-      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:3px 4px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;line-height:1.15;min-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
       btn.addEventListener('click', () => this._switchColliderSubTab(tab.id));
       tabBar.appendChild(btn);
       this._colliderTabBtns[tab.id] = btn;
@@ -778,6 +812,201 @@ export class PreferencesPanel extends BasePanel {
     return root;
   }
 
+  // ── Camera Gizmo tab ────────────────────────────────────────────────────────
+  /**
+   * Build the Camera Gizmo (Three.js ViewHelper) settings tab.
+   * Exposed controls:
+   *   • Size slider  — overlay/canvas dimension in pixels (32..256)
+   *   • Opacity slider — applied to all helper materials/sprites (0..1)
+   *   • Position select — bottom-right | bottom-left | top-right | top-left
+   *   • Axis colors — X, Y, Z (positive) and dimmed negative
+   *   • Letter colors — X, Y, Z (character glyph color inside the disc)
+   *   • Labels — X / Y / Z text (empty = no label like stock three.js)
+   *   • Negative-axis outline — color + thickness + on/off
+   *   • Click-to-align toggle — whether pointer clicks snap the camera
+   */
+  _buildCameraGizmoTab() {
+    this._ensureCameraGizmoPrefs();
+    const prefs = this._prefs.gizmo.cameraGizmo;
+    const defaults = DEFAULT_PREFS.gizmo.cameraGizmo;
+
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:10px;';
+
+    // Title only — no helper text (per user request).
+    const titleEl = document.createElement('div');
+    titleEl.innerHTML =
+      '<div style="font-size:13px;color:var(--text-primary,#e0e0e0);font-weight:600;margin-bottom:2px;">Camera Gizmo</div>';
+    root.appendChild(titleEl);
+
+    // ── Position select ─────────────────────────────────────────────────────
+    root.appendChild(this._makeSettingRow('Position', select({
+      options: [
+        ['bottom-right', 'Bottom Right'],
+        ['bottom-left',  'Bottom Left'],
+        ['top-right',    'Top Right'],
+        ['top-left',     'Top Left'],
+      ],
+      value: prefs.position ?? 'bottom-right',
+      onChange: (v) => {
+        this._prefs.gizmo.cameraGizmo.position = v;
+        this._applyPrefsChange();
+      },
+    })));
+
+    // ── Size slider ────────────────────────────────────────────────────────
+    root.appendChild(this._makeSliderRow(
+      'Size',
+      prefs.size ?? 128,
+      48, 256, 1,
+      (v) => { this._prefs.gizmo.cameraGizmo.size = v; this._applyPrefsChange(); },
+      '',
+      defaults.size,
+    ));
+
+    // ── Opacity slider ─────────────────────────────────────────────────────
+    root.appendChild(this._makeSliderRow(
+      'Opacity',
+      prefs.opacity ?? 1,
+      0, 1, 0.01,
+      (v) => { this._prefs.gizmo.cameraGizmo.opacity = v; this._applyPrefsChange(); },
+      '',
+      defaults.opacity,
+    ));
+
+    // ── Dim negative axes toggle ───────────────────────────────────────────
+    const dimCb = (() => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+      const lbl = document.createElement('span');
+      lbl.textContent = 'Dim Negative Axes';
+      lbl.style.cssText = 'font-size:12px;color:var(--ce-text-primary,#e0e0e0);';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = !!prefs.dimNegativeAxes;
+      cb.style.cursor = 'pointer';
+      cb.addEventListener('change', () => {
+        this._prefs.gizmo.cameraGizmo.dimNegativeAxes = cb.checked;
+        this._applyPrefsChange();
+      });
+      wrap.appendChild(lbl);
+      wrap.appendChild(cb);
+      return wrap;
+    })();
+    root.appendChild(dimCb);
+
+    // ── Click-to-align toggle ─────────────────────────────────────────────
+    const clickCb = (() => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;';
+      const lbl = document.createElement('span');
+      lbl.textContent = 'Click To Align Camera';
+      lbl.style.cssText = 'font-size:12px;color:var(--ce-text-primary,#e0e0e0);';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = prefs.enableClickToAlign !== false;
+      cb.style.cursor = 'pointer';
+      cb.addEventListener('change', () => {
+        this._prefs.gizmo.cameraGizmo.enableClickToAlign = cb.checked;
+        this._applyPrefsChange();
+      });
+      wrap.appendChild(lbl);
+      wrap.appendChild(cb);
+      return wrap;
+    })();
+    root.appendChild(clickCb);
+
+    // ── Axis colors ───────────────────────────────────────────────────────
+    root.appendChild(this._makeColorRow('X Color', prefs.colorX, (c) => {
+      this._prefs.gizmo.cameraGizmo.colorX = c;
+      this._applyPrefsChange();
+    }));
+    root.appendChild(this._makeColorRow('Y Color', prefs.colorY, (c) => {
+      this._prefs.gizmo.cameraGizmo.colorY = c;
+      this._applyPrefsChange();
+    }));
+    root.appendChild(this._makeColorRow('Z Color', prefs.colorZ, (c) => {
+      this._prefs.gizmo.cameraGizmo.colorZ = c;
+      this._applyPrefsChange();
+    }));
+
+    // ── Letter color + label text (single row per axis) ───────────────────
+    // Each label row bundles: text input + a color picker for the letter.
+    const makeLabelRow = (label, textKey, colorKey) => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'margin-bottom:10px;';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;';
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.cssText = 'flex:0 0 120px;font-size:12px;color:var(--text-primary,#e0e0e0);';
+      const inp = document.createElement('input');
+      inp.type = 'text';
+      inp.value = prefs[textKey] ?? '';
+      inp.maxLength = 3;
+      inp.placeholder = '(none)';
+      inp.style.cssText = 'flex:1;background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:4px 8px;border-radius:4px;font-size:12px;font-weight:600;';
+      inp.addEventListener('change', () => {
+        this._prefs.gizmo.cameraGizmo[textKey] = inp.value;
+        this._applyPrefsChange();
+      });
+      // Color picker for the letter glyph.
+      const sw = colorSwatch({ color: prefs[colorKey] ?? '#ffffff', onChange: (c) => {
+        this._prefs.gizmo.cameraGizmo[colorKey] = c;
+        this._applyPrefsChange();
+      }});
+      sw.el.style.width = '32px';
+      sw.el.style.height = '24px';
+      row.appendChild(lbl);
+      row.appendChild(inp);
+      row.appendChild(sw.el);
+      wrap.appendChild(row);
+      // Note removed per user request.
+      return wrap;
+    };
+    root.appendChild(makeLabelRow('X Label', 'labelX', 'letterColorX'));
+    root.appendChild(makeLabelRow('Y Label', 'labelY', 'letterColorY'));
+    root.appendChild(makeLabelRow('Z Label', 'labelZ', 'letterColorZ'));
+
+    // ── Negative-axis outline (slider + color + enabled toggle) ───────────
+    const outlineWrap = document.createElement('div');
+    outlineWrap.style.cssText = 'display:flex;flex-direction:column;gap:6px;margin-top:6px;padding:8px;background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);border-radius:6px;';
+    const outlineHdr = document.createElement('div');
+    outlineHdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;';
+    const outlineTitle = document.createElement('span');
+    outlineTitle.textContent = 'Negative Axis Outline';
+    outlineTitle.style.cssText = 'font-size:12px;color:var(--text-primary,#e0e0e0);font-weight:600;';
+    const outlineCb = document.createElement('input');
+    outlineCb.type = 'checkbox';
+    outlineCb.checked = prefs.outlineEnabled !== false;
+    outlineCb.style.cursor = 'pointer';
+    outlineCb.addEventListener('change', () => {
+      this._prefs.gizmo.cameraGizmo.outlineEnabled = outlineCb.checked;
+      this._applyPrefsChange();
+    });
+    outlineHdr.appendChild(outlineTitle);
+    outlineHdr.appendChild(outlineCb);
+    outlineWrap.appendChild(outlineHdr);
+
+    // Thickness slider (1..8 px on the 64x64 sprite canvas).
+    outlineWrap.appendChild(this._makeSliderRow(
+      'Thickness',
+      prefs.outlineThickness ?? 2,
+      1, 8, 1,
+      (v) => { this._prefs.gizmo.cameraGizmo.outlineThickness = v; this._applyPrefsChange(); },
+      '',
+      defaults.outlineThickness,
+    ));
+    // Outline color.
+    outlineWrap.appendChild(this._makeColorRow('Outline Color', prefs.outlineColor, (c) => {
+      this._prefs.gizmo.cameraGizmo.outlineColor = c;
+      this._applyPrefsChange();
+    }));
+    root.appendChild(outlineWrap);
+
+    return root;
+  }
+
   _buildBoundingBoxTab(key = 'bounds') {
     // The regular 'bounds' selection outline is split into two sub-tabs:
     //   • Single Select — the primary (most-recently-selected) outline.
@@ -844,7 +1073,7 @@ export class PreferencesPanel extends BasePanel {
 
     // Sub-tab bar.
     const tabBar = document.createElement('div');
-    tabBar.style.cssText = 'display:flex;gap:6px;flex-wrap:nowrap;padding:0;background:transparent;border:none;overflow-x:auto;';
+    tabBar.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:4px;padding:0;background:transparent;border:none;';
     this._outlineTabBtns = {};
     // Three independent control sets so the user can tune each scenario
     // separately without one bleeding into the other.
@@ -856,7 +1085,7 @@ export class PreferencesPanel extends BasePanel {
     for (const tab of tabs) {
       const btn = document.createElement('button');
       btn.textContent = tab.label;
-      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:5px 10px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;';
+      btn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);color:var(--ce-accent-orange,#e07228);padding:3px 4px;border-radius:4px;cursor:pointer;font-size:10px;font-weight:600;line-height:1.15;min-height:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
       btn.addEventListener('click', () => this._switchOutlineSubTab(tab.id));
       tabBar.appendChild(btn);
       this._outlineTabBtns[tab.id] = btn;
