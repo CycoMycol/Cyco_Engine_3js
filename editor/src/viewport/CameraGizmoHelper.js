@@ -159,10 +159,32 @@ export class CameraGizmoHelper {
 
     // Click handler — installed on a per-instance basis so the stock helper
     // stays untouched and can keep being used elsewhere.
+    //
+    // BUGFIX: The previous version only listened to pointerdown + pointerup.
+    // If the user click-and-dragged a marquee starting outside the gizmo
+    // rect and released on top of it, `_onPointerUp` would call
+    // `handleClick` anyway and snap the camera. The same happened when
+    // dragging an object across the gizmo area. The fix tracks whether
+    // the press STARTED on the gizmo AND whether the pointer moved past
+    // the drag threshold (5px, matching SelectionManager). Only a true
+    // press-on-gizmo + release-on-gizmo with no drag runs handleClick.
     this._onPointerUp = this._onPointerUp.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
+    this._onPointerMove = this._onPointerMove.bind(this);
+    this._onPointerCancel = this._onPointerCancel.bind(this);
     domElement.addEventListener('pointerup',   this._onPointerUp);
     domElement.addEventListener('pointerdown', this._onPointerDown);
+    domElement.addEventListener('pointermove', this._onPointerMove);
+    domElement.addEventListener('pointercancel', this._onPointerCancel);
+
+    /** Pixel distance that promotes a press into a drag (matches SelectionManager). */
+    this._dragThreshold = 5;
+    /** Set on pointerdown if the press originated over the gizmo rect. */
+    this._pressOnGizmo = false;
+    /** Set on pointermove if the pointer drifts past `_dragThreshold`. */
+    this._pressIsDrag  = false;
+    /** {x,y} of the pointerdown, used for drag-distance computation. */
+    this._pressOrigin  = null;
   }
 
   // ── Public API (mirrors what ViewportEngine currently calls on the raw helper) ──
@@ -310,6 +332,8 @@ export class CameraGizmoHelper {
     if (this._domElement) {
       this._domElement.removeEventListener('pointerup',   this._onPointerUp);
       this._domElement.removeEventListener('pointerdown', this._onPointerDown);
+      this._domElement.removeEventListener('pointermove', this._onPointerMove);
+      this._domElement.removeEventListener('pointercancel', this._onPointerCancel);
     }
     try { this._helper.dispose(); } catch (_) { /* noop */ }
     this._domElement = null;
@@ -322,15 +346,63 @@ export class CameraGizmoHelper {
   _onPointerDown(event) {
     // Swallow the pointerdown so OrbitControls / marquee don't try to
     // start a drag in the same frame the user is clicking the gizmo.
-    if (!this._prefs.enableClickToAlign) return;
-    if (this._eventOverGizmo(event)) {
+    if (!this._prefs.enableClickToAlign) {
+      this._pressOnGizmo = false;
+      this._pressIsDrag  = false;
+      this._pressOrigin  = null;
+      return;
+    }
+    const overGizmo = this._eventOverGizmo(event);
+    this._pressOnGizmo = overGizmo;
+    this._pressIsDrag  = false;
+    this._pressOrigin  = { x: event.clientX, y: event.clientY };
+    if (overGizmo) {
       event.stopPropagation();
       if (typeof event.stopImmediatePropagation === 'function') event.stopImmediatePropagation();
     }
   }
 
+  _onPointerMove(event) {
+    // Promote the press to a drag if the pointer drifts past the threshold.
+    // Once it does, the press no longer qualifies as a "click" — `handleClick`
+    // would snap the camera on a drag-release, which is exactly the bug we
+    // are guarding against. We intentionally do NOT swallow the move event
+    // here: OrbitControls / marquee / TransformGizmo should still receive it.
+    if (!this._pressOrigin || this._pressIsDrag) return;
+    const dx = event.clientX - this._pressOrigin.x;
+    const dy = event.clientY - this._pressOrigin.y;
+    if (Math.hypot(dx, dy) > this._dragThreshold) {
+      this._pressIsDrag = true;
+    }
+  }
+
+  _onPointerCancel(_event) {
+    // pointercancel means the browser aborted the press (e.g. a system
+    // gesture took over). Clear per-press state so the next pointerdown
+    // starts fresh and the previous press cannot be misread as a click.
+    this._pressOnGizmo = false;
+    this._pressIsDrag  = false;
+    this._pressOrigin  = null;
+  }
+
   _onPointerUp(event) {
     if (!this._prefs.enableClickToAlign) return;
+    // Only treat the release as a click if BOTH conditions hold:
+    //   • the press started over the gizmo rect (`_pressOnGizmo`)
+    //   • the pointer never drifted past the drag threshold (`!_pressIsDrag`)
+    //   • the release is still over the gizmo rect (`_eventOverGizmo`)
+    // This prevents a marquee drag that starts outside and ends on the gizmo
+    // from accidentally snapping the camera, and prevents an object-drag that
+    // crosses the gizmo rect on release from doing the same.
+    const releaseOverGizmo = this._eventOverGizmo(event);
+    const isClick = this._pressOnGizmo && !this._pressIsDrag && releaseOverGizmo;
+
+    // Reset per-press state regardless of outcome.
+    this._pressOnGizmo = false;
+    this._pressIsDrag  = false;
+    this._pressOrigin  = null;
+
+    if (!isClick) return;
     // Let three.js's ViewHelper translate the screen-space click into an
     // axis hit. If it hit a handle, handleClick() sets `animating = true`
     // and the per-frame `update(delta)` call in the render loop drives
