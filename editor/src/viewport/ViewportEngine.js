@@ -141,6 +141,7 @@ export class ViewportEngine {
     this._onLoadingDone         = this._onLoadingDone.bind(this);
     this._onLoadingError        = this._onLoadingError.bind(this);
     this._onPrefsChange         = this._onPrefsChange.bind(this);
+    this._onCameraReset         = this._onCameraReset.bind(this);
 
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
     window.addEventListener('cyco-rvp-focus',               this._onFocus);
@@ -164,6 +165,7 @@ export class ViewportEngine {
     window.addEventListener('cyco-loading-error',           this._onLoadingError);
     window.addEventListener('cyco-preferences-change',      this._onPrefsChange);
     window.addEventListener('cyco-preferences-preview',     this._onPrefsChange);
+    window.addEventListener('cyco-camera-reset',            this._onCameraReset);
   }
 
   /**
@@ -232,6 +234,65 @@ export class ViewportEngine {
       };
       this.applyCameraGizmoPrefs(cameraGizmoPrefs);
     }
+    // Live-apply main viewport camera prefs (FOV / near / far). Position
+    // and look-at are NOT applied automatically — those would yank the
+    // camera out from under the user mid-orbit. The "Reset Camera Now"
+    // button (or `cyco-camera-reset`) snaps position/look-at explicitly.
+    const cameraPrefs = event?.detail?.prefs?.camera;
+    if (cameraPrefs) {
+      this._applyCameraProjectionPrefs(cameraPrefs);
+    }
+  }
+
+  /** Apply only the projection-plane camera prefs (FOV, near, far) live. */
+  _applyCameraProjectionPrefs(cameraPrefs) {
+    const cam = this.camera;
+    if (!cam) return;
+    let dirty = false;
+    if (cam.isPerspectiveCamera && Number.isFinite(cameraPrefs.fov)) {
+      const fov = Math.min(179, Math.max(1, Number(cameraPrefs.fov)));
+      if (Math.abs(cam.fov - fov) > 1e-4) { cam.fov = fov; dirty = true; }
+    }
+    if (Number.isFinite(cameraPrefs.near)) {
+      const near = Math.max(0.0001, Number(cameraPrefs.near));
+      if (Math.abs(cam.near - near) > 1e-6) { cam.near = near; dirty = true; }
+    }
+    if (Number.isFinite(cameraPrefs.far)) {
+      const far = Math.max(1, Number(cameraPrefs.far));
+      if (Math.abs(cam.far - far) > 1e-6) { cam.far = far; dirty = true; }
+    }
+    if (dirty) cam.updateProjectionMatrix?.();
+  }
+
+  /** Snap the live editor camera back to a fresh state matching the prefs. */
+  resetCameraToPrefs(cameraPrefs) {
+    const cam = this.camera;
+    if (!cam) return;
+    const px = Number(cameraPrefs?.positionX ?? 0);
+    const py = Number(cameraPrefs?.positionY ?? 300);
+    const pz = Number(cameraPrefs?.positionZ ?? 500);
+    const lx = Number(cameraPrefs?.lookAtX ?? 0);
+    const ly = Number(cameraPrefs?.lookAtY ?? 0);
+    const lz = Number(cameraPrefs?.lookAtZ ?? 0);
+    cam.position.set(px, py, pz);
+    cam.lookAt(lx, ly, lz);
+    if (this.controls?.target) this.controls.target.set(lx, ly, lz);
+    this._applyCameraProjectionPrefs(cameraPrefs);
+    this._debug('camera:reset', { position: { x: px, y: py, z: pz }, lookAt: { x: lx, y: ly, z: lz } });
+  }
+
+  /** Event handler — fired by the Preferences "Reset Camera Now" button. */
+  _onCameraReset(event) {
+    const prefs = event?.detail?.prefs ?? this._getCameraPrefs?.();
+    if (prefs) this.resetCameraToPrefs(prefs);
+  }
+
+  /** Read the latest camera prefs from localStorage. */
+  _getCameraPrefs() {
+    try {
+      const raw = JSON.parse(localStorage.getItem('cyco-prefs') || '{}');
+      return raw?.camera ?? null;
+    } catch { return null; }
   }
 
   _debug(step, payload = {}) {

@@ -203,6 +203,31 @@ export const DEFAULT_PREFS = {
   viewport: {
     backgroundColor: '#1a1a1a',
   },
+  // Main editor viewport camera defaults — applied whenever a new scene
+  // is built or when the user clicks "Reset Camera" inside the viewport.
+  // Also serves as the default for new project cameras. Units are cm
+  // (1 unit = 1 cm, Unreal Engine convention) unless noted.
+  camera: {
+    // Perspective FOV in degrees (vertical). Stock default is 90°.
+    fov: 90,
+    // Near / far clip planes (cm).
+    near: 10,
+    far:  1000000,
+    // Initial transform when the editor viewport first opens.
+    positionX:    0,
+    positionY:    300,
+    positionZ:    500,
+    lookAtX:      0,
+    lookAtY:      0,
+    lookAtZ:      0,
+    // Camera type used when creating new project cameras.
+    defaultType: 'perspective', // 'perspective' | 'orthographic'
+    // Orthographic frustum extents (cm, half-extents).
+    orthoLeft:   -500,
+    orthoRight:   500,
+    orthoTop:     500,
+    orthoBottom: -500,
+  },
   mouse: {
     // What each mouse button does in the viewport when clicking on empty space.
     //  - 'select'  : click an object to select it; click empty space for marquee

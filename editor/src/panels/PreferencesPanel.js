@@ -8,14 +8,15 @@
  *  2. Mouse     — left/right/middle/wheel actions
  *  3. Gizmo     — size, axis colors
  *  4. Grid      — reuses GridProperties component
- *  5. Renderer  — startup renderer, shadow map, pixel ratio
- *  6. General   — auto-save, welcome screen
+ *  5. Camera    — main viewport camera defaults (FOV, near/far, position, look-at)
+ *  6. Renderer  — startup renderer, shadow map, pixel ratio
+ *  7. General   — auto-save, welcome screen
  */
 
 import { BasePanel } from './BasePanel.js';
 import { loadPrefs, savePrefs, saveDefaultPrefs, DEFAULT_PREFS, DEFAULT_KEYS } from '../ui/PreferencesWindow.js';
 import { GridProperties } from '../properties/GridProperties.js';
-import { select, slider, colorSwatch, row } from '../properties/propUtils.js';
+import { select, slider, colorSwatch, row, numInput } from '../properties/propUtils.js';
 
 export class PreferencesPanel extends BasePanel {
   constructor() {
@@ -72,6 +73,8 @@ export class PreferencesPanel extends BasePanel {
         return { gizmo: this._clonePrefs(DEFAULT_PREFS.gizmo) };
       case 'renderer':
         return { renderer: this._clonePrefs(DEFAULT_PREFS.renderer) };
+      case 'camera':
+        return { camera: this._clonePrefs(DEFAULT_PREFS.camera) };
       case 'general':
         return { general: this._clonePrefs(DEFAULT_PREFS.general) };
       default:
@@ -119,6 +122,7 @@ export class PreferencesPanel extends BasePanel {
       }
     }
     if (defaults.renderer) this._prefs.renderer = defaults.renderer;
+    if (defaults.camera) this._prefs.camera = defaults.camera;
     if (defaults.general) this._prefs.general = defaults.general;
     this._applyPrefsChange();
     this._switchTab(this._activeTab);
@@ -175,6 +179,7 @@ export class PreferencesPanel extends BasePanel {
       { id: 'mouse',       label: 'Mouse' },
       { id: 'gizmo',       label: 'Gizmo' },
       { id: 'grid',        label: 'Grid' },
+      { id: 'camera',      label: 'Camera' },
       { id: 'renderer',    label: 'Renderer' },
       { id: 'general',     label: 'General' },
     ];
@@ -257,6 +262,7 @@ export class PreferencesPanel extends BasePanel {
       case 'mouse':       this._contentArea.appendChild(this._buildMouseTab());       break;
       case 'gizmo':       this._contentArea.appendChild(this._buildGizmoTab());       break;
       case 'grid':        this._buildGridTab(this._contentArea);                      break;
+      case 'camera':      this._contentArea.appendChild(this._buildCameraTab());      break;
       case 'renderer':    this._contentArea.appendChild(this._buildRendererTab());    break;
       case 'general':     this._contentArea.appendChild(this._buildGeneralTab());     break;
     }
@@ -1244,6 +1250,176 @@ export class PreferencesPanel extends BasePanel {
   _buildGridTab(content) {
     if (!this._gridProps) this._gridProps = new GridProperties({ commit: false });
     content.appendChild(this._gridProps.element);
+  }
+
+  // ── Camera defaults tab ──────────────────────────────────────────────────────
+  /**
+   * Main viewport camera defaults. Editing a value here immediately fires
+   * `cyco-preferences-preview`, so the viewport engine re-applies the new
+   * FOV / near / far / position on the live editor camera. "Reset" restores
+   * the values from `DEFAULT_PREFS.camera`, "Make Default" persists them
+   * to localStorage, and "Do It" commits them as the current session prefs
+   * and closes the panel (handled by the panel-level buttons).
+   */
+  _ensureCameraPrefs() {
+    if (!this._prefs.camera || typeof this._prefs.camera !== 'object') {
+      this._prefs.camera = JSON.parse(JSON.stringify(DEFAULT_PREFS.camera));
+      return;
+    }
+    for (const [k, v] of Object.entries(DEFAULT_PREFS.camera)) {
+      if (this._prefs.camera[k] === undefined) this._prefs.camera[k] = v;
+    }
+  }
+
+  _buildCameraTab() {
+    this._ensureCameraPrefs();
+    const prefs = this._prefs.camera;
+    const defaults = DEFAULT_PREFS.camera;
+
+    const root = document.createElement('div');
+    root.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+
+    const hdr = document.createElement('div');
+    hdr.innerHTML =
+      '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Camera</h3>' +
+      '<div style="font-size:11px;color:var(--text-secondary,#888);line-height:1.4;">Default settings for the main editor viewport camera. ' +
+      'Changes apply live — the viewport camera updates immediately as you drag a slider.</div>';
+    root.appendChild(hdr);
+
+    // ── Camera Type ─────────────────────────────────────────────────────────
+    root.appendChild(this._makeSettingRow('Camera Type', select({
+      options: [
+        ['perspective',  'Perspective'],
+        ['orthographic', 'Orthographic'],
+      ],
+      value: prefs.defaultType ?? 'perspective',
+      onChange: (v) => {
+        this._prefs.camera.defaultType = v;
+        this._applyPrefsChange();
+      },
+    }), 'Default camera type for newly created project cameras.'));
+
+    // ── Perspective: FOV ────────────────────────────────────────────────────
+    root.appendChild(this._makeSliderRow(
+      'FOV (°)',
+      prefs.fov ?? 90,
+      1, 179, 1,
+      (v) => {
+        this._prefs.camera.fov = v;
+        this._applyPrefsChange();
+      },
+      'Vertical field of view in degrees.',
+      defaults.fov,
+    ));
+
+    // ── Near / Far ──────────────────────────────────────────────────────────
+    root.appendChild(this._makeSettingRow(
+      'Near (cm)',
+      numInput({
+        value: prefs.near ?? 10, step: 0.1, min: 0.0001, max: 10000, decimals: 4,
+        onChange: (v) => {
+          this._prefs.camera.near = Math.max(0.0001, v);
+          this._applyPrefsChange();
+        },
+      }),
+      'Camera near clip plane in centimetres.',
+    ));
+
+    root.appendChild(this._makeSettingRow(
+      'Far (cm)',
+      numInput({
+        value: prefs.far ?? 1000000, step: 100, min: 1, max: 10000000, decimals: 1,
+        onChange: (v) => {
+          this._prefs.camera.far = v;
+          this._applyPrefsChange();
+        },
+      }),
+      'Camera far clip plane in centimetres.',
+    ));
+
+    // ── Initial Position (X/Y/Z) ───────────────────────────────────────────
+    const makeVec3Row = (label, keyX, keyY, keyZ, note) => {
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'margin-bottom:10px;';
+      const topRow = document.createElement('div');
+      topRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:4px;';
+      const lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.cssText = 'flex:0 0 120px;font-size:12px;color:var(--text-primary,#e0e0e0);';
+      topRow.appendChild(lbl);
+
+      const xyz = [keyX, keyY, keyZ].map((k) => numInput({
+        value: prefs[k] ?? 0, step: 10, decimals: 2,
+        onChange: (v) => {
+          this._prefs.camera[k] = v;
+          this._applyPrefsChange();
+        },
+      }));
+      xyz.forEach((el) => {
+        const span = document.createElement('span');
+        span.style.cssText = 'flex:1;display:flex;align-items:center;gap:4px;';
+        span.appendChild(el);
+        topRow.appendChild(span);
+      });
+      wrap.appendChild(topRow);
+      if (note) {
+        const helper = document.createElement('div');
+        helper.textContent = note;
+        helper.style.cssText = 'font-size:11px;color:var(--text-secondary,#888);line-height:1.3;';
+        wrap.appendChild(helper);
+      }
+      return wrap;
+    };
+    root.appendChild(makeVec3Row('Position (cm)', 'positionX', 'positionY', 'positionZ',
+      'Initial world-space position for the editor viewport camera. 1 unit = 1 cm.'));
+    root.appendChild(makeVec3Row('Look At (cm)', 'lookAtX', 'lookAtY', 'lookAtZ',
+      'Initial look-at target for the editor viewport camera.'));
+
+    // ── Orthographic frustum ────────────────────────────────────────────────
+    const orthoHdr = document.createElement('div');
+    orthoHdr.style.cssText = 'font-size:12px;color:var(--text-secondary,#aaa);font-weight:600;margin-top:8px;';
+    orthoHdr.textContent = 'Orthographic Frustum (cm)';
+    root.appendChild(orthoHdr);
+
+    const makeHalfRow = (label, key, note) => {
+      root.appendChild(this._makeSettingRow(
+        label,
+        numInput({
+          value: prefs[key] ?? 0, step: 10, decimals: 2,
+          onChange: (v) => {
+            this._prefs.camera[key] = v;
+            this._applyPrefsChange();
+          },
+        }),
+        note,
+      ));
+    };
+    makeHalfRow('Left',   'orthoLeft',   'Left half-extent (negative X) of the orthographic frustum.');
+    makeHalfRow('Right',  'orthoRight',  'Right half-extent (positive X) of the orthographic frustum.');
+    makeHalfRow('Top',    'orthoTop',    'Top half-extent (positive Y) of the orthographic frustum.');
+    makeHalfRow('Bottom', 'orthoBottom', 'Bottom half-extent (negative Y) of the orthographic frustum.');
+
+    // ── Reset Camera button (in-tab convenience) ───────────────────────────
+    const resetWrap = document.createElement('div');
+    resetWrap.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
+    const resetCamBtn = document.createElement('button');
+    resetCamBtn.textContent = 'Reset Camera Now';
+    resetCamBtn.title = 'Snap the live viewport camera back to the values shown above.';
+    resetCamBtn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);' +
+      'color:var(--ce-accent-orange,#e07228);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;';
+    resetCamBtn.addEventListener('click', () => {
+      // Push the same payload used by the live-preview path.
+      this._applyPrefsChange();
+      // Also dispatch an explicit "reset camera" event so the viewport
+      // snaps immediately even if the user hasn't changed anything yet.
+      window.dispatchEvent(new CustomEvent('cyco-camera-reset', {
+        detail: { prefs: this._prefs.camera }
+      }));
+    });
+    resetWrap.appendChild(resetCamBtn);
+    root.appendChild(resetWrap);
+
+    return root;
   }
 
   // ── Renderer defaults tab ────────────────────────────────────────────────────
