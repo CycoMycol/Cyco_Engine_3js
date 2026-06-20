@@ -58,6 +58,35 @@ function _loadDefaultBackgroundColor() {
   return '#1a1a1a';
 }
 
+/**
+ * Resolve camera defaults from `cyco-prefs` (which already merges
+ * `cyco-prefs-defaults` via `loadPrefs()`). Returns a flat prefs-shaped
+ * object so it can be fed straight to `resetCameraToPrefs()` and the
+ * `_buildScene` constructor. Falls back to UE-cm stock defaults
+ * (FOV 90°, 10 → 1 000 000 cm, position (0,300,500), look-at origin).
+ */
+function _loadDefaultCamera() {
+  const prefs = loadPrefs();
+  const c = prefs?.camera ?? {};
+  const num = (v, fallback) => (Number.isFinite(Number(v)) ? Number(v) : fallback);
+  return {
+    type:        c.defaultType === 'orthographic' ? 'orthographic' : 'perspective',
+    fov:         num(c.fov,        90),
+    near:        num(c.near,       10),
+    far:         num(c.far,        1000000),
+    positionX:   num(c.positionX,  0),
+    positionY:   num(c.positionY,  300),
+    positionZ:   num(c.positionZ,  500),
+    lookAtX:     num(c.lookAtX,    0),
+    lookAtY:     num(c.lookAtY,    0),
+    lookAtZ:     num(c.lookAtZ,    0),
+    orthoLeft:   num(c.orthoLeft,  -500),
+    orthoRight:  num(c.orthoRight,  500),
+    orthoTop:    num(c.orthoTop,    500),
+    orthoBottom: num(c.orthoBottom,-500),
+  };
+}
+
 export class ViewportEngine {
   /**
    * @param {import('./RendererManager.js').RendererManager} rendererManager
@@ -510,6 +539,10 @@ export class ViewportEngine {
   /** Called after a scene JSON load replaces the active graph in place. */
   _onSceneLoaded() {
     this._restoreSceneDecorations();
+    // Re-apply any camera prefs that the user changed since the last
+    // scene build — Make Default / Reset in the Preferences Camera tab
+    // should take effect on the next scene load.
+    if (this.camera) this.resetCameraToPrefs?.(_loadDefaultCamera());
   }
 
   _restoreSceneDecorations() {
@@ -1298,11 +1331,26 @@ export class ViewportEngine {
     this._envBackgroundEnabled = this.scene.background instanceof THREE.Texture;
 
     // Default camera — front-facing by default with Unreal Engine conventions:
-    // 1 unit = 1 cm, FOV 90°, near 10 cm, far 1 000 000 cm (10 km).
-    this.camera = new THREE.PerspectiveCamera(90, w / h, 10, 1000000);
-    this.camera.position.set(0, 300, 500);
-    this.camera.lookAt(0, 0, 0);
-    this._debug('buildScene:camera-created', this._cameraSummary());
+    // 1 unit = 1 cm. FOV / near / far / position / look-at / type are
+    // resolved from `cyco-prefs` (which itself merges `cyco-prefs-defaults`),
+    // so a user who pressed "Make Default" inside Preferences gets those
+    // values on every page load.
+    const camDefaults = _loadDefaultCamera();
+    if (camDefaults.type === 'orthographic') {
+      const aspect = w / h;
+      const halfH  = Math.max(camDefaults.orthoTop, -camDefaults.orthoBottom);
+      const halfW  = halfH * aspect;
+      this.camera = new THREE.OrthographicCamera(
+        -halfW, halfW, halfH, -halfH,
+        camDefaults.near, camDefaults.far,
+      );
+    } else {
+      this.camera = new THREE.PerspectiveCamera(camDefaults.fov, w / h, camDefaults.near, camDefaults.far);
+    }
+    this.camera.position.set(camDefaults.positionX, camDefaults.positionY, camDefaults.positionZ);
+    this.camera.lookAt(camDefaults.lookAtX, camDefaults.lookAtY, camDefaults.lookAtZ);
+    if (this.controls?.target) this.controls.target.set(camDefaults.lookAtX, camDefaults.lookAtY, camDefaults.lookAtZ);
+    this._debug('buildScene:camera-created', { ...this._cameraSummary(), fromPrefs: camDefaults });
 
     // Non-hierarchy lights (not shown in scene tree)
     this._ambientLight = new THREE.AmbientLight(0xffffff, 0.3);
@@ -1554,6 +1602,13 @@ export class ViewportEngine {
     // rotation becomes degenerate and the orbit appears completely frozen.
     this.controls.minPolarAngle   = 0.01;             // ~0.57° from top
     this.controls.maxPolarAngle   = Math.PI - 0.01;  // ~178.9° — never south pole
+    // Sync orbit target to the saved camera look-at — otherwise orbiting
+    // will spin around (0,0,0) instead of the configured focus point.
+    const camDefaults = _loadDefaultCamera();
+    if (this.controls.target && Number.isFinite(camDefaults.lookAtX)) {
+      this.controls.target.set(camDefaults.lookAtX, camDefaults.lookAtY, camDefaults.lookAtZ);
+      this.controls.update();
+    }
     this._applyMouseButtonPrefs();
     this.controls.touches = {
       ONE: THREE.TOUCH.ROTATE,

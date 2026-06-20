@@ -16,6 +16,7 @@
 import { BasePanel } from './BasePanel.js';
 import { loadPrefs, savePrefs, saveDefaultPrefs, DEFAULT_PREFS, DEFAULT_KEYS } from '../ui/PreferencesWindow.js';
 import { GridProperties } from '../properties/GridProperties.js';
+import { CameraProperties } from '../properties/CameraProperties.js';
 import { select, slider, colorSwatch, row, numInput } from '../properties/propUtils.js';
 
 export class PreferencesPanel extends BasePanel {
@@ -31,6 +32,7 @@ export class PreferencesPanel extends BasePanel {
     this._outlineActiveTab = 'firstSelected';
     this._outlineTabBtns   = {};
     this._gridProps   = null;
+    this._cameraProps = null;
     this._contentArea = null;
     this._committed   = false;
   }
@@ -125,11 +127,22 @@ export class PreferencesPanel extends BasePanel {
     if (defaults.camera) this._prefs.camera = defaults.camera;
     if (defaults.general) this._prefs.general = defaults.general;
     this._applyPrefsChange();
+    // If the Camera tab is active, snap the live editor camera back to
+    // the freshly-reset defaults — Reset has to undo in-panel changes
+    // that CameraProperties wrote to the live camera object.
+    if (this._activeTab === 'camera') {
+      const vp = window.__cyco?.viewportEngine;
+      vp?.resetCameraToPrefs?.(this._prefs.camera);
+    }
     this._switchTab(this._activeTab);
   }
 
   _commitDraftPrefs({ makeDefault = false } = {}) {
     if (this._gridProps?.commit) this._gridProps.commit();
+    // Make sure the latest live-camera values are mirrored into the
+    // camera prefs block before we persist — the cyco-vp-tick mirror
+    // may not have fired since the user's last edit.
+    if (this._activeTab === 'camera') this._snapshotLiveCameraToPrefs();
     this._committed = true;
     savePrefs(this._prefs);
     if (makeDefault) saveDefaultPrefs(this._prefs);
@@ -248,6 +261,9 @@ export class PreferencesPanel extends BasePanel {
 
   _switchTab(tabId) {
     this._activeTab = tabId;
+    // Leave Camera tab → dispose the embedded CameraProperties so its
+    // listeners (cyco-vp-tick, cyco-editor-camera-changed) don't leak.
+    if (tabId !== 'camera') this._disposeCameraProps();
     for (const [id, btn] of Object.entries(this._tabBtns)) {
       const active = id === tabId;
       btn.style.color           = 'var(--ce-accent-orange,#e07228)';
@@ -1254,13 +1270,30 @@ export class PreferencesPanel extends BasePanel {
 
   // ── Camera defaults tab ──────────────────────────────────────────────────────
   /**
-   * Main viewport camera defaults. Editing a value here immediately fires
-   * `cyco-preferences-preview`, so the viewport engine re-applies the new
-   * FOV / near / far / position on the live editor camera. "Reset" restores
-   * the values from `DEFAULT_PREFS.camera`, "Make Default" persists them
-   * to localStorage, and "Do It" commits them as the current session prefs
-   * and closes the panel (handled by the panel-level buttons).
+   * Embed the exact same CameraProperties panel that the "Main Camera"
+   * button on the right-viewport toolbar uses — same sections (Transform,
+   * Camera, Lens, Zoom Presets), same controls, same colors, same
+   * perspective ↔ orthographic switcher. Changes are written to the live
+   * editor camera immediately because CameraProperties mutates the
+   * THREE.Camera object directly.
+   *
+   * To make Reset / Make Default / Do It work on this tab, we mirror the
+   * live camera state into `this._prefs.camera` every viewport tick while
+   * the tab is active. The existing panel-level handlers then persist /
+   * reset those prefs exactly the same way they do for any other tab.
    */
+  _disposeCameraProps() {
+    if (this._cameraTickHandler) {
+      window.removeEventListener('cyco-vp-tick', this._cameraTickHandler);
+      this._cameraTickHandler = null;
+    }
+    if (this._cameraProps?.dispose) {
+      try { this._cameraProps.dispose(); } catch (_) {}
+    }
+    this._cameraProps = null;
+  }
+
+  /** Make sure `this._prefs.camera` exists and has every field from defaults. */
   _ensureCameraPrefs() {
     if (!this._prefs.camera || typeof this._prefs.camera !== 'object') {
       this._prefs.camera = JSON.parse(JSON.stringify(DEFAULT_PREFS.camera));
@@ -1271,153 +1304,73 @@ export class PreferencesPanel extends BasePanel {
     }
   }
 
+  /** Write the live editor camera's current state into `this._prefs.camera`. */
+  _snapshotLiveCameraToPrefs() {
+    const cam = window.__cyco?.viewportEngine?.camera;
+    if (!cam?.isCamera) return;
+    if (!this._prefs.camera) this._prefs.camera = JSON.parse(JSON.stringify(DEFAULT_PREFS.camera));
+    const p = this._prefs.camera;
+    p.defaultType  = cam.isOrthographicCamera ? 'orthographic' : 'perspective';
+    if (cam.isPerspectiveCamera && Number.isFinite(cam.fov))    p.fov  = cam.fov;
+    if (Number.isFinite(cam.near)) p.near = cam.near;
+    if (Number.isFinite(cam.far))  p.far  = cam.far;
+    p.positionX = cam.position.x;
+    p.positionY = cam.position.y;
+    p.positionZ = cam.position.z;
+    const target = window.__cyco?.viewportEngine?.controls?.target;
+    if (target) {
+      p.lookAtX = target.x;
+      p.lookAtY = target.y;
+      p.lookAtZ = target.z;
+    }
+    if (cam.isOrthographicCamera) {
+      p.orthoLeft   = cam.left;
+      p.orthoRight  = cam.right;
+      p.orthoTop    = cam.top;
+      p.orthoBottom = cam.bottom;
+    }
+  }
+
   _buildCameraTab() {
+    // Dispose any previous instance so listeners don't leak across tab visits.
+    this._disposeCameraProps();
     this._ensureCameraPrefs();
-    const prefs = this._prefs.camera;
-    const defaults = DEFAULT_PREFS.camera;
 
     const root = document.createElement('div');
-    root.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
+    root.style.cssText = 'display:flex;flex-direction:column;gap:8px;';
 
     const hdr = document.createElement('div');
     hdr.innerHTML =
       '<h3 style="margin:0 0 4px;font-size:13px;color:var(--text-secondary,#aaa);font-weight:600;">Camera</h3>' +
-      '<div style="font-size:11px;color:var(--text-secondary,#888);line-height:1.4;">Default settings for the main editor viewport camera. ' +
-      'Changes apply live — the viewport camera updates immediately as you drag a slider.</div>';
+      '<div style="font-size:11px;color:var(--text-secondary,#888);line-height:1.4;">' +
+      'Main viewport camera settings — exactly the same as the Main Camera ' +
+      'button on the right-viewport toolbar. Use the Camera Type dropdown to ' +
+      'switch between Perspective and Orthographic. Reset / Make Default / ' +
+      'Do It work on the live camera state.' +
+      '</div>';
     root.appendChild(hdr);
 
-    // ── Camera Type ─────────────────────────────────────────────────────────
-    root.appendChild(this._makeSettingRow('Camera Type', select({
-      options: [
-        ['perspective',  'Perspective'],
-        ['orthographic', 'Orthographic'],
-      ],
-      value: prefs.defaultType ?? 'perspective',
-      onChange: (v) => {
-        this._prefs.camera.defaultType = v;
-        this._applyPrefsChange();
-      },
-    }), 'Default camera type for newly created project cameras.'));
+    // Live editor camera — same source the RightPanel uses when the user
+    // presses "Main Camera" on the viewport toolbar.
+    const cam = window.__cyco?.viewportEngine?.camera ?? null;
+    if (!cam || !cam.isCamera) {
+      const warn = document.createElement('div');
+      warn.style.cssText = 'padding:12px;font-size:12px;color:var(--ce-text-secondary,#aaa);' +
+        'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);border-radius:6px;';
+      warn.textContent = 'No active viewport camera — open the editor viewport first.';
+      root.appendChild(warn);
+      return root;
+    }
 
-    // ── Perspective: FOV ────────────────────────────────────────────────────
-    root.appendChild(this._makeSliderRow(
-      'FOV (°)',
-      prefs.fov ?? 90,
-      1, 179, 1,
-      (v) => {
-        this._prefs.camera.fov = v;
-        this._applyPrefsChange();
-      },
-      'Vertical field of view in degrees.',
-      defaults.fov,
-    ));
+    this._cameraProps = new CameraProperties(cam);
+    root.appendChild(this._cameraProps.element);
 
-    // ── Near / Far ──────────────────────────────────────────────────────────
-    root.appendChild(this._makeSettingRow(
-      'Near (cm)',
-      numInput({
-        value: prefs.near ?? 10, step: 0.1, min: 0.0001, max: 10000, decimals: 4,
-        onChange: (v) => {
-          this._prefs.camera.near = Math.max(0.0001, v);
-          this._applyPrefsChange();
-        },
-      }),
-      'Camera near clip plane in centimetres.',
-    ));
-
-    root.appendChild(this._makeSettingRow(
-      'Far (cm)',
-      numInput({
-        value: prefs.far ?? 1000000, step: 100, min: 1, max: 10000000, decimals: 1,
-        onChange: (v) => {
-          this._prefs.camera.far = v;
-          this._applyPrefsChange();
-        },
-      }),
-      'Camera far clip plane in centimetres.',
-    ));
-
-    // ── Initial Position (X/Y/Z) ───────────────────────────────────────────
-    const makeVec3Row = (label, keyX, keyY, keyZ, note) => {
-      const wrap = document.createElement('div');
-      wrap.style.cssText = 'margin-bottom:10px;';
-      const topRow = document.createElement('div');
-      topRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:4px;';
-      const lbl = document.createElement('span');
-      lbl.textContent = label;
-      lbl.style.cssText = 'flex:0 0 120px;font-size:12px;color:var(--text-primary,#e0e0e0);';
-      topRow.appendChild(lbl);
-
-      const xyz = [keyX, keyY, keyZ].map((k) => numInput({
-        value: prefs[k] ?? 0, step: 10, decimals: 2,
-        onChange: (v) => {
-          this._prefs.camera[k] = v;
-          this._applyPrefsChange();
-        },
-      }));
-      xyz.forEach((el) => {
-        const span = document.createElement('span');
-        span.style.cssText = 'flex:1;display:flex;align-items:center;gap:4px;';
-        span.appendChild(el);
-        topRow.appendChild(span);
-      });
-      wrap.appendChild(topRow);
-      if (note) {
-        const helper = document.createElement('div');
-        helper.textContent = note;
-        helper.style.cssText = 'font-size:11px;color:var(--text-secondary,#888);line-height:1.3;';
-        wrap.appendChild(helper);
-      }
-      return wrap;
-    };
-    root.appendChild(makeVec3Row('Position (cm)', 'positionX', 'positionY', 'positionZ',
-      'Initial world-space position for the editor viewport camera. 1 unit = 1 cm.'));
-    root.appendChild(makeVec3Row('Look At (cm)', 'lookAtX', 'lookAtY', 'lookAtZ',
-      'Initial look-at target for the editor viewport camera.'));
-
-    // ── Orthographic frustum ────────────────────────────────────────────────
-    const orthoHdr = document.createElement('div');
-    orthoHdr.style.cssText = 'font-size:12px;color:var(--text-secondary,#aaa);font-weight:600;margin-top:8px;';
-    orthoHdr.textContent = 'Orthographic Frustum (cm)';
-    root.appendChild(orthoHdr);
-
-    const makeHalfRow = (label, key, note) => {
-      root.appendChild(this._makeSettingRow(
-        label,
-        numInput({
-          value: prefs[key] ?? 0, step: 10, decimals: 2,
-          onChange: (v) => {
-            this._prefs.camera[key] = v;
-            this._applyPrefsChange();
-          },
-        }),
-        note,
-      ));
-    };
-    makeHalfRow('Left',   'orthoLeft',   'Left half-extent (negative X) of the orthographic frustum.');
-    makeHalfRow('Right',  'orthoRight',  'Right half-extent (positive X) of the orthographic frustum.');
-    makeHalfRow('Top',    'orthoTop',    'Top half-extent (positive Y) of the orthographic frustum.');
-    makeHalfRow('Bottom', 'orthoBottom', 'Bottom half-extent (negative Y) of the orthographic frustum.');
-
-    // ── Reset Camera button (in-tab convenience) ───────────────────────────
-    const resetWrap = document.createElement('div');
-    resetWrap.style.cssText = 'display:flex;gap:8px;margin-top:8px;';
-    const resetCamBtn = document.createElement('button');
-    resetCamBtn.textContent = 'Reset Camera Now';
-    resetCamBtn.title = 'Snap the live viewport camera back to the values shown above.';
-    resetCamBtn.style.cssText = 'background:var(--ce-bg-surface,#332a22);border:1px solid var(--ce-border,#3d3028);' +
-      'color:var(--ce-accent-orange,#e07228);padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;';
-    resetCamBtn.addEventListener('click', () => {
-      // Push the same payload used by the live-preview path.
-      this._applyPrefsChange();
-      // Also dispatch an explicit "reset camera" event so the viewport
-      // snaps immediately even if the user hasn't changed anything yet.
-      window.dispatchEvent(new CustomEvent('cyco-camera-reset', {
-        detail: { prefs: this._prefs.camera }
-      }));
-    });
-    resetWrap.appendChild(resetCamBtn);
-    root.appendChild(resetWrap);
+    // Mirror the live camera into prefs every viewport tick so the
+    // panel-level Reset / Make Default / Do It buttons see the user's
+    // current values. Debounced: CameraProperties already coalesces its
+    // own _syncTransform at ~10 Hz, so a per-tick mirror is fine.
+    this._cameraTickHandler = () => this._snapshotLiveCameraToPrefs();
+    window.addEventListener('cyco-vp-tick', this._cameraTickHandler);
 
     return root;
   }
@@ -1523,6 +1476,7 @@ export class PreferencesPanel extends BasePanel {
 
   dispose() {
     if (this._gridProps) { this._gridProps.dispose?.(); this._gridProps = null; }
+    this._disposeCameraProps();
     if (!this._committed) {
       window.dispatchEvent(new CustomEvent('cyco-preferences-preview', { detail: { prefs: loadPrefs() } }));
     }
