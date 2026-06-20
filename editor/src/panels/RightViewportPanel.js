@@ -8,7 +8,9 @@ import { BasePanel } from './BasePanel.js';
 export class RightViewportPanel extends BasePanel {
   constructor() {
     super();
-    this._worldSpace    = true;
+    // Default to LOCAL space — the Move gizmo translates along the
+    // object's own axes (matches the user's stated preference).
+    this._worldSpace    = false;
     this._snapEnabled   = false;
     this._worldBtn      = null;
     this._snapBtn       = null;

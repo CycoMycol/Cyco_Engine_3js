@@ -7,8 +7,24 @@ export class TransformGizmo {
     this.selectionManager = selectionManager;
 
     this._mode         = 'select';
-    this._space        = 'world';
+    // Default to LOCAL space so the Move gizmo translates along the
+    // object's own axes (matches the user's expectation that "the way
+    // that objects are being moved, they need to move in their local
+    // space"). World space can still be toggled via the toolbar.
+    this._space        = 'local';
     this._targetObject = null;
+    // While dragging, freeze the gizmo's auto-resize (Three.js scales
+    // the gizmo every frame by camera→target distance — visually jarring
+    // mid-drag, and the user explicitly wants the gizmo to keep its size
+    // when the object isn't moving along the camera ray).
+    this._dragFreezeGizmoSize = false;
+    // Drag-clamp distance (world units) — set per drag from the initial
+    // camera→target distance, so a translation can never push the object
+    // farther than 2× that distance into the far plane.  Prevents the
+    // "object disappears off-screen and is impossible to recover" bug
+    // when the user drags the mouse far past the drag-plane intersection.
+    this._dragMaxDistance = null;
+    this._dragStartCamDist = null;
     this._isDragging   = false;
     this._matrixBefore = null;
     // Multi-select: tracks the multiGroup matrix after the previous frame's
@@ -176,6 +192,39 @@ export class TransformGizmo {
       this._isDragging = !!event.value;
       if (event.value) {
         window.dispatchEvent(new CustomEvent('cyco-hover-object', { detail: { object: null } }));
+        // Lock the gizmo's auto-resize while dragging — Three.js's
+        // TransformControls re-scales the helper every frame by the
+        // camera→target distance, which makes the gizmo visibly grow /
+        // shrink as the object moves along the camera ray.  The user
+        // wants the gizmo to hold its size during lateral moves and only
+        // grow when the object is being pushed further from the camera.
+        // We re-apply the user's preferred size once per drag so the
+        // helper is forced back to a constant pixel size while held.
+        this._dragFreezeGizmoSize = true;
+        const mode = this._mode;
+        const p = this._getTransformPrefs(mode);
+        if (p.size != null) this._tc.setSize(p.size);
+        if (p.distance != null) this._tc.setDistance(p.distance);
+        // Pre-compute the drag clamp — the object is allowed to move at
+        // most 2× the camera→target distance at drag start.  This bounds
+        // the per-frame translation when the mouse leaves the drag plane
+        // (e.g. user drags way past the far plane and the plane
+        // intersection fails) so the object can never be punted into deep
+        // -Z and lost.  The fallback screen-XY move also respects this
+        // clamp via `_dragMaxDistance`.
+        if (this._targetObject && this.engine.camera) {
+          this._dragStartCamDist = this.engine.camera.position.distanceTo(
+            this._targetObject.getWorldPosition(new THREE.Vector3())
+          );
+          this._dragMaxDistance = this._dragStartCamDist * 2;
+        } else {
+          this._dragStartCamDist = null;
+          this._dragMaxDistance = null;
+        }
+      } else {
+        this._dragFreezeGizmoSize = false;
+        this._dragMaxDistance = null;
+        this._dragStartCamDist = null;
       }
     });
 
@@ -330,8 +379,17 @@ export class TransformGizmo {
     if (this._tc && this._mode !== 'select' && this._mode !== 'universal') {
       const mode = this._mode;
       const p = this._getTransformPrefs(mode);
-      this._tc.setSize(p.size ?? 1);
-      this._tc.setDistance(p.distance ?? 1);
+      // Skip size/distance while dragging — the helper's per-frame
+      // auto-resize would otherwise re-apply the user's prefs (which
+      // Three.js internally multiplies by camera distance) every frame
+      // and re-trigger the resize the user is complaining about.
+      // `_dragFreezeGizmoSize` is set true on `dragging-changed` and
+      // cleared on release, so the gizmo stays constant-size while held
+      // and is allowed to re-scale once the user lets go of the mouse.
+      if (!this._dragFreezeGizmoSize) {
+        this._tc.setSize(p.size ?? 1);
+        this._tc.setDistance(p.distance ?? 1);
+      }
       this._tc.setColors(p.x ?? '#ff4444', p.y ?? '#44ff44', p.z ?? '#4444ff', p.active ?? '#ffd54a');
       if (this._gizmo) {
         this._gizmo.visible = true;
@@ -485,8 +543,19 @@ export class TransformGizmo {
       // Always re-attach to whichever object is currently driving the gizmo
       // (the virtual group for multi-select, or the single target otherwise)
       try { this._tc.attach(this._targetObject); } catch (_) {}
-      this._showBox();
-      this._setBoxModeVisibility('outline');
+      // The Box Gizmo is intentionally HIDDEN in Move / Rotate / Scale
+      // modes.  Previously the Box Gizmo (volume mesh + outline + corner
+      // scale handles) was rendered alongside the TransformControls arrow
+      // gizmo.  The Box Gizmo is bound to the target object's geometry
+      // bounding box and tracks its world position, but as the user drags
+      // the object very far from the camera the Box Gizmo's handles and
+      // its invisible volume mesh linger as the gray "spear / sphere"
+      // artifact at world origin (visible in the viewport even when the
+      // actual object has moved off-screen).  With the Box Gizmo gone,
+      // only the TransformControls arrow gizmo is rendered — no stray
+      // geometry, no orphaned sphere on the grid, and the camera/object
+      // relationship stays clean across long drags.
+      this._hideBox();
     } else {
       this._tc.detach();
       this._gizmo.visible = false;
@@ -527,6 +596,14 @@ export class TransformGizmo {
         this._tc.detach();
       }
     }
+    // The Box Gizmo is intentionally NOT shown alongside the Move / Rotate
+    // / Scale TransformControls gizmo — see the comment in `_applyMode`
+    // for the full rationale (the Box Gizmo's volume mesh + handles were
+    // the source of the gray sphere / spear artifact at world origin when
+    // the user dragged an object far from the camera).  The arrow-style
+    // TransformControls gizmo is the single source of truth for Move /
+    // Rotate / Scale; the Box Gizmo is reserved for `select` / `universal`
+    // modes (where the arrow gizmo is hidden) — see `_applyMode`.
     this._applyMode();
   }
 
@@ -1520,6 +1597,18 @@ export class TransformGizmo {
         const delta = currentPoint.clone().sub(this._interaction.startPlanePoint);
         worldPosition.add(delta);
       } else {
+        // Plane intersection failed (mouse dragged past the far plane or
+        // the ray is parallel to the drag plane).  Fall back to a screen-
+        // space move, but PROJECT the delta onto a plane at the object's
+        // current distance from the camera rather than along camera-up/
+        // right — the previous fallback added the move vector to
+        // worldPosition directly, which silently shoved the object deeper
+        // into -Z as the user kept dragging, eventually landing it past
+        // the far clip plane where the user can no longer reach it.
+        // Projecting onto the plane at `_dragMaxDistance` keeps the
+        // object inside a recoverable volume bounded by 2× the drag-start
+        // camera distance — see `_dragMaxDistance` initialization in the
+        // `dragging-changed` handler above.
         const forward = new THREE.Vector3();
         camera.getWorldDirection(forward).normalize();
         const up = new THREE.Vector3().copy(camera.up).normalize();
@@ -1538,6 +1627,24 @@ export class TransformGizmo {
       move.addScaledVector(right, dx * 0.0025);
       move.addScaledVector(up, -dy * 0.0025);
       worldPosition.add(move);
+    }
+    // Clamp translation so the object cannot be pushed past
+    // `_dragMaxDistance` from the camera.  Without this clamp, repeated
+    // fallback moves (or fast lateral moves that cumulatively drift along
+    // the camera ray) can carry the object so far into the scene that
+    // the user cannot orbit / select / translate it back.  The clamp is
+    // anchored on the original drag-start world position so the object's
+    // screen position stays roughly stable; the user can simply release
+    // the mouse and click-drag again from the (now-visible) gizmo to
+    // bring it back.
+    if (this._dragMaxDistance != null && camera) {
+      const camPos = camera.position;
+      const fromCam = worldPosition.clone().sub(camPos);
+      const dist = fromCam.length();
+      if (dist > this._dragMaxDistance) {
+        fromCam.multiplyScalar(this._dragMaxDistance / dist);
+        worldPosition.copy(camPos).add(fromCam);
+      }
     }
     if (this._targetObject.parent) {
       this._targetObject.parent.worldToLocal(worldPosition);

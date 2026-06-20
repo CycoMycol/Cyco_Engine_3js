@@ -34,10 +34,16 @@ export const DEFAULT_PREFS = {
     size: 1,
     distance: 1,
     useSeparateGizmoSizes: false,
-    translateSize: 1,
+    // Translate (Move) gizmo — bumped up from 1.0/1.0: the previous
+    // defaults made the handles barely visible when the camera was close
+    // to the object (the "up close the gizmo is too small" complaint).
+    // 1.4 / 1.6 reads as comfortable at typical orbit distances and still
+    // tapers down when the object is pushed further into the scene
+    // because Three.js auto-scales the gizmo by camera→target distance.
+    translateSize: 1.4,
     rotateSize: 0.55,
     scaleSize: 0.75,
-    translateDistance: 1,
+    translateDistance: 1.6,
     rotateDistance: 1,
     scaleDistance: 1,
     axisColorX: '#ff4444',
