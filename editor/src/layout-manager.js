@@ -111,6 +111,29 @@ function _mergeMaterialBrowser(node) {
 
 const ALL_IDS = ['scene-hierarchy', 'center-viewport', 'properties', 'assets-browser', 'material-browser'];
 const AUTO_SAVE_KEY = 'cyco-layout-current';
+const MODELER_LAYOUT = {
+  grid: {
+    root: {
+      type: 'branch',
+      data: [{
+        type: 'leaf',
+        data: { views: ['center-viewport'], activeView: 'center-viewport', id: 'grp-cyco-modeler' },
+        size: 100,
+      }],
+      size: 100,
+    },
+    width: 100,
+    height: 100,
+    orientation: 'HORIZONTAL',
+  },
+  panels: {
+    'center-viewport': {
+      id: 'center-viewport',
+      contentComponent: 'CenterPanel',
+      title: 'Cyco Modeler',
+    },
+  },
+};
 
 const LayoutManager = {
   api: null,
@@ -123,6 +146,8 @@ const LayoutManager = {
   /** True while we are in the middle of a restore — suppresses side effects. */
   _restoringLayout: false,
   _autoSaveTimer: null,
+  _modelerMode: false,
+  _modelerSnapshot: null,
 
   /**
    * Call once after createDockview() returns the api.
@@ -154,14 +179,14 @@ const LayoutManager = {
     // Save immediately when the page is refreshed or closed so panel sizes
     // (set by sash/divider drags) are always captured at the last moment.
     window.addEventListener('beforeunload', () => {
-      if (!this._restoringLayout) this._doAutoSave();
+      if (!this._restoringLayout && !this._modelerMode) this._doAutoSave();
     });
 
     // Dockview does NOT fire onDidLayoutChange for sash/divider drags.
     // Listen for pointerup on the dockview container so any completed sash
     // drag schedules an auto-save (debounced 300 ms).
     api.element?.addEventListener('pointerup', () => {
-      if (!this._restoringLayout) this._scheduleAutoSave();
+      if (!this._restoringLayout && !this._modelerMode) this._scheduleAutoSave();
     });
   },
 
@@ -360,6 +385,61 @@ const LayoutManager = {
 
   isBottomDockVisible() {
     return BOTTOM_DOCK_IDS.some(id => this._visibility[id] ?? true);
+  },
+
+  isModelerMode() {
+    return this._modelerMode;
+  },
+
+  enterModelerMode() {
+    if (!this.api) return false;
+    try {
+      if (!this._modelerMode) {
+        this._modelerSnapshot = this.api.toJSON();
+      }
+      if (this._autoSaveTimer) {
+        clearTimeout(this._autoSaveTimer);
+        this._autoSaveTimer = null;
+      }
+
+      this._modelerMode = true;
+      this._restoringLayout = true;
+      this.api.fromJSON(MODELER_LAYOUT);
+      this._repairLayoutSizes(MODELER_LAYOUT);
+      ALL_IDS.forEach(id => { this._visibility[id] = id === 'center-viewport'; });
+      this._restoringLayout = false;
+      document.body.classList.add('cyco-modeler-mode');
+      window.dispatchEvent(new CustomEvent('cyco-modeler-mode', { detail: { active: true } }));
+      document.dispatchEvent(new CustomEvent('cyco-layout-change'));
+      return true;
+    } catch(e) {
+      this._restoringLayout = false;
+      console.warn('enterModelerMode error:', e);
+      return false;
+    }
+  },
+
+  exitModelerMode() {
+    if (!this.api || !this._modelerMode) return;
+    try {
+      const snapshot = this._modelerSnapshot || this._defaultLayout;
+      if (!snapshot) return;
+      this._setPendingOrientFromLayout(snapshot);
+      this._restoringLayout = true;
+      this.api.fromJSON(normalizeLayoutForCurrentVersion(snapshot));
+      this._repairLayoutSizes(snapshot);
+      this._snapshots = {};
+      this._resyncVisibility();
+      this._modelerMode = false;
+      this._modelerSnapshot = null;
+      this._restoringLayout = false;
+      document.body.classList.remove('cyco-modeler-mode');
+      window.dispatchEvent(new CustomEvent('cyco-modeler-mode', { detail: { active: false } }));
+      document.dispatchEvent(new CustomEvent('cyco-layout-change'));
+    } catch(e) {
+      this._restoringLayout = false;
+      console.warn('exitModelerMode error:', e);
+    }
   },
 
   /**
@@ -863,6 +943,7 @@ const LayoutManager = {
   },
 
   _scheduleAutoSave() {
+    if (this._modelerMode) return;
     if (this._autoSaveTimer) clearTimeout(this._autoSaveTimer);
     this._autoSaveTimer = setTimeout(() => {
       this._autoSaveTimer = null;
@@ -871,7 +952,7 @@ const LayoutManager = {
   },
 
   _doAutoSave() {
-    if (!this.api) return;
+    if (!this.api || this._modelerMode) return;
     try {
       const layout = this.api.toJSON();
       localStorage.setItem(AUTO_SAVE_KEY, JSON.stringify({

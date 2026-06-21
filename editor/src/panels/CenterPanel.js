@@ -31,6 +31,123 @@ const CAMERA_VIEWS = [
   { value: 'camera',       label: 'Camera'       },
 ];
 
+const MODELER_ICON_ROOT = '../UModeler/Icons/';
+
+const MODELER_ELEMENTS = [
+  { id: 'object',  label: 'Object',  icon: 'Icon_Elements_Object.png'  },
+  { id: 'vertex',  label: 'Vertex',  icon: 'Icon_Elements_Vertex.png'  },
+  { id: 'edge',    label: 'Edge',    icon: 'Icon_Elements_Edge.png'    },
+  { id: 'polygon', label: 'Polygon', icon: 'Icon_Elements_Polygon.png' },
+];
+
+const MODELER_GROUPS = [
+  { id: 'elements',   label: 'Elements',   icon: 'Icon_Group_Elements.png' },
+  { id: 'primitive',  label: 'Primitive Shapes', icon: 'Icon_Group_PrimitiveShapes.png' },
+  { id: 'drawing',    label: 'Drawing',    icon: 'Icon_Group_Drawing.png' },
+  { id: 'selection',  label: 'Selection',  icon: 'Icon_Group_Selection.png' },
+  { id: 'add',        label: 'Add',        icon: 'Icon_Group_Add.png' },
+  { id: 'remove',     label: 'Remove',     icon: 'Icon_Group_Remove.png' },
+  { id: 'deform',     label: 'Deform',     icon: 'Icon_Group_Tweak.png' },
+  { id: 'surface',    label: 'Surface',    icon: 'Icon_Group_Surface.png' },
+  { id: 'tweak',      label: 'Tweak',      icon: 'Icon_Group_Tweak.png' },
+  { id: 'misc',       label: 'Misc',       icon: 'Icon_Group_Misc.png' },
+  { id: 'multiple',   label: 'Multiple Objects', icon: 'Icon_Group_Creation.png' },
+];
+
+const MODELER_TOOLS = {
+  elements: MODELER_ELEMENTS,
+  primitive: [
+    { id: 'box', label: 'Box', icon: 'Icon_PrimitiveShapes_Box.png' },
+    { id: 'room', label: 'Room', icon: 'Icon_PrimitiveShapes_Room.png' },
+    { id: 'stair', label: 'Stair', icon: 'Icon_PrimitiveShapes_Stair.png' },
+    { id: 'cylinder', label: 'Cylinder', icon: 'Icon_PrimitiveShapes_Cylinder.png' },
+    { id: 'cone', label: 'Cone', icon: 'Icon_PrimitiveShapes_Cone.png' },
+    { id: 'sphere', label: 'Sphere', icon: 'Icon_PrimitiveShapes_Sphere.png' },
+    { id: 'capsule', label: 'Capsule', icon: 'Icon_PrimitiveShapes_Capsule.png' },
+    { id: 'torus', label: 'Torus', icon: 'Icon_PrimitiveShapes_Torus.png' },
+    { id: 'spiral-stair', label: 'Spiral Stair', icon: 'Icon_PrimitiveShapes_SpiralStair.png' },
+    { id: 'icosahedron', label: 'Icosahedron', icon: 'Icon_PrimitiveShapes_Icosahedron.png' },
+  ],
+  drawing: [
+    { id: 'line', label: 'Line', icon: 'Icon_Drawing_Line.png' },
+    { id: 'arc', label: 'Arc', icon: 'Icon_Drawing_Arc.png' },
+    { id: 'disk', label: 'Disk', icon: 'Icon_Drawing_Disk.png' },
+    { id: 'parallel', label: 'Parallel', icon: 'Icon_Drawing_Parallel.png' },
+    { id: 'rounded-rectangle', label: 'Rounded Rectangle', icon: 'Icon_Drawing_RoundedRectangle.png' },
+    { id: 'side-stair', label: 'Side Stair', icon: 'Icon_Drawing_SideStair.png' },
+  ],
+  selection: [
+    { id: 'all-select', label: 'All Select', icon: 'Icon_Selection_AllSelect.png' },
+    { id: 'none-select', label: 'None Select', icon: 'Icon_Selection_NoneSelect.png' },
+    { id: 'invert-select', label: 'Invert Select', icon: 'Icon_Selection_InvertSelect.png' },
+    { id: 'grow-select', label: 'Grow Select', icon: 'Icon_Selection_GrowSelect.png' },
+    { id: 'shrink-select', label: 'Shrink Select', icon: 'Icon_Selection_ShrinkSelect.png' },
+    { id: 'loop-select', label: 'Loop Select', icon: 'Icon_Selection_LoopSelect.png' },
+    { id: 'ring-select', label: 'Ring Select', icon: 'Icon_Selection_RingSelect.png' },
+    { id: 'isolated-select', label: 'Isolated Select', icon: 'Icon_Selection_IsolatedSelect.png' },
+  ],
+  add: [
+    { id: 'push-pull', label: 'Push Pull', icon: 'Icon_Add_PushPull.png' },
+    { id: 'multi-push-pull', label: 'Multi Push Pull', icon: 'Icon_Add_MultiPushPull.png' },
+    { id: 'extrude-edge', label: 'Extrude Edge', icon: 'Icon_Add_ExtrudeEdge.png' },
+    { id: 'inset', label: 'Inset', icon: 'Icon_Add_Inset.png' },
+    { id: 'bevel', label: 'Bevel', icon: 'Icon_Add_Bevel.png' },
+    { id: 'loop-slice', label: 'Loop Slice', icon: 'Icon_Add_LoopSlice.png' },
+    { id: 'subdivide', label: 'Subdivide', icon: 'Icon_Add_Subdivide.png' },
+    { id: 'bridge', label: 'Bridge', icon: 'Icon_Add_Bridge.png' },
+    { id: 'clone', label: 'Clone', icon: 'Icon_Add_Clone.png' },
+    { id: 'duplicate', label: 'Duplicate', icon: 'Icon_Add_Duplicate.png' },
+    { id: 'mirror', label: 'Mirror', icon: 'Icon_Add_Mirror.png' },
+    { id: 'boolean', label: 'Boolean', icon: 'Icon_Add_Boolean.png' },
+  ],
+  remove: [
+    { id: 'eraser', label: 'Eraser', icon: 'Icon_Remove_Eraser.png' },
+    { id: 'cut', label: 'Cut', icon: 'Icon_Remove_Cut.png' },
+    { id: 'clip', label: 'Clip', icon: 'Icon_Remove_Clip.png' },
+    { id: 'collapse', label: 'Collapse', icon: 'Icon_Remove_Collapse.png' },
+    { id: 'detach', label: 'Detach', icon: 'Icon_Remove_Detach.png' },
+    { id: 'combine', label: 'Combine', icon: 'Icon_Remove_Combine.png' },
+    { id: 'combine-vertices', label: 'Combine Vertices', icon: 'Icon_Remove_CombineVertices.png' },
+    { id: 'combine-polygons', label: 'Combine Polygons', icon: 'Icon_Remove_CombinePolygons.png' },
+    { id: 'remove-doubles', label: 'Remove Doubles', icon: 'Icon_Remove_RemoveDoubles.png' },
+  ],
+  deform: [
+    { id: 'flatten', label: 'Flatten', icon: 'Icon_Tweak_Flatten.png' },
+    { id: 'align', label: 'Align', icon: 'Icon_Tweak_Align.png' },
+    { id: 'snap-move', label: 'Snap Move', icon: 'Icon_Tweak_SnapMove.png' },
+    { id: 'axis-flip', label: 'Axis Flip', icon: 'Icon_Tweak_AxisFlip.png' },
+  ],
+  surface: [
+    { id: 'material', label: 'Material', icon: 'Icon_Surface_Material.png' },
+    { id: 'uv', label: 'UV', icon: 'Icon_Surface_UV.png' },
+    { id: 'vertex-color', label: 'Vertex Color', icon: 'Icon_Surface_VertexColor.png' },
+    { id: 'polygon-color', label: 'Polygon Color', icon: 'Icon_Surface_PolygonColor.png' },
+    { id: 'smoothing-group', label: 'Smoothing Group', icon: 'Icon_Surface_SmoothingGroup.png' },
+    { id: 'hotspot-layout', label: 'Hotspot Layout', icon: 'Icon_Surface_HotspotLayout.png' },
+  ],
+  tweak: [
+    { id: 'flip', label: 'Flip', icon: 'Icon_Tweak_Flip.png' },
+    { id: 'pivot', label: 'Pivot', icon: 'Icon_Tweak_Pivot.png' },
+    { id: 'pivot-center', label: 'Pivot To Center', icon: 'Icon_Tweak_PivotToCenter.png' },
+    { id: 'bake-transform', label: 'Bake Transform', icon: 'Icon_Misc_BakeTransform.png' },
+  ],
+  misc: [
+    { id: 'new-object', label: 'New UModeler Object', icon: 'Icon_Misc_NewUModelerObject.png' },
+    { id: 'cursor', label: '3D Cursor', icon: 'Icon_Misc_Cursor.png' },
+    { id: 'settings', label: 'Settings', icon: 'Icon_Misc_Settings.png' },
+    { id: 'local-settings', label: 'Local Settings', icon: 'Icon_Misc_LocalSettings.png' },
+    { id: 'polygon-group', label: 'Polygon Group', icon: 'Icon_Misc_PolygonGroup.png' },
+    { id: 'collider', label: 'Collider', icon: 'Icon_Misc_Collider.png' },
+    { id: 'export', label: 'Export', icon: 'Icon_Misc_Export.png' },
+    { id: 'refresh', label: 'Refresh', icon: 'Icon_Misc_RefreshObject.png' },
+  ],
+  multiple: [
+    { id: 'combine-objects', label: 'Combine Objects', icon: 'Icon_Remove_CombineObjects.png' },
+    { id: 'mirror-object', label: 'Mirror Object', icon: 'Icon_Add_MirrorObject.png' },
+    { id: 'refresh-all', label: 'Refresh All', icon: 'Icon_Misc_RefreshAll.png' },
+  ],
+};
+
 // ── Panel class ───────────────────────────────────────────────────────────────
 
 export class CenterPanel extends BasePanel {
@@ -55,15 +172,27 @@ export class CenterPanel extends BasePanel {
     this._playing      = false;
     this._history      = [];
     this._histIndex    = -1;
+    this._modelerActive = false;
+    this._modelerTool = 'box';
+    this._modelerGroup = 'primitive';
+    this._modelerGizmo = 'translate';
+    this._modelerFrame = 'world';
+    this._modelerSearchOpen = false;
+    this._modelerRoot = null;
 
     this._onHistoryChange     = this._onHistoryChange.bind(this);
     this._onRuntimeState      = this._onRuntimeState.bind(this);
     this._onEditorCamChanged  = this._onEditorCamChanged.bind(this);
     this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
+    this._onCycoAction        = this._onCycoAction.bind(this);
+    this._onModelerMode       = this._onModelerMode.bind(this);
     window.addEventListener('cyco-history-change',        this._onHistoryChange);
     window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
     window.addEventListener('cyco-physics-edit-mode',     this._onPhysicsEditMode);
+    window.addEventListener('cyco-action',                this._onCycoAction);
+    document.addEventListener('cyco-action',              this._onCycoAction);
+    window.addEventListener('cyco-modeler-mode',          this._onModelerMode);
   }
 
   _buildContent() {
@@ -80,11 +209,15 @@ export class CenterPanel extends BasePanel {
     const vp = document.createElement('div');
     vp.className = 'ce-viewport-canvas';
     vp.id = 'cyco-viewport-canvas';
+    this._viewportCanvas = vp;
     const lbl = document.createElement('div');
     lbl.className = 'ce-panel-label';
     lbl.id = 'cyco-viewport-placeholder-label';
     lbl.textContent = 'Viewport';
     vp.appendChild(lbl);
+    this._modelerRoot = this._buildModelerOverlay();
+    vp.appendChild(this._modelerRoot);
+    this._refreshModelerButtons();
     body.appendChild(vp);
 
     // Notify ViewportEngine that its container is ready after it has been attached
@@ -111,6 +244,331 @@ export class CenterPanel extends BasePanel {
     document.addEventListener('click', this._outsideHandler);
 
     return root;
+  }
+
+  _onCycoAction(event) {
+    const action = event?.detail?.action ?? event?.detail;
+    if (action !== 'cyco-modeler') return;
+    if (LayoutManager.isModelerMode?.()) return;
+    const entered = LayoutManager.enterModelerMode?.();
+    if (entered) this._setModelerActive(true);
+  }
+
+  _onModelerMode(event) {
+    this._setModelerActive(Boolean(event?.detail?.active));
+  }
+
+  _setModelerActive(active) {
+    this._modelerActive = active;
+    this._modelerRoot?.classList.toggle('active', active);
+    this._topBar?.classList.toggle('modeler-hidden', active);
+    this._viewportCanvas?.classList.toggle('cyco-modeler-canvas', active);
+  }
+
+  _buildModelerOverlay() {
+    const root = document.createElement('div');
+    root.className = 'cyco-modeler-root';
+
+    root.appendChild(this._buildModelerTopbar());
+
+    const work = document.createElement('div');
+    work.className = 'cyco-modeler-workspace';
+    const groupStrip = this._buildModelerGroupStrip();
+    work.appendChild(groupStrip);
+
+    const stage = document.createElement('div');
+    stage.className = 'cyco-modeler-stage';
+    const hint = document.createElement('div');
+    hint.className = 'cyco-modeler-stage-hint';
+    hint.textContent = 'Cyco Modeler';
+    stage.appendChild(hint);
+    work.appendChild(stage);
+
+    const inspector = this._buildModelerInspector();
+    work.appendChild(inspector);
+    root.appendChild(work);
+
+    requestAnimationFrame(() => {
+      this._makeModelerFloatable(root.querySelector('.cyco-modeler-topbar'), root, { centerX: true, y: 8 });
+      this._makeModelerFloatable(groupStrip, root, { x: 7, y: 8 });
+      this._makeModelerFloatable(inspector, root, { right: 10, y: 54 });
+      this._makeModelerResizable(inspector);
+    });
+
+    return root;
+  }
+
+  _buildModelerTopbar() {
+    const bar = document.createElement('div');
+    bar.className = 'cyco-modeler-topbar';
+
+    MODELER_ELEMENTS.forEach(item => {
+      bar.appendChild(this._modelerIconButton(item, 'element', () => {
+        this._selectModelerTool(item.id);
+      }, true));
+    });
+
+    bar.appendChild(_modelerSep());
+
+    const gizmoBtn = document.createElement('button');
+    gizmoBtn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    gizmoBtn.type = 'button';
+    gizmoBtn.dataset.modelerGizmoCycle = 'true';
+    gizmoBtn.addEventListener('click', () => {
+      const order = ['translate', 'rotate', 'scale'];
+      this._modelerGizmo = order[(order.indexOf(this._modelerGizmo) + 1) % order.length];
+      this._selectModelerTool(this._modelerGizmo);
+    });
+    bar.appendChild(gizmoBtn);
+
+    bar.appendChild(_modelerSep());
+
+    const frameBtn = document.createElement('button');
+    frameBtn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    frameBtn.type = 'button';
+    frameBtn.dataset.modelerFrameCycle = 'true';
+    frameBtn.addEventListener('click', () => {
+      this._modelerFrame = this._modelerFrame === 'world' ? 'local' : 'world';
+      this._refreshModelerButtons();
+    });
+    bar.appendChild(frameBtn);
+
+    [
+      { id: 'snap', label: 'Snap' },
+      { id: 'cursor', label: '3D Cursor', icon: 'Icon_Misc_Cursor.png' },
+    ].forEach(item => {
+      const btn = document.createElement('button');
+      btn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+      btn.type = 'button';
+      btn.title = item.label;
+      if (item.icon) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = MODELER_ICON_ROOT + item.icon;
+        btn.appendChild(img);
+      } else {
+        btn.innerHTML = _toolIcon(item.id);
+      }
+      btn.addEventListener('click', () => btn.classList.toggle('active'));
+      bar.appendChild(btn);
+    });
+
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'cyco-modeler-search-wrap';
+    const searchToggle = document.createElement('button');
+    searchToggle.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    searchToggle.type = 'button';
+    searchToggle.title = 'Search tools';
+    searchToggle.innerHTML = _toolIcon('search');
+    const search = document.createElement('input');
+    search.className = 'cyco-modeler-search';
+    search.type = 'search';
+    search.placeholder = 'Search tools';
+    searchToggle.addEventListener('click', () => {
+      searchWrap.classList.toggle('open');
+      if (searchWrap.classList.contains('open')) search.focus();
+    });
+    searchWrap.appendChild(searchToggle);
+    searchWrap.appendChild(search);
+    bar.appendChild(searchWrap);
+
+    const exit = document.createElement('button');
+    exit.className = 'cyco-modeler-exit';
+    exit.type = 'button';
+    exit.textContent = 'Exit';
+    exit.addEventListener('click', () => LayoutManager.exitModelerMode?.());
+    bar.appendChild(exit);
+
+    return bar;
+  }
+
+  _buildModelerGroupStrip() {
+    const strip = document.createElement('div');
+    strip.className = 'cyco-modeler-groups';
+    MODELER_GROUPS.forEach(item => {
+      strip.appendChild(this._modelerIconButton(item, 'group', () => {
+        this._modelerGroup = item.id;
+        this._refreshModelerButtons();
+      }));
+    });
+    return strip;
+  }
+
+  _buildModelerInspector() {
+    const panel = document.createElement('div');
+    panel.className = 'cyco-modeler-panel cyco-modeler-inspector';
+
+    const resize = document.createElement('div');
+    resize.className = 'cyco-modeler-resize-handle';
+    panel.appendChild(resize);
+
+    const title = _modelerPanelTitle('Cyco Modeler');
+    const mode = document.createElement('span');
+    mode.textContent = 'Modeling Tools';
+    title.appendChild(mode);
+    panel.appendChild(title);
+
+    Object.entries(MODELER_TOOLS).forEach(([groupId, tools]) => {
+      const group = MODELER_GROUPS.find(item => item.id === groupId);
+      const section = document.createElement('section');
+      section.className = 'cyco-modeler-tool-section';
+      section.dataset.modelerSection = groupId;
+      if (groupId !== this._modelerGroup) section.classList.add('collapsed');
+
+      const header = document.createElement('button');
+      header.className = 'cyco-modeler-section-title';
+      header.type = 'button';
+      const arrow = document.createElement('span');
+      arrow.className = 'cyco-modeler-section-arrow';
+      arrow.textContent = '▾';
+      const label = document.createElement('span');
+      label.textContent = group?.label ?? groupId;
+      header.appendChild(arrow);
+      header.appendChild(label);
+      header.addEventListener('click', () => {
+        section.classList.toggle('collapsed');
+        this._modelerGroup = groupId;
+        this._refreshModelerButtons();
+      });
+      section.appendChild(header);
+
+      const grid = document.createElement('div');
+      grid.className = 'cyco-modeler-tool-grid';
+      tools.forEach(item => {
+        grid.appendChild(this._modelerIconButton(item, 'tool', () => {
+          this._modelerGroup = groupId;
+          this._selectModelerTool(item.id);
+        }));
+      });
+      section.appendChild(grid);
+      panel.appendChild(section);
+    });
+
+    panel.appendChild(_modelerPanelTitle('Tool Properties'));
+    panel.appendChild(_modelerField('Width', '1.00'));
+    panel.appendChild(_modelerField('Depth', '1.00'));
+    panel.appendChild(_modelerField('Height', '1.00'));
+
+    const actions = document.createElement('div');
+    actions.className = 'cyco-modeler-actions';
+    ['Confirm', 'Cancel', 'UV Editor'].forEach(label => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = label;
+      btn.addEventListener('click', () => this._selectModelerTool(label.toLowerCase().replace(/\s+/g, '-')));
+      actions.appendChild(btn);
+    });
+    panel.appendChild(actions);
+
+    return panel;
+  }
+
+  _modelerIconButton(item, kind, onClick, iconOnly = false) {
+    const btn = document.createElement('button');
+    btn.className = `cyco-modeler-icon-btn ${kind}` + (iconOnly ? ' icon-only' : '');
+    btn.type = 'button';
+    btn.title = item.label;
+    btn.dataset.modelerKind = kind;
+    btn.dataset.modelerId = item.id;
+    const img = document.createElement('img');
+    img.alt = '';
+    img.src = MODELER_ICON_ROOT + item.icon;
+    btn.appendChild(img);
+    if (!iconOnly) {
+      const label = document.createElement('span');
+      label.textContent = item.label;
+      btn.appendChild(label);
+    }
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  _selectModelerTool(id) {
+    this._modelerTool = id;
+    this._refreshModelerButtons();
+  }
+
+  _refreshModelerButtons() {
+    if (!this._modelerRoot) return;
+    this._modelerRoot.querySelectorAll('[data-modeler-kind="tool"], [data-modeler-kind="element"]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.modelerId === this._modelerTool);
+    });
+    this._modelerRoot.querySelectorAll('[data-modeler-kind="group"]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.modelerId === this._modelerGroup);
+    });
+    this._modelerRoot.querySelectorAll('[data-modeler-gizmo]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.modelerGizmo === this._modelerGizmo);
+    });
+    const gizmoBtn = this._modelerRoot.querySelector('[data-modeler-gizmo-cycle]');
+    if (gizmoBtn) {
+      gizmoBtn.title = this._modelerGizmo[0].toUpperCase() + this._modelerGizmo.slice(1);
+      gizmoBtn.innerHTML = _toolIcon(this._modelerGizmo);
+    }
+    const frameBtn = this._modelerRoot.querySelector('[data-modeler-frame-cycle]');
+    if (frameBtn) {
+      frameBtn.title = this._modelerFrame === 'world' ? 'Global' : 'Local';
+      frameBtn.innerHTML = _toolIcon(this._modelerFrame);
+    }
+    this._modelerRoot.querySelectorAll('[data-modeler-section]').forEach(section => {
+      section.classList.toggle('active', section.dataset.modelerSection === this._modelerGroup);
+    });
+  }
+
+  _makeModelerFloatable(el, boundsRoot, initial = {}) {
+    if (!el || el._cycoModelerFloatable) return;
+    el._cycoModelerFloatable = true;
+    const rootWidth = boundsRoot.getBoundingClientRect().width;
+    const x = initial.centerX ? Math.max(0, (rootWidth - el.offsetWidth) / 2) : (initial.x ?? el.offsetLeft);
+    el.style.left = initial.right == null ? `${x}px` : 'auto';
+    el.style.right = initial.right == null ? 'auto' : `${initial.right}px`;
+    el.style.top = `${initial.y ?? el.offsetTop}px`;
+
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || e.target.closest('button,input,.cyco-modeler-resize-handle')) return;
+      const rootRect = boundsRoot.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      const offsetX = e.clientX - rect.left;
+      const offsetY = e.clientY - rect.top;
+      el.setPointerCapture?.(e.pointerId);
+      el.classList.add('dragging');
+
+      const move = (ev) => {
+        const x = Math.max(0, Math.min(ev.clientX - rootRect.left - offsetX, rootRect.width - rect.width));
+        const y = Math.max(0, Math.min(ev.clientY - rootRect.top - offsetY, rootRect.height - rect.height));
+        el.style.left = `${x}px`;
+        el.style.right = 'auto';
+        el.style.top = `${y}px`;
+      };
+      const up = () => {
+        el.classList.remove('dragging');
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
+  }
+
+  _makeModelerResizable(panel) {
+    const handle = panel?.querySelector('.cyco-modeler-resize-handle');
+    if (!panel || !handle || handle._cycoModelerResizable) return;
+    handle._cycoModelerResizable = true;
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startWidth = panel.getBoundingClientRect().width;
+      const move = (ev) => {
+        const width = Math.max(236, Math.min(460, startWidth + (startX - ev.clientX)));
+        panel.style.width = `${width}px`;
+      };
+      const up = () => {
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+    });
   }
 
   // ── Top bar ─────────────────────────────────────────────────────────────────
@@ -620,6 +1078,40 @@ function _toolBtn(svgHtml, tip, onClick) {
   return btn;
 }
 
+function _modelerLabel(text) {
+  const label = document.createElement('div');
+  label.className = 'cyco-modeler-label';
+  label.textContent = text;
+  return label;
+}
+
+function _modelerSep() {
+  const sep = document.createElement('div');
+  sep.className = 'cyco-modeler-sep';
+  return sep;
+}
+
+function _modelerPanelTitle(text) {
+  const title = document.createElement('div');
+  title.className = 'cyco-modeler-panel-title';
+  title.textContent = text;
+  return title;
+}
+
+function _modelerField(labelText, value) {
+  const row = document.createElement('label');
+  row.className = 'cyco-modeler-field';
+  const label = document.createElement('span');
+  label.textContent = labelText;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = '0.01';
+  input.value = value;
+  row.appendChild(label);
+  row.appendChild(input);
+  return row;
+}
+
 // ── SVG Icons ─────────────────────────────────────────────────────────────────
 
 function _toolIcon(id) {
@@ -657,6 +1149,10 @@ function _toolIcon(id) {
     </svg>`;
     case 'snap': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round">
       <path d="M5.5 3 L5.5 11 A4.5 4.5 0 0 0 14.5 11 L14.5 3"/>
+    </svg>`;
+    case 'search': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+      <circle cx="8.5" cy="8.5" r="5.5"/>
+      <line x1="12.8" y1="12.8" x2="17" y2="17"/>
     </svg>`;
     case 'focus': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
       <circle cx="10" cy="10" r="3"/>

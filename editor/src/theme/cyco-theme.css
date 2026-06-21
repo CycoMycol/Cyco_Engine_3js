@@ -2586,6 +2586,7 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   gap: 2px;
   flex-shrink: 0;
 }
+.ce-vp-topbar.modeler-hidden { display: none; }
 .ce-vp-topbar-sep {
   width: 1px;
   height: 16px;
@@ -2851,6 +2852,357 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
+}
+
+/* ── Cyco Modeler UI ── */
+.cyco-modeler-canvas {
+  align-items: stretch;
+  justify-content: stretch;
+}
+.cyco-modeler-root {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 45;
+  color: var(--ce-text-primary);
+  font-family: var(--ce-font-family);
+  pointer-events: none;
+}
+.cyco-modeler-root.active {
+  display: flex;
+  flex-direction: column;
+}
+.cyco-modeler-root.active ~ .ce-panel-label,
+.cyco-modeler-canvas .ce-panel-label {
+  display: none;
+}
+.cyco-modeler-topbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  position: absolute;
+  top: 8px;
+  left: 74px;
+  z-index: 2;
+  width: max-content;
+  max-width: calc(100% - 96px);
+  min-height: 36px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--ce-bg-surface) 88%, #000);
+  border: var(--ce-border-width) solid rgba(224,114,40,0.18);
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.38);
+  pointer-events: auto;
+  cursor: grab;
+  user-select: none;
+}
+.cyco-modeler-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ce-accent-orange);
+  padding: 0 6px;
+  white-space: nowrap;
+}
+.cyco-modeler-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 3px;
+  background: var(--ce-border);
+}
+.cyco-modeler-icon-btn,
+.cyco-modeler-mini-btn,
+.cyco-modeler-exit,
+.cyco-modeler-actions button,
+.cyco-modeler-section-title {
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ce-text-muted);
+  font-family: var(--ce-font-family);
+  cursor: pointer;
+}
+.cyco-modeler-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-width: 30px;
+  height: 28px;
+  padding: 3px 6px;
+  border-radius: 10px;
+  font-size: 11px;
+}
+.cyco-modeler-icon-btn img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  image-rendering: auto;
+}
+.cyco-modeler-icon-btn:hover,
+.cyco-modeler-mini-btn:hover,
+.cyco-modeler-section-title:hover,
+.cyco-modeler-actions button:hover {
+  color: var(--ce-text-primary);
+  background: rgba(255,255,255,0.07);
+}
+.cyco-modeler-icon-btn.active,
+.cyco-modeler-mini-btn.active {
+  color: var(--ce-accent-orange);
+  background: rgba(224,114,40,0.14);
+  border-color: rgba(224,114,40,0.34);
+}
+.cyco-modeler-mini-btn {
+  height: 28px;
+  min-width: 28px;
+  padding: 0 7px;
+  border-radius: 11px;
+  font-size: 11px;
+}
+.cyco-modeler-icon-only {
+  width: 30px;
+  padding: 0;
+}
+.cyco-modeler-icon-only img,
+.cyco-modeler-icon-only svg {
+  width: 18px;
+  height: 18px;
+}
+.cyco-modeler-icon-btn.icon-only {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+}
+.cyco-modeler-search-wrap {
+  position: relative;
+  margin-left: auto;
+}
+.cyco-modeler-search {
+  display: none;
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 190px;
+  height: 28px;
+  padding: 0 8px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 12px;
+  background: var(--ce-bg-base);
+  color: var(--ce-text-primary);
+  font: 12px var(--ce-font-family);
+  box-shadow: 0 8px 20px rgba(0,0,0,0.42);
+}
+.cyco-modeler-search-wrap.open .cyco-modeler-search {
+  display: block;
+}
+.cyco-modeler-exit {
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 12px;
+  color: #ff8a8a;
+}
+.cyco-modeler-exit:hover {
+  background: rgba(200,60,60,0.22);
+  border-color: rgba(200,60,60,0.45);
+}
+.cyco-modeler-workspace {
+  display: block;
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  pointer-events: none;
+}
+.cyco-modeler-groups,
+.cyco-modeler-panel {
+  pointer-events: auto;
+  background: color-mix(in srgb, var(--ce-bg-surface) 92%, #000);
+  border-color: var(--ce-border);
+}
+.cyco-modeler-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: absolute;
+  top: 8px;
+  left: 7px;
+  z-index: 2;
+  margin: 0;
+  padding: 7px 5px;
+  border: var(--ce-border-width) solid rgba(224,114,40,0.16);
+  border-radius: 18px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.38);
+  cursor: grab;
+  user-select: none;
+}
+.cyco-modeler-groups .cyco-modeler-icon-btn {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  padding: 0;
+}
+.cyco-modeler-groups .cyco-modeler-icon-btn span {
+  display: none;
+}
+.cyco-modeler-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  pointer-events: none;
+}
+.cyco-modeler-stage-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  padding: 4px 7px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 5px;
+  background: rgba(0,0,0,0.38);
+  color: var(--ce-text-muted);
+  font-size: 11px;
+}
+.cyco-modeler-panel {
+  display: flex;
+  flex-direction: column;
+  position: absolute;
+  top: 54px;
+  right: 10px;
+  z-index: 2;
+  width: 236px;
+  max-height: calc(100vh - 84px);
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: var(--ce-border-width) solid rgba(224,114,40,0.16);
+  border-radius: 22px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.38);
+  overflow: auto;
+  cursor: grab;
+  user-select: none;
+}
+.cyco-modeler-topbar.dragging,
+.cyco-modeler-groups.dragging,
+.cyco-modeler-panel.dragging {
+  cursor: grabbing;
+}
+.cyco-modeler-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ce-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  padding: 4px 2px;
+}
+.cyco-modeler-panel-title::first-letter {
+  color: var(--ce-accent-orange);
+}
+.cyco-modeler-panel-title span {
+  color: var(--ce-text-muted);
+}
+.cyco-modeler-resize-handle {
+  position: absolute;
+  left: -4px;
+  top: 18px;
+  bottom: 18px;
+  width: 8px;
+  cursor: ew-resize;
+  border-radius: 8px;
+}
+.cyco-modeler-resize-handle:hover {
+  background: rgba(224,114,40,0.25);
+}
+.cyco-modeler-tool-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  border: var(--ce-border-width) solid transparent;
+  border-radius: 14px;
+}
+.cyco-modeler-tool-section.active {
+  border-color: rgba(224,114,40,0.3);
+  background: rgba(224,114,40,0.06);
+}
+.cyco-modeler-tool-section.collapsed .cyco-modeler-tool-grid {
+  display: none;
+}
+.cyco-modeler-tool-section.collapsed .cyco-modeler-section-arrow {
+  transform: rotate(-90deg);
+}
+.cyco-modeler-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 11px;
+  background: rgba(224,114,40,0.16);
+  border-color: rgba(224,114,40,0.22);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  text-transform: uppercase;
+}
+.cyco-modeler-section-arrow {
+  display: inline-flex;
+  width: 10px;
+  transition: transform 90ms ease;
+}
+.cyco-modeler-tool-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+}
+.cyco-modeler-tool-grid .cyco-modeler-icon-btn {
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  height: auto;
+  padding: 4px 2px;
+  text-align: center;
+  white-space: normal;
+  line-height: 1.15;
+}
+.cyco-modeler-tool-grid .cyco-modeler-icon-btn img {
+  width: 18px;
+  height: 18px;
+}
+.cyco-modeler-tool-grid .cyco-modeler-icon-btn span {
+  overflow-wrap: anywhere;
+  font-size: 10px;
+}
+.cyco-modeler-field {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ce-text-muted);
+}
+.cyco-modeler-field input {
+  width: 100%;
+  height: 24px;
+  padding: 0 6px;
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 5px;
+  background: var(--ce-bg-base);
+  color: var(--ce-text-primary);
+  font: 12px var(--ce-font-family);
+}
+.cyco-modeler-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: auto;
+}
+.cyco-modeler-actions button {
+  height: 26px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: rgba(255,255,255,0.04);
 }
 
 /* --- Interactive Inspect Mode -------------------------------------------- */
