@@ -177,6 +177,7 @@ export class CenterPanel extends BasePanel {
     this._modelerGroup = 'primitive';
     this._modelerGizmo = 'translate';
     this._modelerFrame = 'world';
+    this._modelerWireMode = 'solid-wire';
     this._modelerSearchOpen = false;
     this._modelerRoot = null;
 
@@ -186,6 +187,7 @@ export class CenterPanel extends BasePanel {
     this._onPhysicsEditMode   = this._onPhysicsEditMode.bind(this);
     this._onCycoAction        = this._onCycoAction.bind(this);
     this._onModelerMode       = this._onModelerMode.bind(this);
+    this._onModelerStatus     = this._onModelerStatus.bind(this);
     window.addEventListener('cyco-history-change',        this._onHistoryChange);
     window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
@@ -193,6 +195,7 @@ export class CenterPanel extends BasePanel {
     window.addEventListener('cyco-action',                this._onCycoAction);
     document.addEventListener('cyco-action',              this._onCycoAction);
     window.addEventListener('cyco-modeler-mode',          this._onModelerMode);
+    window.addEventListener('cyco-modeler-status',        this._onModelerStatus);
   }
 
   _buildContent() {
@@ -265,6 +268,12 @@ export class CenterPanel extends BasePanel {
     this._viewportCanvas?.classList.toggle('cyco-modeler-canvas', active);
   }
 
+  _onModelerStatus(event) {
+    const msg = event.detail?.message;
+    const hint = this._modelerRoot?.querySelector('.cyco-modeler-stage-hint');
+    if (hint && msg) hint.textContent = msg;
+  }
+
   _buildModelerOverlay() {
     const root = document.createElement('div');
     root.className = 'cyco-modeler-root';
@@ -304,9 +313,11 @@ export class CenterPanel extends BasePanel {
 
     MODELER_ELEMENTS.forEach(item => {
       bar.appendChild(this._modelerIconButton(item, 'element', () => {
-        this._selectModelerTool(item.id);
+        this._selectModelerElement(item.id);
       }, true));
     });
+
+    bar.appendChild(this._buildModelerWireMenu());
 
     bar.appendChild(_modelerSep());
 
@@ -329,6 +340,9 @@ export class CenterPanel extends BasePanel {
     frameBtn.dataset.modelerFrameCycle = 'true';
     frameBtn.addEventListener('click', () => {
       this._modelerFrame = this._modelerFrame === 'world' ? 'local' : 'world';
+      window.dispatchEvent(new CustomEvent('cyco-modeler-frame', {
+        detail: { frame: this._modelerFrame }
+      }));
       this._refreshModelerButtons();
     });
     bar.appendChild(frameBtn);
@@ -349,7 +363,17 @@ export class CenterPanel extends BasePanel {
       } else {
         btn.innerHTML = _toolIcon(item.id);
       }
-      btn.addEventListener('click', () => btn.classList.toggle('active'));
+      if (item.id === 'snap') {
+        btn.addEventListener('click', () => {
+          const active = !btn.classList.contains('active');
+          btn.classList.toggle('active', active);
+          window.dispatchEvent(new CustomEvent('cyco-modeler-snap', {
+            detail: { enabled: active }
+          }));
+        });
+      } else {
+        btn.addEventListener('click', () => this._selectModelerTool(item.id));
+      }
       bar.appendChild(btn);
     });
 
@@ -483,9 +507,58 @@ export class CenterPanel extends BasePanel {
     return btn;
   }
 
+  _selectModelerElement(id) {
+    this._modelerTool = id;
+    window.dispatchEvent(new CustomEvent('cyco-modeler-element', {
+      detail: { mode: id }
+    }));
+    this._refreshModelerButtons();
+  }
+
   _selectModelerTool(id) {
     this._modelerTool = id;
+    window.dispatchEvent(new CustomEvent('cyco-modeler-tool', {
+      detail: { tool: id, group: this._modelerGroup }
+    }));
     this._refreshModelerButtons();
+  }
+
+  _buildModelerWireMenu() {
+    const wrap = document.createElement('div');
+    wrap.className = 'cyco-modeler-wire-wrap';
+    const btn = document.createElement('button');
+    btn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    btn.type = 'button';
+    btn.title = 'Modeler wire display';
+    btn.dataset.modelerWireCycle = 'true';
+    btn.innerHTML = _toolIcon('wireframe');
+    const menu = document.createElement('div');
+    menu.className = 'cyco-modeler-wire-menu';
+    [
+      { id: 'solid-wire', label: 'Solid + Wire', icon: 'wireframe' },
+      { id: 'wire', label: 'Wire Only', icon: 'wireframe' },
+      { id: 'solid', label: 'Solid Only', icon: 'standard' },
+    ].forEach(item => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.className = 'cyco-modeler-wire-option';
+      option.title = item.label;
+      option.dataset.modelerWireOption = item.id;
+      option.innerHTML = _toolIcon(item.icon);
+      option.addEventListener('click', () => {
+        this._modelerWireMode = item.id;
+        wrap.classList.remove('open');
+        window.dispatchEvent(new CustomEvent('cyco-modeler-wire', { detail: { mode: item.id } }));
+        this._refreshModelerButtons();
+      });
+      menu.appendChild(option);
+    });
+    btn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      wrap.classList.toggle('open');
+    });
+    wrap.append(btn, menu);
+    return wrap;
   }
 
   _refreshModelerButtons() {
@@ -509,6 +582,14 @@ export class CenterPanel extends BasePanel {
       frameBtn.title = this._modelerFrame === 'world' ? 'Global' : 'Local';
       frameBtn.innerHTML = _toolIcon(this._modelerFrame);
     }
+    const wireBtn = this._modelerRoot.querySelector('[data-modeler-wire-cycle]');
+    if (wireBtn) {
+      wireBtn.classList.toggle('active', this._modelerWireMode !== 'solid');
+      wireBtn.title = this._modelerWireMode === 'wire' ? 'Wire Only' : this._modelerWireMode === 'solid' ? 'Solid Only' : 'Solid + Wire';
+    }
+    this._modelerRoot.querySelectorAll('[data-modeler-wire-option]').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.modelerWireOption === this._modelerWireMode);
+    });
     this._modelerRoot.querySelectorAll('[data-modeler-section]').forEach(section => {
       section.classList.toggle('active', section.dataset.modelerSection === this._modelerGroup);
     });
@@ -1153,6 +1234,14 @@ function _toolIcon(id) {
     case 'search': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
       <circle cx="8.5" cy="8.5" r="5.5"/>
       <line x1="12.8" y1="12.8" x2="17" y2="17"/>
+    </svg>`;
+    case 'wireframe': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round">
+      <path d="M4 6.5 10 3 16 6.5V13.5L10 17 4 13.5Z"/>
+      <path d="M4 6.5 10 10 16 6.5M10 10V17M4 13.5 10 10 16 13.5"/>
+    </svg>`;
+    case 'standard': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="currentColor">
+      <path d="M10 2.5 16 6V14L10 17.5 4 14V6Z" opacity="0.9"/>
+      <path d="M10 2.5V10L16 6" opacity="0.35"/>
     </svg>`;
     case 'focus': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
       <circle cx="10" cy="10" r="3"/>

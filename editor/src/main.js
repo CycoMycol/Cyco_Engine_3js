@@ -44,6 +44,7 @@ import { InputManager }           from './viewport/InputManager.js';
 import { ViewportStats }          from './viewport/ViewportStats.js';
 import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
 import { PrefabManager }          from './viewport/PrefabManager.js';
+import { CycleModelerController } from './modeler/CycleModelerController.js';
 import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
 import { loadPrefs }                from './ui/PreferencesWindow.js';
 
@@ -143,6 +144,7 @@ const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-d
 
 // Prefab system (multi-select → save as prefab, drag from asset browser to instantiate)
 const prefabManager         = new PrefabManager(sceneManager, ProjectManager); // eslint-disable-line no-unused-vars
+const cycleModeler          = new CycleModelerController({ viewportEngine, sceneManager, selectionManager });
 
 // ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
 // event dispatched by CenterPanel when its canvas div is inserted into the DOM.
@@ -224,6 +226,7 @@ if (typeof window !== 'undefined') {
     commandManager,
     viewportContextMenu,
     prefabManager,
+    cycleModeler,
     dockviewApi: dockApi,
     pickDirectory,
     projectManager: ProjectManager,

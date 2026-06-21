@@ -362,6 +362,7 @@ export class SelectionManager {
 
   _onPointerDown(event) {
     if (!this._active || event.button !== 0) return; // left button only
+    if (window.__cyco && window.__cyco._suppressSelectionManagerClick) return;
     this._pointerDown.set(event.clientX, event.clientY);
     this._isDragging    = false;
     this._gizmoDragging = false; // failsafe reset; normally cleared by dragging-changed(false)
