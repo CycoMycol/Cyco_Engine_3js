@@ -316,6 +316,43 @@ html, body {
   margin: 0 4px;
 }
 
+/* ─── Toolbar dropup (Tools menu) ─────────────────────────────────────────── */
+.toolbar-dd-wrap { position: relative; display: inline-flex; }
+.toolbar-dd-btn  { display: inline-flex; align-items: center; gap: 4px; }
+.toolbar-dd-btn .toolbar-dd-arrow {
+  font-size: 9px;
+  color: var(--ce-text-muted);
+  margin-left: 1px;
+}
+.toolbar-dd-menu {
+  display: none;
+  position: fixed;
+  z-index: 10000;
+  min-width: 160px;
+  background: var(--ce-bg-raised);
+  border: var(--ce-border-width) solid var(--ce-border);
+  border-radius: 9px;
+  padding: 4px 0;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+}
+.toolbar-dd-wrap.open .toolbar-dd-menu { display: block; }
+.toolbar-dd-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 12px;
+  font-size: var(--ce-font-size-sm);
+  cursor: pointer;
+  color: var(--ce-text-primary);
+  font-family: var(--ce-font-family);
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+}
+.toolbar-dd-row:hover { background: rgba(255,255,255,0.06); }
+
 /* ─── Floating bar window ─────────────────────────────────────────────────── */
 .ce-bar-float-window {
   position: fixed;
