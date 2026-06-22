@@ -527,9 +527,16 @@ export class CycleModelerController {
   }
 
   _pushDistanceFromDrag(drag) {
-    // Project the screen-space mouse delta onto the selected face's
-    // outward normal (in world space) so drag distance is independent of
-    // camera orientation (UModeler-style Push/Pull behavior).
+    // Project the screen-space mouse motion onto the selected face's
+    // outward normal. We must NOT dot the world-space displacement of
+    // two points on the face plane with the normal — those points all
+    // lie ON the plane, so the displacement is perpendicular to the
+    // normal and the dot product is always zero (the previous bug).
+    // The correct UModeler-style algorithm is:
+    //   1. Project the world-space face normal to screen-space.
+    //   2. Project the mouse-delta pixels onto that 2D screen direction.
+    //   3. Convert that pixel distance back to world units using the
+    //      camera's pixel-to-world scale at the face's depth.
     const renderer = this.viewportEngine?.rendererManager?.renderer;
     const camera = this.viewportEngine?.camera;
     if (!renderer?.domElement || !camera || !drag?.object) {
@@ -542,19 +549,55 @@ export class CycleModelerController {
     if (!mesh || !faces?.length) return 0;
 
     const editable = EditableMesh.fromJSON(mesh);
-    const normal = editable._averageNormal(faces).clone();
-    if (normal.lengthSq() === 0) return 0;
-    normal.transformDirection(drag.object.matrixWorld).normalize();
+    const worldNormal = editable._averageNormal(faces).clone();
+    if (worldNormal.lengthSq() === 0) return 0;
+    worldNormal.transformDirection(drag.object.matrixWorld).normalize();
 
-    // World distance the cursor would travel along `normal` given the
-    // current camera: solve camera-relative offset of two pixels mapped
-    // onto the face plane, then dot with normal.
-    const a = new THREE.Vector3(drag.lastClientX ?? drag.startClientX, drag.lastClientY ?? drag.startClientY, 0);
-    const b = new THREE.Vector3(drag.startClientX ?? drag.lastClientX, drag.startClientY ?? drag.lastClientY, 0);
-    const worldA = this._unprojectToFacePlane(drag.object, a, camera, renderer.domElement, faces, editable);
-    const worldB = this._unprojectToFacePlane(drag.object, b, camera, renderer.domElement, faces, editable);
-    if (!worldA || !worldB) return 0;
-    const raw = worldA.clone().sub(worldB).dot(normal);
+    // 1. Project the world-space normal to screen-space pixels. We add a
+    // small step along the normal at the face's center and project the
+    // start vs stepped points; the pixel difference is the on-screen
+    // direction (and length-per-world-unit at that depth).
+    const faceIndex = faces[0];
+    const face = editable.faces[faceIndex];
+    if (!face || face.length < 3) return 0;
+    const center = new THREE.Vector3();
+    for (const vi of face) center.add(editable.vertices[vi]);
+    center.multiplyScalar(1 / face.length).applyMatrix4(drag.object.matrixWorld);
+
+    const STEP = 100; // world units used only to measure on-screen length
+    const steppedWorld = center.clone().addScaledVector(worldNormal, STEP);
+    const project = (world) => {
+      const v = world.clone().project(camera);
+      const r = renderer.domElement.getBoundingClientRect();
+      return new THREE.Vector2(
+        (v.x * 0.5 + 0.5) * r.width,
+        (-v.y * 0.5 + 0.5) * r.height,
+      );
+    };
+    const p0 = project(center);
+    const p1 = project(steppedWorld);
+    const screenNormal = p1.clone().sub(p0);
+    const screenLen = screenNormal.length();
+    if (screenLen < 1e-6) return 0;
+    screenNormal.divideScalar(screenLen);
+    // pixels per world unit along the face normal at this depth
+    const pixelsPerUnit = screenLen / STEP;
+
+    // 2. Project the mouse-delta pixels onto the screen-space normal.
+    // Pointer events deliver clientX/Y in VIEWPORT coords, while `project`
+    // above outputs CANVAS-relative pixels. Translate both into canvas
+    // pixels by subtracting the canvas's bounding rect.
+    const r = renderer.domElement.getBoundingClientRect();
+    const startCanvasX = (drag.startClientX ?? 0) - r.left;
+    const startCanvasY = (drag.startClientY ?? 0) - r.top;
+    const lastCanvasX  = (drag.lastClientX  ?? drag.startClientX ?? 0) - r.left;
+    const lastCanvasY  = (drag.lastClientY  ?? drag.startClientY ?? 0) - r.top;
+    const dpx = lastCanvasX - startCanvasX;
+    const dpy = lastCanvasY - startCanvasY;
+    const alongPixels = dpx * screenNormal.x + dpy * screenNormal.y;
+
+    // 3. Convert pixels back to world units.
+    const raw = alongPixels / pixelsPerUnit;
     if (!this.snapEnabled) return raw;
     const step = this._gridCellSize();
     return Math.round(raw / step) * step;
