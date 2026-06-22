@@ -31,7 +31,7 @@ const CAMERA_VIEWS = [
   { value: 'camera',       label: 'Camera'       },
 ];
 
-const MODELER_ICON_ROOT = '../CycoModeler/Icons/';
+const MODELER_ICON_ROOT = './src/CycoModeler/Icons/';
 
 const MODELER_ELEMENTS = [
   { id: 'object',  label: 'Object',  icon: 'Icon_Elements_Object.png'  },
