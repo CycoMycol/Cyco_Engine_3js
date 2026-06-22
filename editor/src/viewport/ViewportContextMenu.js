@@ -85,18 +85,35 @@ export class ViewportContextMenu {
     const isMulti = Array.isArray(selected) && selected.length > 1;
     const selArr  = isMulti ? selected.filter(o => o && !o.userData?._isGizmo) : [];
 
-    // Add Object (with submenu) — always available
-    menu.appendChild(this._makeSubmenuItem('Add Object ▶', ADD_ITEMS, (type) => {
-      this._hide();
-      window.dispatchEvent(new CustomEvent('cyco-add-object', { detail: { objectType: type } }));
-    }));
+    // Cyco Modeler uses its own independent context menu — hide the
+    // editor-specific Add Object / Create Prefab / Group entries so the
+    // modeler isn't polluted by engine-only actions.
+    const isModelerMode = document.body.classList.contains('cyco-modeler-mode')
+      || window.__cyco?.layoutManager?.isModelerMode?.() === true
+      || (window.__cyco?.cycleModeler?.active === true);
 
-    menu.appendChild(this._makeSeparator());
-    menu.appendChild(this._makeItem('Toggle Physics Debug Wireframe', () => {
-      this._hide();
-      window.dispatchEvent(new CustomEvent('cyco-physics-debug-toggle', { detail: {} }));
-    }));
-    menu.appendChild(this._makeSeparator());
+    if (!isModelerMode) {
+      // Add Object (with submenu) — editor-only
+      menu.appendChild(this._makeSubmenuItem('Add Object ▶', ADD_ITEMS, (type) => {
+        this._hide();
+        window.dispatchEvent(new CustomEvent('cyco-add-object', { detail: { objectType: type } }));
+      }));
+
+      menu.appendChild(this._makeSeparator());
+      menu.appendChild(this._makeItem('Toggle Physics Debug Wireframe', () => {
+        this._hide();
+        window.dispatchEvent(new CustomEvent('cyco-physics-debug-toggle', { detail: {} }));
+      }));
+      menu.appendChild(this._makeSeparator());
+    } else {
+      // Modeler mode — open the Cyco Modeler settings popup from the
+      // viewport context so users can reach it without going up to the topbar.
+      menu.appendChild(this._makeItem('Cyco Modeler Settings…', () => {
+        this._hide();
+        window.dispatchEvent(new CustomEvent('cyco-open-modeler-settings'));
+      }));
+      menu.appendChild(this._makeSeparator());
+    }
 
     if (isMulti) {
       // ── Multi-select context items ────────────────────────────────────────
@@ -115,12 +132,14 @@ export class ViewportContextMenu {
         }
         window.dispatchEvent(new CustomEvent('cyco-action', { detail: 'hierarchy-group' }));
       }));
-      menu.appendChild(this._makeItem('Create Prefab', () => {
-        this._hide();
-        window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
-          detail: { objects: selArr }
+      if (!isModelerMode) {
+        menu.appendChild(this._makeItem('Create Prefab', () => {
+          this._hide();
+          window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+            detail: { objects: selArr }
+          }));
         }));
-      }));
+      }
       menu.appendChild(this._makeSeparator());
       menu.appendChild(this._makeItem(`Delete ${selArr.length} objects`, () => {
         this._hide();
@@ -169,14 +188,16 @@ export class ViewportContextMenu {
         }
       }));
 
-      // Create Prefab (single object)
-      menu.appendChild(this._makeItem('Create Prefab', () => {
-        this._hide();
-        window.dispatchEvent(new CustomEvent('cyco-select-node', { detail: { object: hit, type: hit.isLight ? 'light' : 'mesh' } }));
-        window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
-          detail: { objects: [hit] }
+      // Create Prefab (single object) — editor only, suppressed in modeler mode
+      if (!isModelerMode) {
+        menu.appendChild(this._makeItem('Create Prefab', () => {
+          this._hide();
+          window.dispatchEvent(new CustomEvent('cyco-select-node', { detail: { object: hit, type: hit.isLight ? 'light' : 'mesh' } }));
+          window.dispatchEvent(new CustomEvent('cyco-create-prefab-from-selection', {
+            detail: { objects: [hit] }
+          }));
         }));
-      }));
+      }
 
       menu.appendChild(this._makeSeparator());
 

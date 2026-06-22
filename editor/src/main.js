@@ -45,6 +45,8 @@ import { ViewportStats }          from './viewport/ViewportStats.js';
 import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
 import { PrefabManager }          from './viewport/PrefabManager.js';
 import { CycleModelerController } from './CycoModeler/CycleModelerController.js';
+import { ModelerSettings, applyModelerSettingsToScene } from './CycoModeler/ModelerSettings.js';
+import getModelerSettingsWindow from './ui/ModelerSettingsWindow.js';
 import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
 import { loadPrefs }                from './ui/PreferencesWindow.js';
 
@@ -146,6 +148,23 @@ const physicsEditHelper     = new PhysicsEditHelper(viewportEngine); // eslint-d
 const prefabManager         = new PrefabManager(sceneManager, ProjectManager); // eslint-disable-line no-unused-vars
 const cycleModeler          = new CycleModelerController({ viewportEngine, sceneManager, selectionManager });
 
+// Construct the modeler settings singleton so the popup is wired on startup
+// (it listens for cyco-open-modeler-settings globally). Cheap no-op until shown.
+getModelerSettingsWindow();
+// Apply current modeler settings — populates OutlinePass / wireframe / hover
+// caches so the first frame in modeler mode uses the saved look.
+applyModelerSettingsToScene();
+
+// Persist modeler settings to the project file (debounced) on every change.
+let _modelerSettingsSaveTimer = null;
+ModelerSettings.onChange(() => {
+  if (_modelerSettingsSaveTimer) clearTimeout(_modelerSettingsSaveTimer);
+  _modelerSettingsSaveTimer = setTimeout(() => {
+    _modelerSettingsSaveTimer = null;
+    try { ProjectManager._save?.(); } catch { /* no project loaded yet */ }
+  }, 250);
+});
+
 // ViewportEngine.init() is called automatically via 'cyco-viewport-container-ready'
 // event dispatched by CenterPanel when its canvas div is inserted into the DOM.
 // No manual init() call needed here.
@@ -227,6 +246,8 @@ if (typeof window !== 'undefined') {
     viewportContextMenu,
     prefabManager,
     cycleModeler,
+    layoutManager: LayoutManager,
+    get modelerSettings() { return ModelerSettings; },
     dockviewApi: dockApi,
     pickDirectory,
     projectManager: ProjectManager,

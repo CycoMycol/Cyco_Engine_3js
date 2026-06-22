@@ -1,5 +1,8 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { EditableMesh } from './EditableMesh.js';
 
 const GRID_DEFAULTS = {
@@ -34,6 +37,27 @@ export class CycleModelerController {
     this.frame = 'world';
     this.snapEnabled = false;
     this.wireMode = 'solid-wire';
+    // Visual style cache — mutated by ModelerSettings via setter hooks
+    // below. Defaults mirror the factory defaults in ModelerSettings so
+    // the modeler still renders correctly if settings aren't imported.
+    // Hover style is per-mode (polygon/edge/vertex) so each mode can
+    // have its own colour, opacity and vertex size.
+    this._wireStyle = { color: 0x151515, opacity: 0.85, thickness: 1, enabled: true };
+    this._hoverStyle = {
+      polygon: { color: 0xff3333, opacity: 0.9, enabled: true },
+      edge:    { color: 0xffaa00, opacity: 0.95, enabled: true },
+      vertex:  { color: 0x33ddff, opacity: 0.95, vertexSize: 6, enabled: true },
+    };
+    this._selGizmoStyle = {
+      outlineColor: 0x9a64ff, outlineWidth: 2,
+      glowColor:    0xffffff, glowWidth: 1, glowOpacity: 0.75,
+      enabled: true,
+    };
+    // Cached viewport size in screen pixels — pushed into every LineMaterial
+    // so linewidth renders correctly across resize / DPR changes.
+    this._lineResolution = new THREE.Vector2(1, 1);
+    this._onResize = this._onResize.bind(this);
+    window.addEventListener('cyco-vp-resize', this._onResize);
     this._canvas = null;
     this._boxDrag = null;
     this._preview = null;
@@ -70,6 +94,12 @@ export class CycleModelerController {
     this._attachCanvas(this.viewportEngine?.rendererManager?.renderer?.domElement);
     if (!this.active) this._cancelPreview();
     this._status(this.active ? 'Cycle Modeler ready' : 'Cycle Modeler closed');
+    // Re-apply modeler-scoped visual settings whenever we enter or leave.
+    if (this.active) {
+      import('./ModelerSettings.js').then(({ applyModelerSettingsToScene }) => {
+        applyModelerSettingsToScene();
+      }).catch(() => {});
+    }
   }
 
   _onElement(event) {
@@ -102,6 +132,133 @@ export class CycleModelerController {
     scene?.traverse?.(obj => {
       if (obj.userData?.cycoModeler) this._syncWireOverlay(obj);
     });
+  }
+
+  // ── Style setters (called by ModelerSettings.applyModelerSettingsToScene) ──
+  // Each setter mutates the cache, then walks the live scene to re-style any
+  // existing overlays so changes show up immediately.
+
+  _setWireOverlayStyle({ color, thickness, opacity, enabled }) {
+    if (color     != null) this._wireStyle.color     = (color instanceof THREE.Color) ? color.getHex() : (color | 0);
+    if (thickness != null) this._wireStyle.thickness = thickness;
+    if (opacity   != null) this._wireStyle.opacity   = opacity;
+    if (enabled   != null) this._wireStyle.enabled   = !!enabled;
+    const scene = this.sceneManager?.getActiveScene?.();
+    scene?.traverse?.(obj => {
+      if (!obj.userData?.cycoModeler) return;
+      if (!this._wireStyle.enabled) { this._removeWireOverlay(obj); return; }
+      this._syncWireOverlay(obj);
+    });
+  }
+
+  /**
+   * Per-mode hover setter. `mode` is 'polygon' | 'edge' | 'vertex' and
+   * the same options object passed by ModelerSettings for that mode.
+   */
+  _setHoverStyle({ mode, color, opacity, vertexSize, enabled }) {
+    if (!mode || !this._hoverStyle[mode]) return;
+    const s = this._hoverStyle[mode];
+    if (color      != null) s.color      = (color instanceof THREE.Color) ? color.getHex() : (color | 0);
+    if (opacity    != null) s.opacity    = opacity;
+    if (vertexSize != null && mode === 'vertex') s.vertexSize = vertexSize;
+    if (enabled    != null) s.enabled    = !!enabled;
+    // Refresh any active hover overlay so the new style shows up without
+    // a re-hover. If this mode was just disabled, drop the overlay.
+    if (this._hover && this._hover.mode === mode) {
+      if (!s.enabled) { this._hoverClear(); this._hover = null; }
+      else { this._hoverClear(); this._hover = null; }
+    }
+    // Also re-style the persistent selection overlay if it's this mode.
+    const selObj = this._selectedModelerObjects()[0] || this._lastModelerObject;
+    if (selObj && this.elementMode === mode) this._showElementOverlayForSelection();
+  }
+
+  _setSelectionGizmoStyle({ outlineColor, outlineWidth, glowColor, glowWidth, glowOpacity, enabled }) {
+    if (outlineColor != null) this._selGizmoStyle.outlineColor = (outlineColor instanceof THREE.Color) ? outlineColor.getHex() : (typeof outlineColor === 'string' ? new THREE.Color(outlineColor).getHex() : (outlineColor | 0));
+    if (outlineWidth != null) this._selGizmoStyle.outlineWidth = outlineWidth;
+    if (glowColor    != null) this._selGizmoStyle.glowColor    = (glowColor instanceof THREE.Color) ? glowColor.getHex() : (typeof glowColor === 'string' ? new THREE.Color(glowColor).getHex() : (glowColor | 0));
+    if (glowWidth    != null) this._selGizmoStyle.glowWidth    = glowWidth;
+    if (glowOpacity  != null) this._selGizmoStyle.glowOpacity  = glowOpacity;
+    if (enabled      != null) this._selGizmoStyle.enabled      = !!enabled;
+    // Walk the live scene and re-style any modeler objects' gizmo children.
+    // When enabled flips off, remove the gizmos so they actually disappear
+    // (previously they stayed visible because nothing hid them after the
+    // toggle).
+    const scene = this.sceneManager?.getActiveScene?.();
+    scene?.traverse?.(obj => {
+      if (!obj.userData?.cycoModeler?.mesh) return;
+      const gizmos = obj.children.filter(c => c.userData?._isModelerSelGizmo);
+      if (!enabled) {
+        for (const g of gizmos) {
+          obj.remove(g);
+          g.geometry?.dispose?.();
+          g.material?.dispose?.();
+        }
+        return;
+      }
+      // No gizmo yet (e.g. toggled back on after being off) — re-attach.
+      if (gizmos.length === 0) { this._attachSelectionGizmo(obj); return; }
+      // Re-style in place so the user sees the change live.
+      for (const g of gizmos) this._styleSelectionGizmo(g);
+    });
+    // Force next preview creation to re-attach with new style.
+    if (this._previewGizmo) { this._previewGizmo.parent?.remove(this._previewGizmo); this._previewGizmo = null; }
+  }
+
+  /**
+   * Apply the current selection-gizmo style cache to an existing gizmo
+   * child mesh (LineSegments2 or fallback LineSegments).
+   */
+  _styleSelectionGizmo(g) {
+    if (!g?.material) return;
+    if (g.material.isLineMaterial) {
+      const isOuter = g.name === 'ModelerSelectionGizmoOuter';
+      const s = this._selGizmoStyle;
+      const color = isOuter ? s.outlineColor : s.glowColor;
+      const width = isOuter ? s.outlineWidth : s.glowWidth;
+      const opacity = isOuter ? 0.95 : s.glowOpacity;
+      g.material.color.set(color);
+      g.material.linewidth = width;
+      g.material.opacity = opacity;
+      g.material.resolution.copy(this._lineResolution);
+      g.material.needsUpdate = true;
+    } else {
+      // Legacy fallback (rare). Just rewrite the basic material colour.
+      try {
+        const isOuter = g.name === 'ModelerSelectionGizmoOuter';
+        const s = this._selGizmoStyle;
+        if (g.material.color?.setHex) g.material.color.setHex(isOuter ? s.outlineColor : s.glowColor);
+        g.material.opacity = isOuter ? 0.95 : s.glowOpacity;
+        g.material.transparent = true;
+      } catch {}
+    }
+  }
+
+  // ── Line2 resolution / resize ─────────────────────────────────────────
+
+  _onResize(event) {
+    const w = event?.detail?.width || 1;
+    const h = event?.detail?.height || 1;
+    this._lineResolution.set(w, h);
+    // Push the new resolution to every LineMaterial currently in the scene.
+    const scene = this.sceneManager?.getActiveScene?.();
+    scene?.traverse?.(obj => {
+      const mats = [];
+      if (obj.material?.isLineMaterial) mats.push(obj.material);
+      for (const c of (obj.children || [])) {
+        if (c.material?.isLineMaterial) mats.push(c.material);
+      }
+      for (const m of mats) m.resolution.copy(this._lineResolution);
+    });
+  }
+
+  _ensureLineResolution(material) {
+    if (!material?.isLineMaterial) return;
+    if (this._lineResolution.x <= 1 || this._lineResolution.y <= 1) {
+      const canvas = this.viewportEngine?.rendererManager?.renderer?.domElement;
+      if (canvas) this._lineResolution.set(canvas.clientWidth || 1, canvas.clientHeight || 1);
+    }
+    material.resolution.copy(this._lineResolution);
   }
 
   _onTool(event) {
@@ -308,6 +465,12 @@ export class CycleModelerController {
       this._canvas.addEventListener('pointermove', this._onPointerMove, true);
       this._canvas.addEventListener('pointerup', this._onPointerUp, true);
       this._canvas.addEventListener('click', this._onClick, true);
+      // Seed the Line2 resolution cache from the canvas so the very
+      // first LineMaterial we create (before any cyco-vp-resize fires)
+      // still has correct screen-pixel width.
+      const w = this._canvas.clientWidth || this._canvas.width || 1;
+      const h = this._canvas.clientHeight || this._canvas.height || 1;
+      if (w > 1 && h > 1) this._lineResolution.set(w, h);
     }
   }
 
@@ -644,7 +807,57 @@ export class CycleModelerController {
     const preview = this._buildPrimitiveObject(this._boxDrag.start, this._boxDrag.end, true);
     this._cancelPreview();
     this._preview = preview;
+    this._attachSelectionGizmo(preview);
     this.viewportEngine.scene?.add(preview);
+  }
+
+  /**
+   * Build a LineSegments2 from an EdgesGeometry (or any BufferGeometry).
+   * Returns the LineSegments2 with a LineMaterial already configured and
+   * `resolution` set to the current viewport.
+   */
+  _buildFatEdges(edgesGeom, color, linewidth, opacity, depthTest = true) {
+    const lineGeom = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeom);
+    const mat = new LineMaterial({
+      color,
+      linewidth,           // screen-pixel thickness
+      transparent: true,
+      opacity,
+      depthTest,
+      depthWrite: false,
+      dashed: false,
+      alphaToCoverage: true,
+    });
+    this._ensureLineResolution(mat);
+    const seg = new LineSegments2(lineGeom, mat);
+    seg.scale.set(1, 1, 1);
+    return seg;
+  }
+
+  /**
+   * Add the "purple + white" bounding-box style to a preview/primitive
+   * object. This is the unselected-primitive look the user controls via
+   * the modeler Settings → Selection Gizmo tab.
+   * Two LineSegments2 children: an outer (purple) and an inner (white).
+   * Both use screen-pixel linewidth via Line2 so the Thickness and
+   * Glow Thickness sliders produce a visible result — LineBasicMaterial
+   * .linewidth is ignored by WebGL.
+   */
+  _attachSelectionGizmo(target) {
+    if (!target?.geometry || !this._selGizmoStyle.enabled) return;
+    const edges = new THREE.EdgesGeometry(target.geometry, 1);
+    const s = this._selGizmoStyle;
+    const outer = this._buildFatEdges(edges, s.outlineColor, s.outlineWidth, 0.95, true);
+    outer.name = 'ModelerSelectionGizmoOuter';
+    outer.userData._isModelerSelGizmo = true;
+    outer.renderOrder = 998;
+    target.add(outer);
+
+    const inner = this._buildFatEdges(edges, s.glowColor, s.glowWidth, s.glowOpacity, false);
+    inner.name = 'ModelerSelectionGizmoInner';
+    inner.userData._isModelerSelGizmo = true;
+    inner.renderOrder = 999;
+    target.add(inner);
   }
 
   _updateHover(hit) {
@@ -652,26 +865,37 @@ export class CycleModelerController {
     if (this.elementMode === 'object') return this._hoverClear();
     if (this._hover?.object === hit.object && this._hover?.faceIndex === hit.faceIndex && this._hover?.mode === this.elementMode) return;
     this._hoverClear();
-    const geometry = this._hoverGeometryFromHit(hit, this.elementMode);
+    const mode = this.elementMode; // 'polygon' | 'edge' | 'vertex'
+    const style = this._hoverStyle[mode];
+    if (!style || style.enabled === false) return;
+    const geometry = this._hoverGeometryFromHit(hit, mode);
     if (!geometry) return;
     let mesh;
-    if (this.elementMode === 'edge') {
-      mesh = new THREE.LineSegments(
+    if (mode === 'edge') {
+      // Use Line2 so the hover edge thickness is visible (matches the
+      // wireframe + selection gizmo look). linewidth is a fixed
+      // user-facing value; we pull from the wireframe thickness slider
+      // so all line treatments feel coherent.
+      mesh = this._buildFatEdges(
         geometry,
-        new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false })
+        style.color,
+        Math.max(1, this._wireStyle.thickness || 1),
+        style.opacity,
+        /* depthTest */ false,
       );
-    } else if (this.elementMode === 'vertex') {
+    } else if (mode === 'vertex') {
       mesh = new THREE.Points(
         geometry,
-        new THREE.PointsMaterial({ color: 0xff3333, size: Math.max(3, this._gridCellSize() * 0.08), sizeAttenuation: false, depthTest: false, depthWrite: false })
+        new THREE.PointsMaterial({ color: style.color, size: Math.max(3, this._gridCellSize() * (style.vertexSize / 50)), sizeAttenuation: false, depthTest: false, depthWrite: false })
       );
     } else {
+      // polygon (face) — filled translucent overlay.
       mesh = new THREE.Mesh(
         geometry,
         new THREE.MeshBasicMaterial({
-          color: 0xff3333,
+          color: style.color,
           transparent: true,
-          opacity: 0.45,
+          opacity: style.opacity * 0.5,
           depthTest: false,
           depthWrite: false,
           side: THREE.DoubleSide,
@@ -680,7 +904,7 @@ export class CycleModelerController {
     }
     mesh.renderOrder = 9999;
     hit.object.add(mesh);
-    this._hover = { object: hit.object, faceIndex: hit.faceIndex, mode: this.elementMode, mesh };
+    this._hover = { object: hit.object, faceIndex: hit.faceIndex, mode, mesh };
   }
 
   _hoverClear() {
@@ -813,6 +1037,9 @@ export class CycleModelerController {
 
   _showElementOverlayForSelection() {
     if (this.elementMode !== 'edge' && this.elementMode !== 'vertex') return;
+    const mode = this.elementMode;
+    const style = this._hoverStyle[mode];
+    if (!style || style.enabled === false) return;
     // Show handles for the selection if there is one, otherwise the most
     // recently created modeler object so vertex/edge handles are visible
     // the moment the user switches into vertex/edge mode.
@@ -825,14 +1052,14 @@ export class CycleModelerController {
       });
     }
     if (!object) return;
-    const geometry = this.elementMode === 'edge' ? this._objectEdgeOverlay(object) : this._objectVertexOverlay(object);
+    const geometry = mode === 'edge' ? this._objectEdgeOverlay(object) : this._objectVertexOverlay(object);
     if (!geometry) return;
-    const mesh = this.elementMode === 'edge'
-      ? new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.9, depthTest: false, depthWrite: false }))
-      : new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0xff3333, size: Math.max(3, this._gridCellSize() * 0.08), sizeAttenuation: false, depthTest: false, depthWrite: false }));
+    const mesh = mode === 'edge'
+      ? this._buildFatEdges(geometry, style.color, Math.max(1, this._wireStyle.thickness || 1), style.opacity, /* depthTest */ false)
+      : new THREE.Points(geometry, new THREE.PointsMaterial({ color: style.color, size: Math.max(3, this._gridCellSize() * (style.vertexSize / 50)), sizeAttenuation: false, depthTest: false, depthWrite: false }));
     mesh.renderOrder = 9999;
     object.add(mesh);
-    this._hover = { object, faceIndex: -1, mode: this.elementMode, mesh };
+    this._hover = { object, faceIndex: -1, mode, mesh };
   }
 
   _faceEdgeOverlay(object, side) {
@@ -880,6 +1107,12 @@ export class CycleModelerController {
   _cancelPreview() {
     if (!this._preview) return;
     this._preview.parent?.remove(this._preview);
+    this._preview.traverse?.(child => {
+      if (child.userData?._isModelerSelGizmo) {
+        child.geometry?.dispose?.();
+        child.material?.dispose?.();
+      }
+    });
     this._preview.geometry?.dispose?.();
     this._preview.material?.dispose?.();
     this._preview = null;
@@ -1439,9 +1672,15 @@ export class CycleModelerController {
     if (Array.isArray(obj.material)) obj.material.forEach(mat => { mat.visible = visible; });
     else if (obj.material) obj.material.visible = visible;
     if (this.wireMode === 'solid') return;
-    const wire = new THREE.LineSegments(
+    if (!this._wireStyle.enabled) return;
+    // Line2 (LineSegments2 + LineMaterial) so the thickness slider
+    // produces a visible result on screen.
+    const wire = this._buildFatEdges(
       new THREE.EdgesGeometry(obj.geometry, 1),
-      new THREE.LineBasicMaterial({ color: 0x151515, transparent: true, opacity: 0.85, depthTest: true })
+      this._wireStyle.color,
+      this._wireStyle.thickness,
+      this._wireStyle.opacity,
+      /* depthTest */ true,
     );
     wire.name = 'CycleModelerWireOverlay';
     wire.userData._editorOnly = true;

@@ -2,6 +2,7 @@
 
 import { EMPTY_GAME_DATA } from '../ui/game-manager/GameDataSchemas.js';
 import { loadPrefs, savePrefs } from '../ui/PreferencesWindow.js';
+import { ModelerSettings, applyModelerSettingsToScene } from '../CycoModeler/ModelerSettings.js';
 import ProjectDiskStorage from './ProjectDiskStorage.js';
 import ProjectLocalBridgeStorage from './ProjectLocalBridgeStorage.js';
 import ProjectSaveLog from './ProjectSaveLog.js';
@@ -141,6 +142,10 @@ const ProjectManager = {
       this._project = this._normalizeSnapshot(JSON.parse(raw));
       this._touchRecent(id);
       if (this._project.prefs) savePrefs(this._project.prefs);
+      if (this._project.modelerSettings) {
+        ModelerSettings.loadInto(this._project.modelerSettings);
+        applyModelerSettingsToScene();
+      }
       document.dispatchEvent(new CustomEvent('cyco-project-change', {
         detail: { name: this._project.name, path: this._project.path },
       }));
@@ -991,6 +996,7 @@ const ProjectManager = {
     if (!this._project) return;
     this._project.scene = this._captureSceneSnapshot();
     this._project.prefs = loadPrefs();
+    this._project.modelerSettings = ModelerSettings.serialize();
     this._project.updatedAt = Date.now();
     this._project.savedAt = Date.now();
     if (!this._project.format) this._project.format = PROJECT_FILE_FORMAT;
@@ -1031,6 +1037,7 @@ const ProjectManager = {
     const snapshot = this._normalizeSnapshot(this._project || {});
     snapshot.scene = this._captureSceneSnapshot();
     snapshot.prefs = loadPrefs();
+    snapshot.modelerSettings = ModelerSettings.serialize();
     snapshot.updatedAt = Date.now();
     snapshot.savedAt = Date.now();
     return snapshot;
@@ -1046,6 +1053,8 @@ const ProjectManager = {
     const gameData = this._clone(base.gameData || EMPTY_GAME_DATA);
     const scene = base.scene ? this._clone(base.scene) : null;
     const prefs = base.prefs ? this._clone(base.prefs) : null;
+    // Cyco Modeler visual settings — independent from prefs (engine prefs).
+    const modelerSettings = base.modelerSettings ? this._clone(base.modelerSettings) : null;
     // engineBootstrap is optional user-supplied JS that runs on project
     // open. Stored as either a string of source or { source, scriptPath }.
     const engineBootstrap = (base.engineBootstrap && typeof base.engineBootstrap === 'object')
@@ -1062,6 +1071,7 @@ const ProjectManager = {
       gameData,
       scene,
       prefs,
+      modelerSettings,
       engineBootstrap,
       createdAt: base.createdAt || Date.now(),
       updatedAt: base.updatedAt || Date.now(),

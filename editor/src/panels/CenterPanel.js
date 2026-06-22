@@ -377,24 +377,15 @@ export class CenterPanel extends BasePanel {
       bar.appendChild(btn);
     });
 
-    const searchWrap = document.createElement('div');
-    searchWrap.className = 'cyco-modeler-search-wrap';
-    const searchToggle = document.createElement('button');
-    searchToggle.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
-    searchToggle.type = 'button';
-    searchToggle.title = 'Search tools';
-    searchToggle.innerHTML = _toolIcon('search');
-    const search = document.createElement('input');
-    search.className = 'cyco-modeler-search';
-    search.type = 'search';
-    search.placeholder = 'Search tools';
-    searchToggle.addEventListener('click', () => {
-      searchWrap.classList.toggle('open');
-      if (searchWrap.classList.contains('open')) search.focus();
+    const settingsBtn = document.createElement('button');
+    settingsBtn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    settingsBtn.type = 'button';
+    settingsBtn.title = 'Cyco Modeler Settings';
+    settingsBtn.innerHTML = _toolIcon('settings');
+    settingsBtn.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('cyco-open-modeler-settings'));
     });
-    searchWrap.appendChild(searchToggle);
-    searchWrap.appendChild(search);
-    bar.appendChild(searchWrap);
+    bar.appendChild(settingsBtn);
 
     const exit = document.createElement('button');
     exit.className = 'cyco-modeler-exit';
@@ -426,11 +417,31 @@ export class CenterPanel extends BasePanel {
     resize.className = 'cyco-modeler-resize-handle';
     panel.appendChild(resize);
 
+    const header = document.createElement('div');
+    header.className = 'cyco-modeler-panel-header';
     const title = _modelerPanelTitle('Cyco Modeler');
-    const mode = document.createElement('span');
-    mode.textContent = 'Modeling Tools';
-    title.appendChild(mode);
-    panel.appendChild(title);
+    header.appendChild(title);
+
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'cyco-modeler-search-wrap';
+    const searchToggle = document.createElement('button');
+    searchToggle.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
+    searchToggle.type = 'button';
+    searchToggle.title = 'Search tools';
+    searchToggle.innerHTML = _toolIcon('search');
+    const search = document.createElement('input');
+    search.className = 'cyco-modeler-search';
+    search.type = 'search';
+    search.placeholder = 'Search tools';
+    searchToggle.addEventListener('click', () => {
+      searchWrap.classList.toggle('open');
+      if (searchWrap.classList.contains('open')) search.focus();
+    });
+    searchWrap.appendChild(searchToggle);
+    searchWrap.appendChild(search);
+    header.appendChild(searchWrap);
+
+    panel.appendChild(header);
 
     Object.entries(MODELER_TOOLS).forEach(([groupId, tools]) => {
       const group = MODELER_GROUPS.find(item => item.id === groupId);
@@ -1234,6 +1245,32 @@ function _toolIcon(id) {
     case 'search': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
       <circle cx="8.5" cy="8.5" r="5.5"/>
       <line x1="12.8" y1="12.8" x2="17" y2="17"/>
+    </svg>`;
+    case 'settings': return `<svg viewBox="0 0 20 20" width="20" height="20" class="cyco-modeler-gear-icon">
+      <defs>
+        <linearGradient id="cyco-gear-grad" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#ffc488"/>
+          <stop offset="50%" stop-color="#e07228"/>
+          <stop offset="100%" stop-color="#a84816"/>
+        </linearGradient>
+        <radialGradient id="cyco-gear-shine" cx="0.35" cy="0.3" r="0.7">
+          <stop offset="0%" stop-color="#ffffff" stop-opacity="0.55"/>
+          <stop offset="55%" stop-color="#ffffff" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+      <g fill="url(#cyco-gear-grad)" stroke="#5a2a0c" stroke-width="0.55" stroke-linejoin="round">
+        <rect x="8.4" y="1.4" width="3.2" height="3.4" rx="0.6"/>
+        <rect x="8.4" y="15.2" width="3.2" height="3.4" rx="0.6"/>
+        <rect x="1.4" y="8.4" width="3.4" height="3.2" rx="0.6"/>
+        <rect x="15.2" y="8.4" width="3.4" height="3.2" rx="0.6"/>
+        <rect x="3.6" y="3.6" width="2.6" height="2.6" rx="0.5" transform="rotate(45 4.9 4.9)"/>
+        <rect x="13.8" y="3.6" width="2.6" height="2.6" rx="0.5" transform="rotate(45 15.1 4.9)"/>
+        <rect x="3.6" y="13.8" width="2.6" height="2.6" rx="0.5" transform="rotate(45 4.9 15.1)"/>
+        <rect x="13.8" y="13.8" width="2.6" height="2.6" rx="0.5" transform="rotate(45 15.1 15.1)"/>
+        <circle cx="10" cy="10" r="6"/>
+      </g>
+      <circle cx="10" cy="10" r="6" fill="url(#cyco-gear-shine)"/>
+      <circle cx="10" cy="10" r="2.4" fill="#1a1a1a" stroke="#ffd9b0" stroke-width="0.55"/>
     </svg>`;
     case 'wireframe': return `<svg viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linejoin="round">
       <path d="M4 6.5 10 3 16 6.5V13.5L10 17 4 13.5Z"/>
