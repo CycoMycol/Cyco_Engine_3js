@@ -31,7 +31,7 @@ const CAMERA_VIEWS = [
   { value: 'camera',       label: 'Camera'       },
 ];
 
-const MODELER_ICON_ROOT = '../UModeler/Icons/';
+const MODELER_ICON_ROOT = '../CycoModeler/Icons/';
 
 const MODELER_ELEMENTS = [
   { id: 'object',  label: 'Object',  icon: 'Icon_Elements_Object.png'  },
@@ -132,7 +132,7 @@ const MODELER_TOOLS = {
     { id: 'bake-transform', label: 'Bake Transform', icon: 'Icon_Misc_BakeTransform.png' },
   ],
   misc: [
-    { id: 'new-object', label: 'New UModeler Object', icon: 'Icon_Misc_NewUModelerObject.png' },
+    { id: 'new-object', label: 'New Cyco Modeler Object', icon: 'Icon_Misc_NewCycoModelerObject.png' },
     { id: 'cursor', label: '3D Cursor', icon: 'Icon_Misc_Cursor.png' },
     { id: 'settings', label: 'Settings', icon: 'Icon_Misc_Settings.png' },
     { id: 'local-settings', label: 'Local Settings', icon: 'Icon_Misc_LocalSettings.png' },

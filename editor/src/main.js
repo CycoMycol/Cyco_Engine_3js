@@ -44,7 +44,7 @@ import { InputManager }           from './viewport/InputManager.js';
 import { ViewportStats }          from './viewport/ViewportStats.js';
 import { ViewportContextMenu }    from './viewport/ViewportContextMenu.js';
 import { PrefabManager }          from './viewport/PrefabManager.js';
-import { CycleModelerController } from './modeler/CycleModelerController.js';
+import { CycleModelerController } from './CycoModeler/CycleModelerController.js';
 import './ui/PreferencesWindow.js'; // registers cyco-open-preferences listener
 import { loadPrefs }                from './ui/PreferencesWindow.js';
 
