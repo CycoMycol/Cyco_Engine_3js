@@ -45,7 +45,7 @@ export class CycleModelerController {
     this._wireStyle = { color: 0x151515, opacity: 0.85, thickness: 1, enabled: true };
     this._hoverStyle = {
       polygon: { color: 0xff3333, opacity: 0.9, enabled: true },
-      edge:    { color: 0xffaa00, opacity: 0.95, enabled: true },
+      edge:    { color: 0xffaa00, opacity: 0.95, thickness: 3, enabled: true },
       vertex:  { color: 0x33ddff, opacity: 0.95, vertexSize: 6, enabled: true },
     };
     this._selGizmoStyle = {
@@ -155,12 +155,13 @@ export class CycleModelerController {
    * Per-mode hover setter. `mode` is 'polygon' | 'edge' | 'vertex' and
    * the same options object passed by ModelerSettings for that mode.
    */
-  _setHoverStyle({ mode, color, opacity, vertexSize, enabled }) {
+  _setHoverStyle({ mode, color, opacity, vertexSize, thickness, enabled }) {
     if (!mode || !this._hoverStyle[mode]) return;
     const s = this._hoverStyle[mode];
     if (color      != null) s.color      = (color instanceof THREE.Color) ? color.getHex() : (color | 0);
     if (opacity    != null) s.opacity    = opacity;
     if (vertexSize != null && mode === 'vertex') s.vertexSize = vertexSize;
+    if (thickness  != null && mode === 'edge') s.thickness = thickness;
     if (enabled    != null) s.enabled    = !!enabled;
     // Refresh any active hover overlay so the new style shows up without
     // a re-hover. If this mode was just disabled, drop the overlay.
@@ -817,6 +818,36 @@ export class CycleModelerController {
    * `resolution` set to the current viewport.
    */
   _buildFatEdges(edgesGeom, color, linewidth, opacity, depthTest = true) {
+    // Detect WebGPU/TSL renderer — LineMaterial internally wraps a
+    // ShaderMaterial that Three.js's TSL NodeBuilder rejects ("Material
+    // "ShaderMaterial" is not compatible"). Under WebGPU the fat lines
+    // silently disappear; under WebGL they render correctly.
+    //
+    // Fallback for WebGPU: render the same EdgesGeometry as a
+    // MeshBasicMaterial in wireframe mode. WebGPU ships a native TSL
+    // implementation of MeshBasicMaterial so this works everywhere;
+    // it just loses the screen-pixel linewidth (lines are drawn at
+    // their geometric thickness, i.e. 1 device pixel). That's still
+    // visibly better than the invisible Lines2 result.
+    const renderer = this.viewportEngine?.rendererManager?.renderer;
+    const isWebGPU = !!(renderer && renderer.isWebGPURenderer);
+    if (isWebGPU) {
+      const wireMesh = new THREE.Mesh(
+        edgesGeom,
+        new THREE.MeshBasicMaterial({
+          color,
+          wireframe: true,
+          transparent: true,
+          opacity,
+          depthTest,
+          depthWrite: false,
+          toneMapped: false,
+        }),
+      );
+      wireMesh.renderOrder = 9999;
+      return wireMesh;
+    }
+
     const lineGeom = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeom);
     const mat = new LineMaterial({
       color,
@@ -832,6 +863,60 @@ export class CycleModelerController {
     const seg = new LineSegments2(lineGeom, mat);
     seg.scale.set(1, 1, 1);
     return seg;
+  }
+
+  /**
+   * Build the per-vertex handle group (one small sphere per unique vertex).
+   *
+   * WebGPU note: THREE.Points + PointsMaterial does NOT render under
+   * Three.js's WebGPU TSL pipeline — `THREE.NodeBuilder: Material
+   * "ShaderMaterial" is not compatible.` is logged on every render and the
+   * points are silently dropped.  Switching to InstancedMesh of small
+   * spheres + MeshBasicMaterial works in BOTH WebGL and WebGPU because
+   * MeshBasicMaterial has a TSL equivalent.
+   *
+   * `vertexSize` is the modeler "Vertex Size" slider (1..15 screen pixels).
+   * We translate that to a sphere radius in world units by anchoring it to
+   * the current grid cell size so the handles feel proportional to the
+   * scene.  Radius is clamped so the handles never collapse to zero on
+   * tiny grids.
+   *
+   * @param {THREE.BufferGeometry} geometry  vertex positions (x,y,z triples)
+   * @param {number} color        hex color (vertexHighlight.color)
+   * @param {number} vertexSize   slider value (1..15, target screen px)
+   * @param {number} opacity      vertexHighlight.opacity (0..1)
+   */
+  _buildVertexHandles(geometry, color, vertexSize, opacity) {
+    const pos = geometry?.attributes?.position;
+    const count = pos?.count ?? 0;
+    const sphereGeo = new THREE.SphereGeometry(1, 12, 8);
+    const mat = new THREE.MeshBasicMaterial({
+      color,
+      transparent: opacity < 1,
+      opacity,
+      depthTest: false,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const inst = new THREE.InstancedMesh(sphereGeo, mat, count);
+    inst.frustumCulled = false; // handles move around the parent mesh
+    inst.renderOrder = 9999;
+    // Translate the screen-pixel slider value into a world-unit radius.
+    // 50 px → cellSize / 2 (so a vertex handle covers ~half a grid cell
+    // on screen).  Clamped so tiny grids still get visible dots.
+    const cellSize = this._gridCellSize();
+    const radius = Math.max(2, cellSize * Math.max(0.05, vertexSize / 50) * 0.5);
+    const m = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const s = new THREE.Vector3(radius, radius, radius);
+    const p = new THREE.Vector3();
+    for (let i = 0; i < count; i++) {
+      p.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+      m.compose(p, q, s);
+      inst.setMatrixAt(i, m);
+    }
+    inst.instanceMatrix.needsUpdate = true;
+    return inst;
   }
 
   /**
@@ -873,21 +958,21 @@ export class CycleModelerController {
     let mesh;
     if (mode === 'edge') {
       // Use Line2 so the hover edge thickness is visible (matches the
-      // wireframe + selection gizmo look). linewidth is a fixed
-      // user-facing value; we pull from the wireframe thickness slider
-      // so all line treatments feel coherent.
+      // wireframe + selection gizmo look). The edge overlay has its own
+      // `thickness` field in modeler settings — falling back to the
+      // wireframe thickness keeps the look coherent if the field is
+      // missing from older saved settings.
       mesh = this._buildFatEdges(
         geometry,
         style.color,
-        Math.max(1, this._wireStyle.thickness || 1),
+        Math.max(1, style.thickness ?? this._wireStyle.thickness ?? 1),
         style.opacity,
         /* depthTest */ false,
       );
     } else if (mode === 'vertex') {
-      mesh = new THREE.Points(
-        geometry,
-        new THREE.PointsMaterial({ color: style.color, size: Math.max(3, this._gridCellSize() * (style.vertexSize / 50)), sizeAttenuation: false, depthTest: false, depthWrite: false })
-      );
+      // InstancedMesh of small spheres — Points + PointsMaterial does
+      // not render under WebGPU/TSL (NodeBuilder rejects ShaderMaterial).
+      mesh = this._buildVertexHandles(geometry, style.color, style.vertexSize, style.opacity);
     } else {
       // polygon (face) — filled translucent overlay.
       mesh = new THREE.Mesh(
@@ -1055,8 +1140,8 @@ export class CycleModelerController {
     const geometry = mode === 'edge' ? this._objectEdgeOverlay(object) : this._objectVertexOverlay(object);
     if (!geometry) return;
     const mesh = mode === 'edge'
-      ? this._buildFatEdges(geometry, style.color, Math.max(1, this._wireStyle.thickness || 1), style.opacity, /* depthTest */ false)
-      : new THREE.Points(geometry, new THREE.PointsMaterial({ color: style.color, size: Math.max(3, this._gridCellSize() * (style.vertexSize / 50)), sizeAttenuation: false, depthTest: false, depthWrite: false }));
+      ? this._buildFatEdges(geometry, style.color, Math.max(1, style.thickness ?? this._wireStyle.thickness ?? 1), style.opacity, /* depthTest */ false)
+      : this._buildVertexHandles(geometry, style.color, style.vertexSize, style.opacity);
     mesh.renderOrder = 9999;
     object.add(mesh);
     this._hover = { object, faceIndex: -1, mode, mesh };

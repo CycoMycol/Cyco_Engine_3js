@@ -13,7 +13,7 @@ import { BasePanel } from './BasePanel.js';
 export class LeftToolbarPanel extends BasePanel {
   constructor() {
     super();
-    this._activeTool        = 'select';
+    this._activeTool        = 'translate';
     this._lastTransformTool = 'translate'; // what the cycle button currently shows for object mode
     this._physicsEditTool   = 'translate'; // current collider gizmo submode when physics edit is active
     this._viewMode          = '3d';

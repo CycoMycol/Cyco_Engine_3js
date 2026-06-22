@@ -6,7 +6,7 @@ export class TransformGizmo {
     this.engine           = viewportEngine;
     this.selectionManager = selectionManager;
 
-    this._mode         = 'select';
+    this._mode         = 'translate';
     // Default to LOCAL space so the Move gizmo translates along the
     // object's own axes (matches the user's expectation that "the way
     // that objects are being moved, they need to move in their local

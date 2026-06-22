@@ -166,7 +166,14 @@ export class ObjectProperties {
       cb.type    = 'checkbox';
       cb.checked = m.wireframe;
       cb.className = 'ce-prop-checkbox';
-      cb.addEventListener('change', () => { m.wireframe = cb.checked; });
+      cb.addEventListener('change', () => {
+        m.wireframe = cb.checked;
+        // `wireframe` lives inside the shader defines and the renderer
+        // caches the compiled program per-material. Without needsUpdate
+        // the toggle silently no-ops because the GPU keeps drawing the
+        // previously-compiled program.
+        m.needsUpdate = true;
+      });
       body.appendChild(row('Wireframe', cb));
     }
 

@@ -262,9 +262,10 @@ class ModelerSettingsWindow {
   }
 
   _buildEdgeHighlightUI(v, parent) {
-    this._row('Enabled', this._toggle(v.enabled, (b) => ModelerSettings.updateCategory('edgeHighlight', { enabled: b })), parent);
-    this._row('Color',   this._colorSwatch(v.color, (c) => ModelerSettings.updateCategory('edgeHighlight', { color: c })), parent);
-    this._row('Opacity', this._slider(v.opacity, 0, 1, 0.05, (n) => ModelerSettings.updateCategory('edgeHighlight', { opacity: n })), parent);
+    this._row('Enabled',   this._toggle(v.enabled, (b) => ModelerSettings.updateCategory('edgeHighlight', { enabled: b })), parent);
+    this._row('Color',     this._colorSwatch(v.color, (c) => ModelerSettings.updateCategory('edgeHighlight', { color: c })), parent);
+    this._row('Opacity',   this._slider(v.opacity, 0, 1, 0.05, (n) => ModelerSettings.updateCategory('edgeHighlight', { opacity: n })), parent);
+    this._row('Thickness', this._slider(v.thickness ?? 3, 1, 10, 1, (n) => ModelerSettings.updateCategory('edgeHighlight', { thickness: n })), parent);
   }
 
   _buildVertexHighlightUI(v, parent) {

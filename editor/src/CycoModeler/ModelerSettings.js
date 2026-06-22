@@ -64,9 +64,16 @@ export const MODELER_SETTINGS_DEFAULTS = Object.freeze({
   edgeHighlight: {
     // Hover/selected EDGE highlight — separate from face so the user
     // can colour edges differently from the filled polygon highlight.
-    enabled: true,
-    color:   '#ffaa00',
-    opacity: 0.95,
+    enabled:   true,
+    color:     '#ffaa00',
+    opacity:   0.95,
+    // Screen-pixel thickness for the edge LineSegments2.  A 1-px line is
+    // essentially invisible on a dark scene + WebGPU/TSL pipeline (LineMaterial
+    // is wrapped as a ShaderMaterial that may antialias to sub-pixel),
+    // so the factory default is 3 to keep edges clearly visible.  The
+    // user can override this per-project or per-session from the settings
+    // window's Edge Highlight tab.
+    thickness: 3,
   },
   vertexHighlight: {
     // Hover/selected VERTEX highlight (size in screen pixels).
@@ -337,10 +344,11 @@ export function applyModelerSettingsToScene() {
 
   // 3. Hover EDGE highlight.
   cycleModeler._setHoverStyle?.({
-    mode:    'edge',
-    color:   new THREE.Color(s.edgeHighlight.color),
-    opacity: s.edgeHighlight.opacity,
-    enabled: s.edgeHighlight.enabled,
+    mode:      'edge',
+    color:     new THREE.Color(s.edgeHighlight.color),
+    opacity:   s.edgeHighlight.opacity,
+    thickness: s.edgeHighlight.thickness,
+    enabled:   s.edgeHighlight.enabled,
   });
 
   // 4. Hover VERTEX highlight.
