@@ -354,6 +354,7 @@ export class PostProcessingPipeline {
     this._onEditorCameraChanged = this._onEditorCameraChanged.bind(this);
     this._onPrefsChanged       = this._onPrefsChanged.bind(this);
     this._onPhysicsEditMode    = this._onPhysicsEditMode.bind(this);
+    this._onModelerMode        = this._onModelerMode.bind(this);
 
     window.addEventListener('cyco-vp-ready',                this._onVpReady);
     window.addEventListener('cyco-renderer-changed',        this._onRendererChanged);
@@ -370,6 +371,7 @@ export class PostProcessingPipeline {
     window.addEventListener('cyco-preferences-preview',     this._onPrefsChanged);
     window.addEventListener('cyco-physics-edit-mode',       this._onPhysicsEditMode);
     window.addEventListener('cyco-scene-switch',            this._onSceneSwitch);
+    window.addEventListener('cyco-modeler-mode',            this._onModelerMode);
 
     // If the viewport was already initialized before this pipeline was
     // constructed, rebuild immediately so the composer is available.
@@ -1454,6 +1456,28 @@ export class PostProcessingPipeline {
   }
 
   _applySelectionOutlinePrefs() {
+    // Cycle-modeler override: the modeler used to push its own outline
+    // colors into the engine's primary outline cache via
+    // `ModelerSettings.pushSelectionGizmoIntoEngineOutline`. That path
+    // has been removed — the engine outline is hidden entirely in
+    // modeler mode (see `applyModelerSettingsToScene` and
+    // `_onModelerMode`). The `_modelerOutlineOverride` flag is still
+    // consulted so legacy callers don't accidentally re-enable the
+    // engine outline while we're in modeler mode: when the flag is set
+    // we skip the prefs-based path and leave the OutlinePass alone
+    // (applyModelerSettingsToScene / _onModelerMode are the source of
+    // truth for the outline pass visibility in modeler mode).
+    if (this._modelerOutlineOverride) {
+      // Intentionally do nothing — the engine outline is hidden in
+      // modeler mode by the call sites listed above. Older callers
+      // (legacy ModelerSettings flows) may still set
+      // `_modelerOutlineOverride` without first disabling the pass;
+      // ensure that if the override flag is present the pass stays
+      // off so we never show the duplicate purple ring the user
+      // reported.
+      if (this.outlinePass) this.outlinePass.enabled = false;
+      return;
+    }
     const gizmo = this._prefs?.gizmo ?? loadPrefs().gizmo ?? {};
     const bounds = gizmo.bounds ?? {};
     // Pick the correct prefs source based on selection size.
@@ -1691,6 +1715,25 @@ export class PostProcessingPipeline {
    */
   _refreshSecondaryOutlines() {
     const scene = this.engine?.scene;
+    // ── Cycle Modeler mode guard ──────────────────────────────────────────
+    // Per user instruction, the editor outline / glow must NEVER render
+    // while the cycle modeler is active — the modeler has its own
+    // per-element selection visuals. Skip the rebuild entirely so no
+    // primary / secondary outline mesh is created, AND keep both
+    // groups hidden (in case they were visible from a previous
+    // non-modeler state). This is the single source of truth for the
+    // "engine outline off in modeler mode" rule; `_onModelerMode` and
+    // `applyModelerSettingsToScene` set the same flag, but selection
+    // events also call this function so we guard here too.
+    const inModelerMode = !!window.__cyco?.cycleModeler?.active
+      || !!window.__cyco?.layoutManager?.isModelerMode?.();
+    if (inModelerMode) {
+      this._clearSecondaryOutlines();
+      this._clearPrimaryOutline();
+      if (this.primaryOutlineGroup)   this.primaryOutlineGroup.visible = false;
+      if (this.secondaryOutlineGroup) this.secondaryOutlineGroup.visible = false;
+      return;
+    }
     // Make sure both groups are attached to the current active scene.
     if (scene) {
       if (!this.secondaryOutlineGroup) this._ensureSecondaryGroup(scene);
@@ -2085,6 +2128,23 @@ export class PostProcessingPipeline {
 
   _onSelectNode(event) {
     this._selectedObjects = this._getSelectionObjects(event.detail);
+    // ── Cycle Modeler mode guard ──────────────────────────────────────────
+    // In modeler mode the engine outline is hidden entirely
+    // (`applyModelerSettingsToScene` + `_onModelerMode`). Skip the
+    // OutlinePass / secondary outline rebuild work so we don't waste
+    // time building outline geometry that will never be drawn.
+    const inModelerMode = !!window.__cyco?.cycleModeler?.active
+      || !!window.__cyco?.layoutManager?.isModelerMode?.();
+    if (inModelerMode) {
+      if (this.outlinePass) {
+        this.outlinePass.selectedObjects = [];
+      }
+      this._clearSecondaryOutlines();
+      this._clearPrimaryOutline();
+      if (this.primaryOutlineGroup)   this.primaryOutlineGroup.visible = false;
+      if (this.secondaryOutlineGroup) this.secondaryOutlineGroup.visible = false;
+      return;
+    }
     // ── Folder / container short-circuit ──────────────────────────────────
     // If the dispatch targets a single container (Group / Empty / LOD /
     // Prefab root) that has NO own selectable geometry but HAS selectable
@@ -2165,6 +2225,56 @@ export class PostProcessingPipeline {
     this._scheduleOutlineRebuild();
     if (this.hoverOutlinePass && this._physicsEditMode) {
       this.hoverOutlinePass.selectedObjects = [];
+    }
+  }
+
+  /**
+   * Cycle Modeler mode toggle. Per user instruction, the editor's
+   * OutlinePass + primary shell + glow are NEVER drawn while the cycle
+   * modeler is active — the modeler has its own per-element selection
+   * visuals (polygon / edge / vertex highlights) and the engine outline
+   * would only duplicate them. So on enter we unconditionally hide the
+   * engine outline groups + disable the OutlinePass; on exit we clear
+   * the modeler override and re-apply the engine's own prefs so the
+   * editor's default selection outline returns.
+   *
+   * The TransformControls helper / leftover Box Gizmo meshes are also
+   * detached here (and via TransformGizmo's own `cyco-modeler-mode`
+   * listener) so nothing floats around in the viewport while the user
+   * is editing primitives.
+   */
+  _onModelerMode(event) {
+    const active = !!event.detail?.active;
+    if (!active) {
+      // Exiting modeler mode — clear the modeler override so the engine's
+      // own prefs path is used again, then refresh outlines so the
+      // engine's prefs (PreferencesPanel) re-apply cleanly.
+      this._modelerOutlineOverride = null;
+      // Re-enable the engine outline groups + OutlinePass in case they
+      // were hidden while in modeler mode. The selection-outline group
+      // visibility is normally driven by `_applySelectionOutlinePrefs`,
+      // but we set it explicitly here so the restore is immediate on
+      // the same frame (otherwise the group could stay hidden until the
+      // next selection event).
+      if (this.primaryOutlineGroup)   this.primaryOutlineGroup.visible = true;
+      if (this.secondaryOutlineGroup) this.secondaryOutlineGroup.visible = true;
+      if (this.outlinePass)           this.outlinePass.enabled = true;
+      this._applySelectionOutlinePrefs();
+      this._scheduleOutlineRebuild();
+    } else {
+      // Entering modeler mode — hide the engine editor outline / glow
+      // entirely. The modeler has its own per-element selection visuals,
+      // and the engine OutlinePass + primary shell + glow must NOT render
+      // on top of them (user reported this as a duplicate purple ring +
+      // white glow bug).
+      if (this.primaryOutlineGroup)   this.primaryOutlineGroup.visible = false;
+      if (this.secondaryOutlineGroup) this.secondaryOutlineGroup.visible = false;
+      if (this.outlinePass) {
+        this.outlinePass.enabled = false;
+        this.outlinePass.selectedObjects = [];
+      }
+      this._modelerOutlineOverride = null;
+      this._scheduleOutlineRebuild();
     }
   }
 
@@ -2323,6 +2433,7 @@ export class PostProcessingPipeline {
     window.removeEventListener('cyco-preferences-change',      this._onPrefsChanged);
     window.removeEventListener('cyco-preferences-preview',     this._onPrefsChanged);
     window.removeEventListener('cyco-scene-switch',            this._onSceneSwitch);
+    window.removeEventListener('cyco-modeler-mode',            this._onModelerMode);
   }
 }
 

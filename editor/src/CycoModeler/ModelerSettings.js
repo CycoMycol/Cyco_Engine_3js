@@ -360,9 +360,62 @@ export function applyModelerSettingsToScene() {
     enabled:   s.vertexHighlight.enabled,
   });
 
-  // 5. Unselected primitive (purple/white outline) is drawn lazily by the
-  //    modeler when a primitive is being previewed. We hand it the
-  //    colors/widths via a setter the controller exposes.
+  // 5. Selection Gizmo = the engine's outline pass for cycle-modeler
+  //    objects. Push the user's cycle-modeler settings (color, thickness,
+  //    glow color, glow opacity, enabled) into the engine's primary
+  //    outline cache so the same purple + glow outline the rest of the
+  //    editor uses is what appears on selected modeler primitives.
+  //    The post-processing pipeline reads these cached fields during
+  //    `_applySelectionOutlinePrefs` and rebuilds the visible outline.
+  //
+  //    NOTE — per user instruction, the editor's OutlinePass + primary
+  //    shell + glow are NEVER drawn while the cycle modeler is active.
+  //    The modeler has its own hover / selection visuals (polygon /
+  //    edge / vertex highlights) and the engine outline/glow would
+  //    duplicate those visuals. So when the modeler is active we
+  //    unconditionally hide the engine outline group + OutlinePass
+  //    regardless of the Selection Gizmo toggle, and we skip the
+  //    push-into-engine-outline path entirely (the cached colors are
+  //    not consumed in modeler mode).
+  const cm = window.__cyco?.cycleModeler;
+  if (cm?.active) {
+    // Cycle Modeler mode — the engine editor outline / glow must be
+    // disabled. The modeler has its own per-element selection visuals
+    // (purple hover ring on selected modeler primitives is drawn by the
+    // modeler's hover layer, not the engine outline pass). Re-enabling
+    // the engine outline on top would render the duplicate purple ring
+    // + white glow that the user reported as a bug.
+    const pp = window.__cyco?.postPipeline;
+    if (pp?.primaryOutlineGroup) pp.primaryOutlineGroup.visible = false;
+    if (pp?.secondaryOutlineGroup) pp.secondaryOutlineGroup.visible = false;
+    if (pp?.outlinePass) {
+      pp.outlinePass.enabled = false;
+      pp.outlinePass.selectedObjects = [];
+    }
+    // Drop any cached modeler override so it can't bleed back in if
+    // `_applySelectionOutlinePrefs` runs while we're still inside
+    // modeler mode.
+    if (pp) pp._modelerOutlineOverride = null;
+  } else {
+    // Outside cycle modeler mode — clear any leftover modeler override
+    // so the engine's own prefs path is used again and PreferencesPanel
+    // changes show up. The engine outline / glow is restored by
+    // `_applySelectionOutlinePrefs` + `_scheduleOutlineRebuild`.
+    const pp = window.__cyco?.postPipeline;
+    if (pp?._modelerOutlineOverride) {
+      pp._modelerOutlineOverride = null;
+      if (typeof pp._applySelectionOutlinePrefs === 'function') {
+        pp._applySelectionOutlinePrefs();
+      }
+      if (typeof pp._scheduleOutlineRebuild === 'function') {
+        pp._scheduleOutlineRebuild();
+      }
+    }
+  }
+
+  // 6. CycleModelerController also exposes a legacy local setter used by
+  //    the drag-preview. We still keep the modeler's preview outline in
+  //    sync so the drag-preview reads from the same colour source.
   cycleModeler._setSelectionGizmoStyle?.({
     outlineColor: s.selectionGizmo.outlineColor,
     outlineWidth: s.selectionGizmo.outlineWidth,
@@ -372,3 +425,4 @@ export function applyModelerSettingsToScene() {
     enabled:      s.selectionGizmo.enabled,
   });
 }
+

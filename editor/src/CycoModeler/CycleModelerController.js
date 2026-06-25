@@ -71,6 +71,7 @@ export class CycleModelerController {
     this._onFrame = this._onFrame.bind(this);
     this._onSnap = this._onSnap.bind(this);
     this._onWire = this._onWire.bind(this);
+    this._onSelectionChanged = this._onSelectionChanged.bind(this);
     this._onVpReady = this._onVpReady.bind(this);
     this._onRendererChanged = this._onRendererChanged.bind(this);
     this._onPointerDown = this._onPointerDown.bind(this);
@@ -86,6 +87,8 @@ export class CycleModelerController {
     window.addEventListener('cyco-modeler-frame', this._onFrame);
     window.addEventListener('cyco-modeler-snap', this._onSnap);
     window.addEventListener('cyco-modeler-wire', this._onWire);
+    window.addEventListener('cyco-select-node', this._onSelectionChanged);
+    window.addEventListener('cyco-deselect-all', this._onSelectionChanged);
     setTimeout(() => this._attachCanvas(this.viewportEngine?.rendererManager?.renderer?.domElement), 0);
   }
 
@@ -139,6 +142,7 @@ export class CycleModelerController {
   // existing overlays so changes show up immediately.
 
   _setWireOverlayStyle({ color, thickness, opacity, enabled }) {
+    const thicknessChanged = (thickness != null && thickness !== this._wireStyle.thickness);
     if (color     != null) this._wireStyle.color     = (color instanceof THREE.Color) ? color.getHex() : (color | 0);
     if (thickness != null) this._wireStyle.thickness = thickness;
     if (opacity   != null) this._wireStyle.opacity   = opacity;
@@ -147,6 +151,11 @@ export class CycleModelerController {
     scene?.traverse?.(obj => {
       if (!obj.userData?.cycoModeler) return;
       if (!this._wireStyle.enabled) { this._removeWireOverlay(obj); return; }
+      // Thickness change requires a geometry rebuild on the WebGPU
+      // fallback (the ribbon width is baked in). On WebGL LineMaterial
+      // we could update in place, but rebuilding is cheap and keeps the
+      // two paths identical.
+      if (thicknessChanged) { this._removeWireOverlay(obj); this._syncWireOverlay(obj); return; }
       this._syncWireOverlay(obj);
     });
   }
@@ -158,6 +167,12 @@ export class CycleModelerController {
   _setHoverStyle({ mode, color, opacity, vertexSize, thickness, enabled }) {
     if (!mode || !this._hoverStyle[mode]) return;
     const s = this._hoverStyle[mode];
+    // Track which fields actually changed so we can decide whether the
+    // active hover/selection overlay needs a full rebuild (e.g. thickness
+    // is baked into the WebGPU ribbon geometry) or just an in-place
+    // material tweak.
+    const thicknessChanged = mode === 'edge' && thickness != null && thickness !== s.thickness;
+    const vertexSizeChanged = mode === 'vertex' && vertexSize != null && vertexSize !== s.vertexSize;
     if (color      != null) s.color      = (color instanceof THREE.Color) ? color.getHex() : (color | 0);
     if (opacity    != null) s.opacity    = opacity;
     if (vertexSize != null && mode === 'vertex') s.vertexSize = vertexSize;
@@ -170,69 +185,59 @@ export class CycleModelerController {
       else { this._hoverClear(); this._hover = null; }
     }
     // Also re-style the persistent selection overlay if it's this mode.
+    // For thickness/vertex-size changes the WebGPU-fallback geometry is
+    // baked at build time, so we drop the existing overlay and let
+    // `_showElementOverlayForSelection` rebuild it from the cached style.
     const selObj = this._selectedModelerObjects()[0] || this._lastModelerObject;
-    if (selObj && this.elementMode === mode) this._showElementOverlayForSelection();
+    if (selObj && this.elementMode === mode && (thicknessChanged || vertexSizeChanged)) {
+      this._hoverClear();
+      this._showElementOverlayForSelection();
+    }
   }
 
   _setSelectionGizmoStyle({ outlineColor, outlineWidth, glowColor, glowWidth, glowOpacity, enabled }) {
+    // Per user instruction, the engine's OutlinePass + primary shell +
+    // glow are NEVER drawn in cycle-modeler mode (see
+    // applyModelerSettingsToScene — the engine outline is hidden
+    // unconditionally whenever the modeler is active). So this setter
+    // no longer drives any engine outline cache. The cached
+    // `_selGizmoStyle` values are still kept around because the
+    // primitive drag-preview reads from them while the user is drawing
+    // a new box / room / cylinder on the grid.
     if (outlineColor != null) this._selGizmoStyle.outlineColor = (outlineColor instanceof THREE.Color) ? outlineColor.getHex() : (typeof outlineColor === 'string' ? new THREE.Color(outlineColor).getHex() : (outlineColor | 0));
     if (outlineWidth != null) this._selGizmoStyle.outlineWidth = outlineWidth;
     if (glowColor    != null) this._selGizmoStyle.glowColor    = (glowColor instanceof THREE.Color) ? glowColor.getHex() : (typeof glowColor === 'string' ? new THREE.Color(glowColor).getHex() : (glowColor | 0));
     if (glowWidth    != null) this._selGizmoStyle.glowWidth    = glowWidth;
     if (glowOpacity  != null) this._selGizmoStyle.glowOpacity  = glowOpacity;
     if (enabled      != null) this._selGizmoStyle.enabled      = !!enabled;
-    // Walk the live scene and re-style any modeler objects' gizmo children.
-    // When enabled flips off, remove the gizmos so they actually disappear
-    // (previously they stayed visible because nothing hid them after the
-    // toggle).
+    // Drop any modeler-local purple/white ribbon children that older
+    // builds attached to committed primitives so they don't render a
+    // stale duplicate outline.
     const scene = this.sceneManager?.getActiveScene?.();
     scene?.traverse?.(obj => {
       if (!obj.userData?.cycoModeler?.mesh) return;
-      const gizmos = obj.children.filter(c => c.userData?._isModelerSelGizmo);
-      if (!enabled) {
-        for (const g of gizmos) {
-          obj.remove(g);
-          g.geometry?.dispose?.();
-          g.material?.dispose?.();
-        }
-        return;
+      for (const g of [...obj.children]) {
+        if (!g.userData?._isModelerSelGizmo) continue;
+        obj.remove(g);
+        g.geometry?.dispose?.();
+        g.material?.dispose?.();
       }
-      // No gizmo yet (e.g. toggled back on after being off) — re-attach.
-      if (gizmos.length === 0) { this._attachSelectionGizmo(obj); return; }
-      // Re-style in place so the user sees the change live.
-      for (const g of gizmos) this._styleSelectionGizmo(g);
     });
-    // Force next preview creation to re-attach with new style.
-    if (this._previewGizmo) { this._previewGizmo.parent?.remove(this._previewGizmo); this._previewGizmo = null; }
+    if (this._previewGizmo) {
+      this._previewGizmo.parent?.remove(this._previewGizmo);
+      this._previewGizmo = null;
+    }
   }
 
   /**
-   * Apply the current selection-gizmo style cache to an existing gizmo
-   * child mesh (LineSegments2 or fallback LineSegments).
+   * Selection-changed listener: kept as a no-op hook so the constructor
+   * wiring (`window.addEventListener('cyco-select-node', ...)`) doesn't
+   * have to change. The modeler uses its own hover/selection layer
+   * (polygon / edge / vertex highlights); the engine outline pass is
+   * hidden in modeler mode.
    */
-  _styleSelectionGizmo(g) {
-    if (!g?.material) return;
-    if (g.material.isLineMaterial) {
-      const isOuter = g.name === 'ModelerSelectionGizmoOuter';
-      const s = this._selGizmoStyle;
-      const color = isOuter ? s.outlineColor : s.glowColor;
-      const width = isOuter ? s.outlineWidth : s.glowWidth;
-      const opacity = isOuter ? 0.95 : s.glowOpacity;
-      g.material.color.set(color);
-      g.material.linewidth = width;
-      g.material.opacity = opacity;
-      g.material.resolution.copy(this._lineResolution);
-      g.material.needsUpdate = true;
-    } else {
-      // Legacy fallback (rare). Just rewrite the basic material colour.
-      try {
-        const isOuter = g.name === 'ModelerSelectionGizmoOuter';
-        const s = this._selGizmoStyle;
-        if (g.material.color?.setHex) g.material.color.setHex(isOuter ? s.outlineColor : s.glowColor);
-        g.material.opacity = isOuter ? 0.95 : s.glowOpacity;
-        g.material.transparent = true;
-      } catch {}
-    }
+  _onSelectionChanged() {
+    // No-op — modeler handles selection visuals internally.
   }
 
   // ── Line2 resolution / resize ─────────────────────────────────────────
@@ -808,7 +813,6 @@ export class CycleModelerController {
     const preview = this._buildPrimitiveObject(this._boxDrag.start, this._boxDrag.end, true);
     this._cancelPreview();
     this._preview = preview;
-    this._attachSelectionGizmo(preview);
     this.viewportEngine.scene?.add(preview);
   }
 
@@ -816,53 +820,136 @@ export class CycleModelerController {
    * Build a LineSegments2 from an EdgesGeometry (or any BufferGeometry).
    * Returns the LineSegments2 with a LineMaterial already configured and
    * `resolution` set to the current viewport.
+   *
+   * `linewidth` is in screen pixels. Under WebGL this is honored by the
+   * LineMaterial itself. Under WebGPU the LineMaterial's ShaderMaterial
+   * wrapper is rejected by Three.js's TSL NodeBuilder, so we fall back to
+   * an inflated MeshBasicMaterial ribbon — each edge segment is extruded
+   * into a thin screen-facing quad so the slider produces a visible
+   * thickness on both renderers.
    */
   _buildFatEdges(edgesGeom, color, linewidth, opacity, depthTest = true) {
-    // Detect WebGPU/TSL renderer — LineMaterial internally wraps a
-    // ShaderMaterial that Three.js's TSL NodeBuilder rejects ("Material
-    // "ShaderMaterial" is not compatible"). Under WebGPU the fat lines
-    // silently disappear; under WebGL they render correctly.
-    //
-    // Fallback for WebGPU: render the same EdgesGeometry as a
-    // MeshBasicMaterial in wireframe mode. WebGPU ships a native TSL
-    // implementation of MeshBasicMaterial so this works everywhere;
-    // it just loses the screen-pixel linewidth (lines are drawn at
-    // their geometric thickness, i.e. 1 device pixel). That's still
-    // visibly better than the invisible Lines2 result.
     const renderer = this.viewportEngine?.rendererManager?.renderer;
     const isWebGPU = !!(renderer && renderer.isWebGPURenderer);
-    if (isWebGPU) {
-      const wireMesh = new THREE.Mesh(
-        edgesGeom,
-        new THREE.MeshBasicMaterial({
-          color,
-          wireframe: true,
-          transparent: true,
-          opacity,
-          depthTest,
-          depthWrite: false,
-          toneMapped: false,
-        }),
-      );
-      wireMesh.renderOrder = 9999;
-      return wireMesh;
+
+    // Clamp to a reasonable visible range so a stray 0/NaN doesn't hide
+    // the wireframe entirely.
+    const widthPx = Math.max(0.5, Number.isFinite(linewidth) ? linewidth : 1);
+
+    if (!isWebGPU) {
+      // WebGL: Line2 honours screen-pixel width natively.
+      const lineGeom = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeom);
+      const mat = new LineMaterial({
+        color,
+        linewidth: widthPx,
+        transparent: true,
+        opacity,
+        depthTest,
+        depthWrite: false,
+        dashed: false,
+        alphaToCoverage: true,
+      });
+      this._ensureLineResolution(mat);
+      const seg = new LineSegments2(lineGeom, mat);
+      seg.scale.set(1, 1, 1);
+      return seg;
     }
 
-    const lineGeom = new LineSegmentsGeometry().fromEdgesGeometry(edgesGeom);
-    const mat = new LineMaterial({
-      color,
-      linewidth,           // screen-pixel thickness
-      transparent: true,
-      opacity,
-      depthTest,
-      depthWrite: false,
-      dashed: false,
-      alphaToCoverage: true,
-    });
-    this._ensureLineResolution(mat);
-    const seg = new LineSegments2(lineGeom, mat);
-    seg.scale.set(1, 1, 1);
-    return seg;
+    // WebGPU fallback: convert pixel width into world-space ribbon width
+    // using camera distance + FOV so it looks consistent at any zoom.
+    const camera = this.viewportEngine?.camera;
+    const fov = ((camera?.fov ?? 50)) * Math.PI / 180;
+    const canvasH = Math.max(1, renderer.domElement?.clientHeight || 1080);
+    // Distance from the world origin to the camera; for modeler
+    // primitives at the origin this is close to the actual view distance.
+    const cameraDist = Math.max(0.5, camera?.position?.length?.() ?? 10);
+    const worldPerPx = (2 * Math.tan(fov / 2) * cameraDist) / canvasH;
+    const widthWorld = Math.max(worldPerPx * 0.25, widthPx * worldPerPx);
+
+    const ribbonGeom = this._expandEdgesToRibbon(edgesGeom, widthWorld);
+    const wireMesh = new THREE.Mesh(
+      ribbonGeom,
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthTest,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    wireMesh.renderOrder = 9999;
+    return wireMesh;
+  }
+
+  /**
+   * Expand a THREE.EdgesGeometry (pairs of vertices describing line
+   * segments) into a triangle ribbon of the requested world-space width.
+   *
+   * Each edge segment AB becomes a quad: A-l, A-r, B-r, A-l, B-r, B-l
+   * where A-l/B-l and A-r/B-r are A and B pushed in opposite directions
+   * along the segment's local perpendicular.
+   *
+   * The geometry stays in source-mesh LOCAL coordinates (same as the
+   * input EdgesGeometry), so the ribbon scales/rotates with the parent
+   * mesh. The perpendicular for each segment is computed by crossing the
+   * segment direction with an arbitrary stable axis (chosen per segment
+   * to avoid degenerates when a segment runs parallel to that axis).
+   */
+  _expandEdgesToRibbon(edgesGeom, width) {
+    const src = edgesGeom.attributes.position;
+    if (!src) return edgesGeom;
+    const segCount = (src.count / 2) | 0;
+    const positions = new Float32Array(segCount * 6 * 3);
+    const A = new THREE.Vector3();
+    const B = new THREE.Vector3();
+    const dir = new THREE.Vector3();
+    const tmp = new THREE.Vector3();
+    const normal = new THREE.Vector3();
+    const offset = new THREE.Vector3();
+    // Stable local-space axes. Either of these works as a cross-product
+    // partner for `dir`; switching per-segment avoids degenerate
+    // (zero-length) normals for segments aligned with that axis.
+    const AXES = [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 1),
+    ];
+    let o = 0;
+    for (let i = 0; i < segCount; i++) {
+      A.fromBufferAttribute(src, i * 2);
+      B.fromBufferAttribute(src, i * 2 + 1);
+      dir.subVectors(B, A);
+      if (dir.lengthSq() < 1e-10) continue;
+      dir.normalize();
+      // Pick the first axis not parallel to dir, then cross.
+      let chosen = AXES[2];
+      for (let a = 0; a < 3; a++) {
+        tmp.crossVectors(dir, AXES[a]);
+        if (tmp.lengthSq() > 1e-6) { chosen = AXES[a]; break; }
+      }
+      normal.crossVectors(dir, chosen);
+      if (normal.lengthSq() < 1e-6) continue;
+      normal.normalize();
+      offset.copy(normal).multiplyScalar(width);
+      const aL = A;
+      const aR = A.clone().add(offset);
+      const bL = B;
+      const bR = B.clone().add(offset);
+      // Tri 1: aL, aR, bR
+      positions[o++] = aL.x; positions[o++] = aL.y; positions[o++] = aL.z;
+      positions[o++] = aR.x; positions[o++] = aR.y; positions[o++] = aR.z;
+      positions[o++] = bR.x; positions[o++] = bR.y; positions[o++] = bR.z;
+      // Tri 2: aL, bR, bL
+      positions[o++] = aL.x; positions[o++] = aL.y; positions[o++] = aL.z;
+      positions[o++] = bR.x; positions[o++] = bR.y; positions[o++] = bR.z;
+      positions[o++] = bL.x; positions[o++] = bL.y; positions[o++] = bL.z;
+    }
+    const ribbon = new THREE.BufferGeometry();
+    ribbon.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, o), 3));
+    ribbon.computeBoundingSphere();
+    return ribbon;
   }
 
   /**
@@ -920,30 +1007,15 @@ export class CycleModelerController {
   }
 
   /**
-   * Add the "purple + white" bounding-box style to a preview/primitive
-   * object. This is the unselected-primitive look the user controls via
-   * the modeler Settings → Selection Gizmo tab.
-   * Two LineSegments2 children: an outer (purple) and an inner (white).
-   * Both use screen-pixel linewidth via Line2 so the Thickness and
-   * Glow Thickness sliders produce a visible result — LineBasicMaterial
-   * .linewidth is ignored by WebGL.
+   * (Removed) — the cycle modeler no longer attaches its own purple/white
+   * bounding-box ribbon to selected primitives or previews. Per user
+   * instruction, the engine's OutlinePass + primary shell + glow are
+   * hidden entirely in modeler mode (see `applyModelerSettingsToScene`
+   * and `PostProcessingPipeline._onModelerMode`), so there is no
+   * duplicate engine outline to coordinate with. The modeler's
+   * per-element selection visuals are drawn by `_updateHover` and
+   * `_showElementOverlayForSelection` below.
    */
-  _attachSelectionGizmo(target) {
-    if (!target?.geometry || !this._selGizmoStyle.enabled) return;
-    const edges = new THREE.EdgesGeometry(target.geometry, 1);
-    const s = this._selGizmoStyle;
-    const outer = this._buildFatEdges(edges, s.outlineColor, s.outlineWidth, 0.95, true);
-    outer.name = 'ModelerSelectionGizmoOuter';
-    outer.userData._isModelerSelGizmo = true;
-    outer.renderOrder = 998;
-    target.add(outer);
-
-    const inner = this._buildFatEdges(edges, s.glowColor, s.glowWidth, s.glowOpacity, false);
-    inner.name = 'ModelerSelectionGizmoInner';
-    inner.userData._isModelerSelGizmo = true;
-    inner.renderOrder = 999;
-    target.add(inner);
-  }
 
   _updateHover(hit) {
     if (!this.active || !hit?.object?.userData?.cycoModeler?.mesh) return this._hoverClear();

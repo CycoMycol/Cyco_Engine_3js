@@ -13,7 +13,13 @@ import { BasePanel } from './BasePanel.js';
 export class LeftToolbarPanel extends BasePanel {
   constructor() {
     super();
-    this._activeTool        = 'translate';
+    // Default to 'select' so a cold page load / hard refresh leaves the
+    // editor in Select mode with no transform gizmo active. Previously
+    // defaulted to 'translate' which kept the Move button highlighted and
+    // left the TransformControls helper rendering arrows at world origin
+    // even when nothing was selected (the user explicitly asked for a
+    // clean no-tool state on a fresh load).
+    this._activeTool        = 'select';
     this._lastTransformTool = 'translate'; // what the cycle button currently shows for object mode
     this._physicsEditTool   = 'translate'; // current collider gizmo submode when physics edit is active
     this._viewMode          = '3d';

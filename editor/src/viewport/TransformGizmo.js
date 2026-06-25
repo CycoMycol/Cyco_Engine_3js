@@ -6,7 +6,13 @@ export class TransformGizmo {
     this.engine           = viewportEngine;
     this.selectionManager = selectionManager;
 
-    this._mode         = 'translate';
+    // Default to 'select' so a cold page load / hard refresh leaves the
+    // editor in Select mode with no transform gizmo rendered at world
+    // origin. Previously defaulted to 'translate' which kept the Move
+    // helper visible (arrows + center diamond) at (0,0,0) even with no
+    // selection. Users press W to switch to Move / select with the
+    // SelectionManager to attach the gizmo to a real object.
+    this._mode         = 'select';
     // Default to LOCAL space so the Move gizmo translates along the
     // object's own axes (matches the user's expectation that "the way
     // that objects are being moved, they need to move in their local
@@ -93,7 +99,14 @@ export class TransformGizmo {
     this._onPhysicsProxyReady = this._onPhysicsProxyReady.bind(this);
     this._onPhysicsEditFocus = this._onPhysicsEditFocus.bind(this);
     this._onPhysicsTool      = this._onPhysicsTool.bind(this);
+    this._onModelerMode      = this._onModelerMode.bind(this);
     this._rcHandler          = null;
+    // While the cycle modeler is active the engine TransformControls (and
+    // its helper / Box Gizmo) must NOT attach to selected objects. The
+    // user only wants the Move/Rotate/Scale gizmos to appear when they
+    // explicitly hit a tool button. Track this flag in `_onModelerMode`
+    // and short-circuit the select/deselect handlers while it's set.
+    this._modelerMode = false;
 
     window.addEventListener('cyco-vp-ready',              this._onVpReady);
     window.addEventListener('cyco-renderer-changed',      this._onRendererChanged);
@@ -110,6 +123,7 @@ export class TransformGizmo {
     window.addEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.addEventListener('cyco-physics-edit-focus',    this._onPhysicsEditFocus);
     window.addEventListener('cyco-physics-vp-tool',       this._onPhysicsTool);
+    window.addEventListener('cyco-modeler-mode',          this._onModelerMode);
   }
 
   get controls() { return this._controls; }
@@ -1212,6 +1226,12 @@ export class TransformGizmo {
   _onEditorCamChanged() { this._build(); }
 
   _onSelectNode(event) {
+    // Cycle Modeler mode: the engine TransformControls (and its Box Gizmo
+    // / helper) must not attach to selected cycle-modeler primitives. The
+    // user wants Move/Rotate/Scale only when they explicitly press the
+    // tool button. Engine selection outline is still allowed (it's
+    // separate from the gizmo); it just has no transform handles attached.
+    if (this._modelerMode) return;
     const objects = Array.isArray(event.detail?.objects)
       ? event.detail.objects.filter(Boolean)
       : (event.detail?.object ? [event.detail.object] : []);
@@ -1393,9 +1413,43 @@ export class TransformGizmo {
   }
 
   _onDeselectAll() {
+    if (this._modelerMode) {
+      // Don't drop our modeler state — just hide the gizmo visuals. We
+      // keep `_targetObject` so exiting modeler mode can re-attach.
+      this._hideBox();
+      return;
+    }
     this.detach();
     this._hideBox();
     this._destroyMultiGroup();
+  }
+
+  /**
+   * Cycle Modeler mode toggle. While modeler mode is active the engine
+   * TransformControls / Box Gizmo / helpers must NOT follow selection —
+   * the user only wants Move/Rotate/Scale when they explicitly press
+   * the tool button. Detach everything on enter and keep a flag so the
+   * select/deselect handlers short-circuit. On exit, run one rebuild
+   * pass to reattach to whatever the editor's selection currently is.
+   */
+  _onModelerMode(event) {
+    const active = !!event.detail?.active;
+    this._modelerMode = active;
+    if (active) {
+      // Detach TransformControls + drop the Box Gizmo + dispose any
+      // multi-group so nothing floats around in the viewport while the
+      // user is editing primitives.
+      this.detach();
+      this._hideBox();
+      this._destroyMultiGroup();
+      if (this._tc) this._tc.enabled = false;
+      return;
+    }
+    // Exit — re-enable TransformControls and let the next cyco-select-node
+    // reattach normally.
+    if (this._tc) this._tc.enabled = true;
+    // If something was selected before entering modeler mode, reattach.
+    if (this._targetObject && this._mode !== 'select') this._attachTo(this._targetObject);
   }
 
   _onHierarchyRemove(e) {
@@ -2079,6 +2133,7 @@ export class TransformGizmo {
     window.removeEventListener('cyco-physics-edit-proxy-ready', this._onPhysicsProxyReady);
     window.removeEventListener('cyco-physics-edit-focus', this._onPhysicsEditFocus);
     window.removeEventListener('cyco-physics-vp-tool', this._onPhysicsTool);
+    window.removeEventListener('cyco-modeler-mode', this._onModelerMode);
     this._teardown();
     window.removeEventListener('cyco-preferences-change', this._onPrefsChanged);
     window.removeEventListener('cyco-preferences-preview', this._onPrefsChanged);
