@@ -822,12 +822,23 @@ export class EditableMesh {
     //     than `angleThreshold` degrees, OR if either endpoint is a
     //     pole vertex (so the spoke is visible at the tip).
     const positions = [];
+    // Per-EMITTED-segment face normal data, for back-face culling in the
+    // wireframe overlay. Each emitted segment stores 0-2 face normals
+    // (flat array, every 3 floats = one [nx, ny, nz] triple); the ribbon
+    // builder transforms them to world via the parent matrix and skips
+    // a segment if BOTH adjacent face normals point away from the
+    // camera. Stored in LOCAL space.
+    // Indexing: segFaceNormals[i] corresponds to segment i of the
+    // geometry's position attribute (i.e. vertex pair (i*2, i*2+1)).
+    const segFaceNormals = []; // each entry: number[] of length 0, 3, or 6
     for (const [, info] of edgeFaces) {
       if (info.length === 1) {
-        const { a, b } = info[0];
+        const { a, b, fi } = info[0];
         const va = this.vertices[a];
         const vb = this.vertices[b];
         positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+        const n = faceNormals[fi];
+        segFaceNormals.push(n ? [n.x, n.y, n.z] : []);
       } else if (info.length === 2) {
         const n1 = faceNormals[info[0].fi];
         const n2 = faceNormals[info[1].fi];
@@ -838,6 +849,16 @@ export class EditableMesh {
           const va = this.vertices[a];
           const vb = this.vertices[b];
           positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+          const normals = [];
+          if (n1) normals.push(n1.x, n1.y, n1.z);
+          if (n2) normals.push(n2.x, n2.y, n2.z);
+          segFaceNormals.push(normals);
+        } else {
+          // Skipped: angle too small (e.g. quad triangulation diagonal).
+          // We still push an empty entry so the indices line up if some
+          // downstream caller needs them; but in practice only emitted
+          // edges end up in the BufferGeometry.
+          segFaceNormals.push([]);
         }
       } else {
         // 3+ faces share this edge → always emit.
@@ -845,11 +866,20 @@ export class EditableMesh {
         const va = this.vertices[a];
         const vb = this.vertices[b];
         positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
+        const normals = [];
+        for (const e of info) {
+          const n = faceNormals[e.fi];
+          if (n) normals.push(n.x, n.y, n.z);
+        }
+        segFaceNormals.push(normals);
       }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     g.computeBoundingSphere();
+    // Attach per-segment face normals in local space. Consumed by
+    // CycleModelerController._expandEdgesToRibbon for back-face culling.
+    g.userData._segFaceNormals = segFaceNormals;
     return g;
   }
 }

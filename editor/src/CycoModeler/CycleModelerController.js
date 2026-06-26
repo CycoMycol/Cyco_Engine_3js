@@ -1011,15 +1011,53 @@ export class CycleModelerController {
       new THREE.Vector3(0, 0, 1),
     ];
     const camPos = camera?.position;
+    // Per-segment face normals (local space) attached by
+    // EditableMesh.toEdgesGeometry. Used to cull back-facing segments:
+    // a segment is skipped if BOTH of its adjacent face normals point
+    // away from the camera. This prevents the back-side ribbon
+    // perpendiculars from poking out at the silhouette as the camera
+    // orbits, which is what produced the "wireframe disappears/reappears
+    // on the right side as you rotate" bug.
+    const segFaceNormals = edgesGeom.userData?._segFaceNormals;
     let o = 0;
     let skippedView = 0;
     let usedAxisFallback = 0;
+    let culledBackface = 0;
+    const faceN = new THREE.Vector3();
+    const faceNW = new THREE.Vector3();
     for (let i = 0; i < segCount; i++) {
       A.fromBufferAttribute(src, i * 2);
       B.fromBufferAttribute(src, i * 2 + 1);
       dir.subVectors(B, A);
       if (dir.lengthSq() < 1e-10) continue;
       dir.normalize();
+      // Back-face cull: skip this segment entirely if every adjacent
+      // face normal points away from the camera. A boundary edge (1
+      // face) keeps its single face normal as the test.
+      if (!initial && camera && segFaceNormals && segFaceNormals[i]) {
+        const normals = segFaceNormals[i];
+        const nCount = normals.length / 3;
+        if (nCount > 0) {
+          // Compute segment midpoint in world for the dot test.
+          const midLocal = A.clone().add(B).multiplyScalar(0.5);
+          const midWorld = midLocal.applyMatrix4(parentWorld);
+          const camToMid = new THREE.Vector3().subVectors(camPos, midWorld).normalize();
+          let anyFront = false;
+          for (let k = 0; k < nCount; k++) {
+            faceN.set(normals[k * 3], normals[k * 3 + 1], normals[k * 3 + 2]);
+            // Transform the local-space normal into world space (no
+            // translation, but with scale/rotation).
+            faceNW.copy(faceN).transformDirection(parentWorld);
+            if (faceNW.dot(camToMid) > 0) { anyFront = true; break; }
+          }
+          if (!anyFront) {
+            // Every adjacent face is back-facing relative to the
+            // camera — this segment is on the far side of the mesh.
+            culledBackface += 1;
+            continue;
+          }
+        }
+      }
       let useFallback = false;
       let chosen = AXES[2];
       if (initial || !camera) {
@@ -1091,6 +1129,7 @@ export class CycleModelerController {
         segCount,
         skippedView,
         usedAxisFallback,
+        culledBackface,
         initial: !!initial,
         hasCamera: !!camera,
       };
