@@ -480,6 +480,22 @@ export class CycleModelerController {
     }
   }
 
+  /**
+   * Return the world-space centre of an object's bounding box, or null
+   * if the object has no geometry / bbox yet. Used by the WebGPU
+   * wireframe-ribbon width calculation so the ribbon thickness is
+   * stable relative to the object (not the world origin) as the camera
+   * orbits.
+   */
+  _getObjectWorldCenter(obj) {
+    if (!obj?.geometry) return null;
+    if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    if (!bb) return null;
+    const localCenter = bb.getCenter(new THREE.Vector3());
+    return obj.localToWorld(localCenter);
+  }
+
   _onPointerDown(event) {
     if (this._canDrawPrimitive(event)) {
       const point = this._gridPointFromEvent(event);
@@ -828,13 +844,17 @@ export class CycleModelerController {
    * into a thin screen-facing quad so the slider produces a visible
    * thickness on both renderers.
    */
-  _buildFatEdges(edgesGeom, color, linewidth, opacity, depthTest = true) {
+  _buildFatEdges(edgesGeom, color, linewidth, opacity, depthTest = true, targetPos = null) {
     const renderer = this.viewportEngine?.rendererManager?.renderer;
     const isWebGPU = !!(renderer && renderer.isWebGPURenderer);
 
     // Clamp to a reasonable visible range so a stray 0/NaN doesn't hide
     // the wireframe entirely.
     const widthPx = Math.max(0.5, Number.isFinite(linewidth) ? linewidth : 1);
+    // Make sure depthTest is a real boolean (callers may pass `true` /
+    // `false` already, but a stray `undefined` would skip the
+    // `depthTest` arg and silently default to `false`).
+    depthTest = depthTest !== false;
 
     if (!isWebGPU) {
       // WebGL: Line2 honours screen-pixel width natively.
@@ -856,17 +876,38 @@ export class CycleModelerController {
     }
 
     // WebGPU fallback: convert pixel width into world-space ribbon width
-    // using camera distance + FOV so it looks consistent at any zoom.
+    // using the camera distance to the BBOX CENTER of the parent mesh
+    // (not the world origin) so the ribbon thickness is stable when the
+    // user orbits / dollies the camera around the modeler object. This
+    // is the primary fix for the "jittery" wireframe reported in the
+    // editor: previously we used `camera.position.length()` which moves
+    // every frame as the camera orbits, causing the visible ribbon to
+    // pulse.
     const camera = this.viewportEngine?.camera;
     const fov = ((camera?.fov ?? 50)) * Math.PI / 180;
     const canvasH = Math.max(1, renderer.domElement?.clientHeight || 1080);
-    // Distance from the world origin to the camera; for modeler
-    // primitives at the origin this is close to the actual view distance.
-    const cameraDist = Math.max(0.5, camera?.position?.length?.() ?? 10);
+    // Compute the parent object's world-space bbox centre, then measure
+    // camera distance to that point. Falls back to the camera's distance
+    // to the world origin if the parent has no geometry / bbox yet.
+    let cameraDist;
+    if (targetPos && camera?.position) {
+      cameraDist = Math.max(0.5, camera.position.distanceTo(targetPos));
+    } else {
+      cameraDist = Math.max(0.5, camera?.position?.length?.() ?? 10);
+    }
     const worldPerPx = (2 * Math.tan(fov / 2) * cameraDist) / canvasH;
     const widthWorld = Math.max(worldPerPx * 0.25, widthPx * worldPerPx);
 
-    const ribbonGeom = this._expandEdgesToRibbon(edgesGeom, widthWorld);
+    // Start with a default-geometry ribbon. The screen-aligned version
+    // is rebuilt lazily in `onBeforeRender` once we know the parent's
+    // current world matrix and the active camera. The initial pass uses
+    // a world-axis perpendicular (good enough to draw something while
+    // the first frame is being scheduled).
+    const parent = edgesGeom.userData?._wireParent;
+    const parentWorld = parent ? parent.matrixWorld : new THREE.Matrix4();
+    let ribbonGeom = this._expandEdgesToRibbon(
+      edgesGeom, widthWorld, camera, parentWorld, /* initial */ true,
+    );
     const wireMesh = new THREE.Mesh(
       ribbonGeom,
       new THREE.MeshBasicMaterial({
@@ -880,6 +921,39 @@ export class CycleModelerController {
       }),
     );
     wireMesh.renderOrder = 9999;
+    // Track inputs so onBeforeRender can rebuild only when needed.
+    wireMesh.userData._wireInputs = {
+      edgesGeom,
+      widthWorld,
+      camera,
+      // Cached camera view matrix; when it changes, rebuild ribbon.
+      cachedCamMatrix: new THREE.Matrix4(),
+      // Cached parent world matrix; when it changes, rebuild ribbon.
+      cachedParentMatrix: new THREE.Matrix4().copy(parentWorld),
+      width: widthWorld,
+    };
+    const self = this;
+    wireMesh.onBeforeRender = function (_renderer, _scene, activeCamera) {
+      const data = this.userData._wireInputs;
+      if (!data) return;
+      const camMat = activeCamera.matrixWorldInverse;
+      const parentNode = this.parent;
+      if (!parentNode) return;
+      parentNode.updateWorldMatrix(true, false);
+      const parentMat = parentNode.matrixWorld;
+      // Skip if neither the camera nor the parent has moved.
+      if (camMat.equals(data.cachedCamMatrix) && parentMat.equals(data.cachedParentMatrix)) return;
+      data.cachedCamMatrix.copy(camMat);
+      data.cachedParentMatrix.copy(parentMat);
+      const newGeom = self._expandEdgesToRibbon(
+        data.edgesGeom, data.widthWorld, activeCamera, parentMat, /* initial */ false,
+      );
+      const oldGeom = this.geometry;
+      this.geometry = newGeom;
+      // Dispose the previous ribbon on a microtask so we don't stomp on
+      // shadow / multisample passes that are still referencing it.
+      queueMicrotask(() => { try { oldGeom?.dispose?.(); } catch (_) { /* already gone */ } });
+    };
     return wireMesh;
   }
 
@@ -889,15 +963,32 @@ export class CycleModelerController {
    *
    * Each edge segment AB becomes a quad: A-l, A-r, B-r, A-l, B-r, B-l
    * where A-l/B-l and A-r/B-r are A and B pushed in opposite directions
-   * along the segment's local perpendicular.
+   * along the segment's **view-aligned perpendicular** — the
+   * perpendicular to AB in the screen plane (perpendicular to the
+   * camera view direction at the segment's midpoint).
    *
-   * The geometry stays in source-mesh LOCAL coordinates (same as the
-   * input EdgesGeometry), so the ribbon scales/rotates with the parent
-   * mesh. The perpendicular for each segment is computed by crossing the
-   * segment direction with an arbitrary stable axis (chosen per segment
-   * to avoid degenerates when a segment runs parallel to that axis).
+   * Why view-aligned: a world-axis perpendicular (X / Y / Z) collapses
+   * to a sliver when the segment runs parallel to the camera view, and
+   * produces inconsistent offsets for adjacent ring segments (a sphere
+   * cap ring has segments that change direction every step → each step
+   * would pick a different world axis → the ribbon breaks into pieces
+   * with gaps). A view-aligned perpendicular stays perpendicular to
+   * the screen for any segment orientation, and is **stable across
+   * adjacent segments in a ring** because the camera view direction
+   * changes smoothly between midpoints.
+   *
+   * The geometry is stored in **local coordinates** (same as the input
+   * EdgesGeometry) so the ribbon scales/rotates with the parent mesh.
+   * World-space offsets are computed via the supplied `parentWorld`
+   * matrix, then inverted back to local via the matrix's inverse.
+   *
+   * @param {THREE.BufferGeometry} edgesGeom   line-segment pairs in local space
+   * @param {number} width                     ribbon half-width in world units
+   * @param {THREE.Camera} camera              active camera (for view dir)
+   * @param {THREE.Matrix4} parentWorld        parent's world matrix
+   * @param {boolean} initial                  true on first call (no parent matrix yet)
    */
-  _expandEdgesToRibbon(edgesGeom, width) {
+  _expandEdgesToRibbon(edgesGeom, width, camera, parentWorld, initial) {
     const src = edgesGeom.attributes.position;
     if (!src) return edgesGeom;
     const segCount = (src.count / 2) | 0;
@@ -905,38 +996,82 @@ export class CycleModelerController {
     const A = new THREE.Vector3();
     const B = new THREE.Vector3();
     const dir = new THREE.Vector3();
-    const tmp = new THREE.Vector3();
-    const normal = new THREE.Vector3();
-    const offset = new THREE.Vector3();
-    // Stable local-space axes. Either of these works as a cross-product
-    // partner for `dir`; switching per-segment avoids degenerate
-    // (zero-length) normals for segments aligned with that axis.
+    const dirW = new THREE.Vector3();
+    const viewDir = new THREE.Vector3();
+    const perpW = new THREE.Vector3();
+    const offsetLocal = new THREE.Vector3();
+    const invParent = new THREE.Matrix4();
+    if (parentWorld && !initial) {
+      invParent.copy(parentWorld).invert();
+    }
+    // Stable fall-back axes for the initial-frame / no-camera case.
     const AXES = [
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(0, 1, 0),
       new THREE.Vector3(0, 0, 1),
     ];
+    const camPos = camera?.position;
     let o = 0;
+    let skippedView = 0;
+    let usedAxisFallback = 0;
     for (let i = 0; i < segCount; i++) {
       A.fromBufferAttribute(src, i * 2);
       B.fromBufferAttribute(src, i * 2 + 1);
       dir.subVectors(B, A);
       if (dir.lengthSq() < 1e-10) continue;
       dir.normalize();
-      // Pick the first axis not parallel to dir, then cross.
+      let useFallback = false;
       let chosen = AXES[2];
-      for (let a = 0; a < 3; a++) {
-        tmp.crossVectors(dir, AXES[a]);
-        if (tmp.lengthSq() > 1e-6) { chosen = AXES[a]; break; }
+      if (initial || !camera) {
+        // First-frame build (no camera bound to the mesh yet) — fall
+        // back to a world-axis perpendicular. onBeforeRender will
+        // replace this geometry with a view-aligned one before the
+        // first user-visible frame.
+        useFallback = true;
+      } else {
+        // Transform the segment direction into world space, then
+        // compute the view direction at the segment's midpoint in
+        // world space. The perpendicular = world dir × view dir, then
+        // unproject back to local.
+        dirW.copy(dir).transformDirection(parentWorld);
+        const midLocal = A.clone().add(B).multiplyScalar(0.5);
+        const midWorld = midLocal.applyMatrix4(parentWorld);
+        viewDir.subVectors(camPos, midWorld);
+        if (viewDir.lengthSq() < 1e-10) {
+          useFallback = true;
+        } else {
+          viewDir.normalize();
+          perpW.crossVectors(dirW, viewDir);
+          if (perpW.lengthSq() < 1e-6) {
+            // Segment is parallel to the view direction at this
+            // midpoint — perpendicular collapses. Use axis fallback
+            // for this one segment; the rest of the ring uses the
+            // proper view-aligned perp.
+            useFallback = true;
+            skippedView += 1;
+          } else {
+            perpW.normalize();
+            // Convert the world-space perpendicular back to local.
+            offsetLocal.copy(perpW).transformDirection(invParent).multiplyScalar(width);
+          }
+        }
       }
-      normal.crossVectors(dir, chosen);
-      if (normal.lengthSq() < 1e-6) continue;
-      normal.normalize();
-      offset.copy(normal).multiplyScalar(width);
+      if (useFallback) {
+        usedAxisFallback += 1;
+        // Pick first world axis not parallel to dir, then cross.
+        for (let a = 0; a < 3; a++) {
+          const tmp = new THREE.Vector3().crossVectors(dir, AXES[a]);
+          if (tmp.lengthSq() > 1e-6) { chosen = AXES[a]; break; }
+        }
+        const tmpN = new THREE.Vector3().crossVectors(dir, chosen);
+        if (tmpN.lengthSq() < 1e-6) continue;
+        tmpN.normalize();
+        offsetLocal.copy(tmpN).multiplyScalar(width);
+      }
       const aL = A;
-      const aR = A.clone().add(offset);
+      const aR = A.clone().add(offsetLocal);
       const bL = B;
-      const bR = B.clone().add(offset);
+      const bR = B.clone().add(offsetLocal);
       // Tri 1: aL, aR, bR
       positions[o++] = aL.x; positions[o++] = aL.y; positions[o++] = aL.z;
       positions[o++] = aR.x; positions[o++] = aR.y; positions[o++] = aR.z;
@@ -945,6 +1080,20 @@ export class CycleModelerController {
       positions[o++] = aL.x; positions[o++] = aL.y; positions[o++] = aL.z;
       positions[o++] = bR.x; positions[o++] = bR.y; positions[o++] = bR.z;
       positions[o++] = bL.x; positions[o++] = bL.y; positions[o++] = bL.z;
+    }
+    if (typeof window !== 'undefined') {
+      // Debug: surface the fallback count so we can see if any segments
+      // are still using the world-axis perpendicular (which would
+      // indicate view-aligned is failing for that segment).
+      window.__cyco = window.__cyco || {};
+      const stats = window.__cyco._wireRibbonStats = window.__cyco._wireRibbonStats || {};
+      stats.lastBuild = {
+        segCount,
+        skippedView,
+        usedAxisFallback,
+        initial: !!initial,
+        hasCamera: !!camera,
+      };
     }
     const ribbon = new THREE.BufferGeometry();
     ribbon.setAttribute('position', new THREE.BufferAttribute(positions.subarray(0, o), 3));
@@ -1034,12 +1183,14 @@ export class CycleModelerController {
       // `thickness` field in modeler settings — falling back to the
       // wireframe thickness keeps the look coherent if the field is
       // missing from older saved settings.
+      const targetPos = this._getObjectWorldCenter(hit.object);
       mesh = this._buildFatEdges(
         geometry,
         style.color,
         Math.max(1, style.thickness ?? this._wireStyle.thickness ?? 1),
         style.opacity,
         /* depthTest */ false,
+        targetPos,
       );
     } else if (mode === 'vertex') {
       // InstancedMesh of small spheres — Points + PointsMaterial does
@@ -1177,12 +1328,16 @@ export class CycleModelerController {
     if (meshJson && meshJson.faces && meshJson.vertices) {
       try {
         const editable = EditableMesh.fromJSON(meshJson);
-        return editable.toEdgesGeometry(1);
+        const eg = editable.toEdgesGeometry(1);
+        eg.userData._wireParent = object;
+        return eg;
       } catch (err) {
         // Fall through to the raw geometry below.
       }
     }
-    return new THREE.EdgesGeometry(object.geometry, 1);
+    const eg2 = new THREE.EdgesGeometry(object.geometry, 1);
+    eg2.userData._wireParent = object;
+    return eg2;
   }
 
   _objectVertexOverlay(object) {
@@ -1223,8 +1378,9 @@ export class CycleModelerController {
     if (!object) return;
     const geometry = mode === 'edge' ? this._objectEdgeOverlay(object) : this._objectVertexOverlay(object);
     if (!geometry) return;
+    const targetPos = this._getObjectWorldCenter(object);
     const mesh = mode === 'edge'
-      ? this._buildFatEdges(geometry, style.color, Math.max(1, style.thickness ?? this._wireStyle.thickness ?? 1), style.opacity, /* depthTest */ false)
+      ? this._buildFatEdges(geometry, style.color, Math.max(1, style.thickness ?? this._wireStyle.thickness ?? 1), style.opacity, /* depthTest */ false, targetPos)
       : this._buildVertexHandles(geometry, style.color, style.vertexSize, style.opacity);
     mesh.renderOrder = 9999;
     object.add(mesh);
@@ -1934,14 +2090,17 @@ export class CycleModelerController {
       }
     }
     if (!edgesGeom) edgesGeom = new THREE.EdgesGeometry(obj.geometry, 1);
+    edgesGeom.userData._wireParent = obj;
     // Line2 (LineSegments2 + LineMaterial) so the thickness slider
     // produces a visible result on screen.
+    const targetPos = this._getObjectWorldCenter(obj);
     const wire = this._buildFatEdges(
       edgesGeom,
       this._wireStyle.color,
       this._wireStyle.thickness,
       this._wireStyle.opacity,
       /* depthTest */ true,
+      targetPos,
     );
     wire.name = 'CycleModelerWireOverlay';
     wire.userData._editorOnly = true;

@@ -129,15 +129,18 @@ export class EditableMesh {
       // Tread (top of step): horizontal quad, CCW from above (+Y normal).
       //   FL_T → BL_T → BR_T → FR_T
       faces.push([s.FL_T, s.BL_T, s.BR_T, s.FR_T]);
-      // Riser (front of step): vertical quad at z = i*run, CCW from +Z.
-      //   FL_B → FR_B → FR_T → FL_T
-      faces.push([s.FL_B, s.FR_B, s.FR_T, s.FL_T]);
-      // Left side (-X): CCW from -X.
-      //   FL_B → FL_T → BL_T → BL_B
-      faces.push([s.FL_B, s.FL_T, s.BL_T, s.BL_B]);
-      // Right side (+X): CCW from +X.
-      //   FR_B → BR_B → BR_T → FR_T
-      faces.push([s.FR_B, s.BR_B, s.BR_T, s.FR_T]);
+      // Riser (front of step): vertical quad at z = i*run with outward
+      // -Z normal. Cross product of the (FL_B → FR_B) and (FL_B → FL_T)
+      // edges points +Z, so reverse the listing to get -Z.
+      faces.push([s.FL_B, s.FL_T, s.FR_T, s.FR_B]);
+      // Left side (-X): outward normal points -X. Reversed winding
+      //   FL_B → BL_B → BL_T → FL_T
+      // matches the (right-handed) cross-product test.
+      faces.push([s.FL_B, s.BL_B, s.BL_T, s.FL_T]);
+      // Right side (+X): outward normal points +X. Reversed winding
+      //   FR_B → FR_T → BR_T → BR_B
+      // matches the (right-handed) cross-product test.
+      faces.push([s.FR_B, s.FR_T, s.BR_T, s.BR_B]);
     }
     // Bottom face at y=0: only step 0 contributes (subsequent steps have
     // their "floor" inside the stair body, hidden by the tread above).
@@ -149,8 +152,8 @@ export class EditableMesh {
     // Back face at z = t*run (top of the stair).
     {
       const last = steps[t - 1];
-      //   BL_B → BR_B → BR_T → BL_T  (CCW from -Z)
-      faces.push([last.BL_B, last.BR_B, last.BR_T, last.BL_T]);
+      //   BL_B → BL_T → BR_T → BR_B  (CCW from -Z so normal is -Z)
+      faces.push([last.BL_B, last.BL_T, last.BR_T, last.BR_B]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -223,21 +226,23 @@ export class EditableMesh {
       const outFN = ringFront[s + 1];
       const outB  = ringBack[s];
       const outBN = ringBack[s + 1];
-      // Tread (top of step): triangle (axis-top, outer-front, outer-back).
-      //   CCW from above, normal +Y.
-      faces.push([aLow, outF, outB]);
-      // Riser (vertical face from step s tread-top to step s+1 tread-bottom):
-      //   triangle (axis-top, axis-top+1, outer-front-next).
-      //   The riser connects the inner corner of this tread to the next
-      //   step's outer-front corner. (axis at s*rise, axis at (s+1)*rise,
-      //   outer-front of step s+1)
-      faces.push([aLow, aHigh, outFN]);
-      // Outer side (vertical face along the outside edge of the tread):
-      //   triangle (outer-front, outer-front-next, outer-back-next).
+      // Tread (top of step): triangle (axis-top, outer-back, outer-front)
+      //   — listing outer-back first so the cross product points +Y
+      //   (outward from the tread).
+      faces.push([aLow, outB, outF]);
+      // Riser (vertical face from step s tread-top to step s+1 tread-
+      // bottom). Outward direction is the radial-CCW direction from
+      // the axis at angle ~a0_next. Winding `[aLow, outFN, aHigh]`
+      // produces an outward (positive angular) normal.
+      faces.push([aLow, outFN, aHigh]);
+      // Outer side (vertical face along the outside edge of the tread).
+      // Outward direction is purely radial (away from axis). Winding
+      // `[outF, outFN, outBN]` gives an outward-pointing radial normal.
       faces.push([outF, outFN, outBN]);
-      // Back of tread (vertical face at the back edge of the tread):
-      //   triangle (outer-back, outer-back-next, axis-top+1).
-      //   This closes the gap between consecutive treads.
+      // Back of tread (vertical face at the back edge of the tread).
+      // Outward direction is the radial-CW direction (away from the
+      // next step). Winding `[outB, aHigh, outBN]` gives an outward
+      // (negative angular) normal.
       faces.push([outB, aHigh, outBN]);
     }
     return new EditableMesh({ vertices, faces });
@@ -268,10 +273,13 @@ export class EditableMesh {
       const j = (i + 1) % seg;
       // Side wall (CCW from outside): bottom-i, top-i, top-j, bottom-j.
       faces.push([bottomRing[i], topRing[i], topRing[j], bottomRing[j]]);
-      // Bottom cap (CCW from below).
-      faces.push([bottomCenter, bottomRing[j], bottomRing[i]]);
-      // Top cap (CCW from above).
-      faces.push([topCenter, topRing[i], topRing[j]]);
+      // Bottom cap (outward -Y normal, so CCW from below). With the
+      // ring winding `i → j` going CW from below, list the larger
+      // index first so the triangle winds CCW from below.
+      faces.push([bottomCenter, bottomRing[i], bottomRing[j]]);
+      // Top cap (outward +Y normal, so CCW from above). `i → j` is
+      // CCW from above so list the smaller index first.
+      faces.push([topCenter, topRing[j], topRing[i]]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -295,11 +303,13 @@ export class EditableMesh {
     }
     for (let i = 0; i < seg; i += 1) {
       const j = (i + 1) % seg;
-      // Side (CCW from outside): apex, base-i, base-j (winding from apex
-      // down to base-j gives an outward normal after fan triangulation).
-      faces.push([apex, baseRing[i], baseRing[j]]);
-      // Bottom cap (CCW from below).
-      faces.push([bottomCenter, baseRing[j], baseRing[i]]);
+      // Side (outward normal). Winding `[apex, baseRing[j], baseRing[i]]`
+      // gives an outward (upward + radial) normal for the upward-tapering
+      // triangle.
+      faces.push([apex, baseRing[j], baseRing[i]]);
+      // Bottom cap (outward -Y normal, CCW from below). `i → j` is CW
+      // from below so list the larger index first.
+      faces.push([bottomCenter, baseRing[i], baseRing[j]]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -333,10 +343,12 @@ export class EditableMesh {
       }
       ringIdxs.push(ring);
     }
-    // Top cap: triangles connecting the top pole to the first ring.
+    // Top cap: triangle fan from the north pole to the first ring.
+    // Outward +Y normal requires the fan to wind CW from above, which
+    // means listing the ring vertex with the larger index first.
     for (let i = 0; i < seg; i += 1) {
       const j = (i + 1) % seg;
-      faces.push([top, ringIdxs[0][i], ringIdxs[0][j]]);
+      faces.push([top, ringIdxs[0][j], ringIdxs[0][i]]);
     }
     // Quad strips between consecutive rings.
     for (let r = 0; r < ringIdxs.length - 1; r += 1) {
@@ -344,14 +356,21 @@ export class EditableMesh {
       const next = ringIdxs[r + 1];
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
-        faces.push([cur[i], next[i], next[j], cur[j]]);
+        // Outward normal has a positive Y component on the upper
+        // hemisphere and a negative one on the lower hemisphere, with
+        // a purely-radial equator. The winding `[cur[i], cur[j],
+        // next[j], next[i]]` produces an outward-pointing normal for
+        // every ring strip.
+        faces.push([cur[i], cur[j], next[j], next[i]]);
       }
     }
-    // Bottom cap: triangles from the last ring down to the bottom pole.
+    // Bottom cap: triangle fan from the last ring down to the south
+    // pole. Outward -Y normal requires CCW from below; with `i → j`
+    // being CW from below, list the smaller index first.
     const lastRing = ringIdxs[ringIdxs.length - 1];
     for (let i = 0; i < seg; i += 1) {
       const j = (i + 1) % seg;
-      faces.push([bottom, lastRing[j], lastRing[i]]);
+      faces.push([bottom, lastRing[i], lastRing[j]]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -410,10 +429,18 @@ export class EditableMesh {
     }
     const topPole = vertices.length; vertices.push({ x: 0, y: halfMid + radius, z: 0 });
     if (topHemi.length) {
+      // Connector strip from cylinder top ring to first hemisphere ring
+      // (the "equator" of the upper hemisphere). Each cell is a quad
+      // with outward-facing (+Y) winding. Viewed from above, the angle
+      // `a = (i/seg)*2π` increases CCW so CCW-from-above means winding
+      // `i → j = i+1` along the ring; radial outward moves from the
+      // topRing (outer) to topHemi[0] (slightly inner & higher).
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
-        faces.push([topRing[i], topHemi[0][i], topHemi[0][j]]);
+        faces.push([topRing[i], topHemi[0][i], topHemi[0][j], topRing[j]]);
       }
+      // Ring strips between consecutive upper-hemisphere rings. Same
+      // +Y-outward winding as the connector strip.
       for (let r = 0; r < topHemi.length - 1; r += 1) {
         const cur = topHemi[r];
         const next = topHemi[r + 1];
@@ -422,6 +449,11 @@ export class EditableMesh {
           faces.push([cur[i], next[i], next[j], cur[j]]);
         }
       }
+      // Pole cap (triangle fan). Outward +Y normal: viewing the fan
+      // from above, `lastRing[i]` and `lastRing[j=i+1]` are CCW so the
+      // fan must list the larger index first to wind CW-from-above
+      // (which gives an upward-pointing normal when the pole is at
+      // the apex).
       const lastRing = topHemi[topHemi.length - 1];
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
@@ -454,27 +486,39 @@ export class EditableMesh {
     }
     const bottomPole = vertices.length; vertices.push({ x: 0, y: -halfMid - radius, z: 0 });
     if (bottomHemi.length) {
+      // Connector strip from cylinder bottom ring to first hemisphere
+      // ring (the "equator" of the lower hemisphere). Each cell is a
+      // quad with outward-facing (-Y) winding. Viewed from below (-Y
+      // looking up) the angle `a = (i/seg)*2π` increases CW, so CCW
+      // from below means winding `j → i` along the ring. Quad:
+      // bottomRing[i] → bottomRing[j] → bottomHemi[0][j] → bottomHemi[0][i].
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
-        faces.push([bottomRing[i], bottomHemi[0][j], bottomHemi[0][i]]);
+        faces.push([bottomRing[i], bottomRing[j], bottomHemi[0][j], bottomHemi[0][i]]);
       }
+      // Ring strips between consecutive lower-hemisphere rings. Same
+      // -Y-outward winding as the connector strip.
       for (let r = 0; r < bottomHemi.length - 1; r += 1) {
         const cur = bottomHemi[r];
         const next = bottomHemi[r + 1];
         for (let i = 0; i < seg; i += 1) {
           const j = (i + 1) % seg;
-          faces.push([cur[i], next[j], next[i]]);
+          faces.push([cur[i], cur[j], next[j], next[i]]);
         }
       }
+      // Pole cap (triangle fan). Outward -Y normal requires CCW from
+      // below; `i → j` is CW from below, so reverse to get CCW.
       const lastRing = bottomHemi[bottomHemi.length - 1];
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
         faces.push([bottomPole, lastRing[i], lastRing[j]]);
       }
     } else {
+      // Degenerate: tiny capsule. Outward -Y winding requires the ring
+      // vertices listed in reverse (CW from above) order.
       for (let i = 0; i < seg; i += 1) {
         const j = (i + 1) % seg;
-        faces.push([bottomRing[i], bottomRing[j], bottomPole]);
+        faces.push([bottomRing[j], bottomRing[i], bottomPole]);
       }
     }
     return new EditableMesh({ vertices, faces });
@@ -517,7 +561,12 @@ export class EditableMesh {
       const next = rings[i2];
       for (let j = 0; j < segMinor; j += 1) {
         const j2 = (j + 1) % segMinor;
-        faces.push([cur[j], next[j], next[j2], cur[j2]]);
+        // Quad along the tube. The outward normal at this cell points
+        // away from the major-axis circle `(major*cos(u), 0,
+        // major*sin(u))`. The winding `[cur[j], cur[j2], next[j2],
+        // next[j]]` produces an outward-pointing normal for the
+        // (major+minor*cv) radial direction.
+        faces.push([cur[j], cur[j2], next[j2], next[j]]);
       }
     }
     return new EditableMesh({ vertices, faces });
@@ -528,7 +577,14 @@ export class EditableMesh {
    * canonical 12-vertex coordinates and lets `width` set the overall size.
    */
   static icosahedron(width, height, depth) {
-    const r = Math.max(1, Math.max(width, depth) / 2);
+    // `height` is accepted for API parity with the other primitives but
+    // an icosahedron is uniformly sized along all axes; fall back to
+    // `width` if `height` or `depth` is undefined (e.g. callers that
+    // pass a single size argument).
+    const w = Number.isFinite(width) ? width : 1;
+    const h = Number.isFinite(height) ? height : w;
+    const d = Number.isFinite(depth) ? depth : w;
+    const r = Math.max(1, Math.max(w, h, d) / 2);
     const t = (1 + Math.sqrt(5)) / 2;
     const norm = Math.sqrt(1 + t * t);
     const k = r / norm;
@@ -731,12 +787,40 @@ export class EditableMesh {
         edgeFaces.get(key).push({ a, b, fi });
       }
     }
+    // Detect "pole" vertices — vertices whose incident edges are
+    // shared by coplanar face pairs (e.g. a sphere's north pole, where
+    // every cap-triangle pair has identical normals). The angle-threshold
+    // test would otherwise drop those spokes, leaving the pole vertex
+    // stranded with no wireframe edges ("dead space" at the tip).
+    //
+    // Heuristic: a vertex is a pole if ALL its incident edges are
+    // shared by face pairs whose normals agree within the threshold.
+    // For each vertex, collect the per-edge "all-coplanar" flag; if
+    // every edge touching it qualifies, treat the vertex as a pole and
+    // always emit its spokes.
+    const vertexEdgeCount = new Map();
+    const vertexAllCoplanar = new Map();
+    const cosThreshold = Math.cos((angleThreshold * Math.PI) / 180);
+    for (const [, info] of edgeFaces) {
+      const isCoplanarPair =
+        info.length === 2 &&
+        faceNormals[info[0].fi] &&
+        faceNormals[info[1].fi] &&
+        faceNormals[info[0].fi].dot(faceNormals[info[1].fi]) >= cosThreshold;
+      const vertices = [info[0].a, info[0].b];
+      for (const v of vertices) {
+        vertexEdgeCount.set(v, (vertexEdgeCount.get(v) || 0) + 1);
+        if (!isCoplanarPair) vertexAllCoplanar.set(v, false);
+        else if (!vertexAllCoplanar.has(v)) vertexAllCoplanar.set(v, true);
+      }
+    }
+    const isPole = (v) => vertexAllCoplanar.get(v) === true && (vertexEdgeCount.get(v) || 0) >= 3;
     // For each edge, decide whether to emit it:
     //   - Always emit if it borders only one face (boundary).
     //   - Always emit if it borders more than two faces (non-manifold).
     //   - For two-face edges, emit if the face normals differ by more
-    //     than `angleThreshold` degrees.
-    const cosThreshold = Math.cos((angleThreshold * Math.PI) / 180);
+    //     than `angleThreshold` degrees, OR if either endpoint is a
+    //     pole vertex (so the spoke is visible at the tip).
     const positions = [];
     for (const [, info] of edgeFaces) {
       if (info.length === 1) {
@@ -748,8 +832,9 @@ export class EditableMesh {
         const n1 = faceNormals[info[0].fi];
         const n2 = faceNormals[info[1].fi];
         const dot = (n1 && n2) ? n1.dot(n2) : 1;
-        if (dot < cosThreshold) {
-          const { a, b } = info[0];
+        const { a, b } = info[0];
+        const poleSpoke = isPole(a) || isPole(b);
+        if (dot < cosThreshold || poleSpoke) {
           const va = this.vertices[a];
           const vb = this.vertices[b];
           positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);

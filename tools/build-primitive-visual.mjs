@@ -44,7 +44,7 @@ const tests = [
   { name: 'Cylinder', fn: () => EditableMesh.cylinder(2, 4, 16) },
   { name: 'Cone', fn: () => EditableMesh.cone(2, 4, 16) },
   { name: 'Box', fn: () => EditableMesh.box(2, 2, 2) },
-  { name: 'Icosahedron', fn: () => EditableMesh.icosahedron(2) },
+  { name: 'Icosahedron', fn: () => EditableMesh.icosahedron(2, 2, 2) },
 ];
 
 const row = document.getElementById('row');
