@@ -443,16 +443,33 @@ export class CenterPanel extends BasePanel {
 
     panel.appendChild(header);
 
-    Object.entries(MODELER_TOOLS).forEach(([groupId, tools]) => {
+    // ── Section order is user-customizable via drag-and-drop on the
+    //    collapsible headers. Load persisted order (if any) so users keep
+    //    their layout across reloads.
+    const savedOrder = this._loadModelerSectionOrder();
+    const orderedEntries = savedOrder
+      ? Object.entries(MODELER_TOOLS).sort(([a], [b]) => {
+          const ia = savedOrder.indexOf(a);
+          const ib = savedOrder.indexOf(b);
+          return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        })
+      : Object.entries(MODELER_TOOLS);
+
+    const sectionContainer = document.createElement('div');
+    sectionContainer.className = 'cyco-modeler-sections';
+
+    orderedEntries.forEach(([groupId, tools]) => {
       const group = MODELER_GROUPS.find(item => item.id === groupId);
       const section = document.createElement('section');
       section.className = 'cyco-modeler-tool-section';
       section.dataset.modelerSection = groupId;
+      section.draggable = true;
       if (groupId !== this._modelerGroup) section.classList.add('collapsed');
 
       const header = document.createElement('button');
       header.className = 'cyco-modeler-section-title';
       header.type = 'button';
+      header.draggable = true;
       const arrow = document.createElement('span');
       arrow.className = 'cyco-modeler-section-arrow';
       arrow.textContent = '▾';
@@ -460,7 +477,12 @@ export class CenterPanel extends BasePanel {
       label.textContent = group?.label ?? groupId;
       header.appendChild(arrow);
       header.appendChild(label);
-      header.addEventListener('click', () => {
+      header.addEventListener('click', (e) => {
+        // Don't toggle when the user is finishing a drag on the header.
+        if (header._cycoJustDragged) {
+          header._cycoJustDragged = false;
+          return;
+        }
         section.classList.toggle('collapsed');
         this._modelerGroup = groupId;
         this._refreshModelerButtons();
@@ -476,8 +498,12 @@ export class CenterPanel extends BasePanel {
         }));
       });
       section.appendChild(grid);
-      panel.appendChild(section);
+
+      this._attachModelerSectionDnD(section, sectionContainer);
+      sectionContainer.appendChild(section);
     });
+
+    panel.appendChild(sectionContainer);
 
     panel.appendChild(_modelerPanelTitle('Tool Properties'));
     panel.appendChild(_modelerField('Width', '1.00'));
@@ -661,6 +687,82 @@ export class CenterPanel extends BasePanel {
       window.addEventListener('pointermove', move);
       window.addEventListener('pointerup', up);
     });
+  }
+
+  // ── Drag-to-reorder for collapsible modeler tool sections ────────────────
+  // Each `.cyco-modeler-tool-section` is draggable; the user grabs the
+  // header and drops on another section to reorder. The new order is
+  // persisted to localStorage so it survives reloads.
+
+  _attachModelerSectionDnD(section, container) {
+    if (!section || !container || section._cycoDndAttached) return;
+    section._cycoDndAttached = true;
+
+    section.addEventListener('dragstart', (e) => {
+      // Only initiate a drag from the header — clicking the body shouldn't drag.
+      const fromHeader = e.target.closest('.cyco-modeler-section-title');
+      if (!fromHeader) {
+        e.preventDefault();
+        return;
+      }
+      section.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      // Some browsers (FF) require setData to actually start the drag.
+      e.dataTransfer.setData('text/plain', section.dataset.modelerSection || '');
+      fromHeader._cycoJustDragged = true;
+    });
+
+    section.addEventListener('dragend', () => {
+      section.classList.remove('dragging');
+      container.querySelectorAll('.cyco-modeler-tool-section').forEach(s => {
+        s.classList.remove('drop-before', 'drop-after');
+      });
+    });
+
+    section.addEventListener('dragover', (e) => {
+      if (!container.querySelector('.cyco-modeler-tool-section.dragging')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = section.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      section.classList.toggle('drop-before', before);
+      section.classList.toggle('drop-after', !before);
+    });
+
+    section.addEventListener('dragleave', () => {
+      section.classList.remove('drop-before', 'drop-after');
+    });
+
+    section.addEventListener('drop', (e) => {
+      const dragging = container.querySelector('.cyco-modeler-tool-section.dragging');
+      if (!dragging || dragging === section) return;
+      e.preventDefault();
+      const rect = section.getBoundingClientRect();
+      const before = (e.clientY - rect.top) < rect.height / 2;
+      if (before) container.insertBefore(dragging, section);
+      else container.insertBefore(dragging, section.nextSibling);
+      section.classList.remove('drop-before', 'drop-after');
+      this._saveModelerSectionOrder(container);
+    });
+  }
+
+  _loadModelerSectionOrder() {
+    try {
+      const raw = localStorage.getItem('cyco-modeler-section-order');
+      if (!raw) return null;
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr) ? arr.filter(id => MODELER_TOOLS[id]) : null;
+    } catch { return null; }
+  }
+
+  _saveModelerSectionOrder(container) {
+    try {
+      const order = Array.from(
+        (container ?? this._modelerRoot?.querySelector('.cyco-modeler-sections'))
+          ?.querySelectorAll('.cyco-modeler-tool-section') ?? []
+      ).map(s => s.dataset.modelerSection).filter(Boolean);
+      if (order.length) localStorage.setItem('cyco-modeler-section-order', JSON.stringify(order));
+    } catch { /* localStorage unavailable — silently ignore */ }
   }
 
   // ── Top bar ─────────────────────────────────────────────────────────────────

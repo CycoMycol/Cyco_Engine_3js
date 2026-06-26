@@ -3183,6 +3183,29 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   padding: 4px;
   border: var(--ce-border-width) solid transparent;
   border-radius: 14px;
+  position: relative;
+}
+.cyco-modeler-tool-section.dragging {
+  opacity: 0.45;
+}
+.cyco-modeler-tool-section.drop-before::before,
+.cyco-modeler-tool-section.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  background: #e07228;
+  border-radius: 2px;
+  pointer-events: none;
+}
+.cyco-modeler-tool-section.drop-before::before { top: -1px; }
+.cyco-modeler-tool-section.drop-after::after  { bottom: -1px; }
+.cyco-modeler-tool-section .cyco-modeler-section-title {
+  cursor: grab;
+}
+.cyco-modeler-tool-section .cyco-modeler-section-title:active {
+  cursor: grabbing;
 }
 .cyco-modeler-tool-section.active {
   border-color: rgba(224,114,40,0.3);
