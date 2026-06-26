@@ -42,7 +42,7 @@ export class CycleModelerController {
     // the modeler still renders correctly if settings aren't imported.
     // Hover style is per-mode (polygon/edge/vertex) so each mode can
     // have its own colour, opacity and vertex size.
-    this._wireStyle = { color: 0x151515, opacity: 0.85, thickness: 1, enabled: true };
+    this._wireStyle = { color: 0x151515, opacity: 1.0, thickness: 1, enabled: true };
     this._hoverStyle = {
       polygon: { color: 0xff3333, opacity: 0.9, enabled: true },
       edge:    { color: 0xffaa00, opacity: 0.95, thickness: 3, enabled: true },
@@ -215,7 +215,9 @@ export class CycleModelerController {
     // stale duplicate outline.
     const scene = this.sceneManager?.getActiveScene?.();
     scene?.traverse?.(obj => {
-      if (!obj.userData?.cycoModeler?.mesh) return;
+      // Any modeler object (mesh JSON present OR explicitly null for
+      // primitives like rounded-box that don't have a polygon mesh).
+      if (!obj.userData?.cycoModeler) return;
       for (const g of [...obj.children]) {
         if (!g.userData?._isModelerSelGizmo) continue;
         obj.remove(g);
@@ -880,12 +882,16 @@ export class CycleModelerController {
       const mat = new LineMaterial({
         color,
         linewidth: widthPx,
-        transparent: true,
+        // Only enable transparency when opacity is actually < 1; a
+        // fully-opaque wireframe should render solid (no blending,
+        // no MSAA alpha-to-coverage dither that reads as a "blend
+        // transition" against the surface beneath).
+        transparent: opacity < 1,
         opacity,
         depthTest,
         depthWrite: false,
         dashed: false,
-        alphaToCoverage: true,
+        alphaToCoverage: opacity < 1,
       });
       this._ensureLineResolution(mat);
       const seg = new LineSegments2(lineGeom, mat);
@@ -933,7 +939,10 @@ export class CycleModelerController {
       ribbonGeom,
       new THREE.MeshBasicMaterial({
         color,
-        transparent: true,
+        // Same logic as the WebGL path above — only enable blending
+        // when opacity < 1 so a fully-opaque wireframe renders solid
+        // without alpha blending against the surface beneath.
+        transparent: opacity < 1,
         opacity,
         depthTest,
         depthWrite: false,
@@ -1151,6 +1160,10 @@ export class CycleModelerController {
       // regardless of camera angle, so depth-tested wireframes are
       // visible on the front-facing side (the side that was being
       // occluded before this fix).
+      // Track the LOCAL-space face normal for the outward bias added
+      // below. Set in the single-face and two-face branches so the
+      // coplanarity-fix can use whichever adjacent face is available.
+      let faceNormalWorldForBias = null;
       if (perpIsScreenAligned && segNormalsLocal && segNormalsLocal[i] && segNormalsLocal[i].length >= 3) {
         const nf = segNormalsLocal[i];
         faceNormalLocal.set(nf[0], nf[1], nf[2]).normalize();
@@ -1160,6 +1173,7 @@ export class CycleModelerController {
           offsetLocal.multiplyScalar(-1);
           outwardPushed += 1;
         }
+        faceNormalWorldForBias = faceNormalWorld;
       } else if (perpIsScreenAligned && segNormalsLocal && segNormalsLocal[i] && segNormalsLocal[i].length >= 6) {
         // Two adjacent faces — average them.
         const nf = segNormalsLocal[i];
@@ -1174,6 +1188,27 @@ export class CycleModelerController {
           offsetLocal.multiplyScalar(-1);
           outwardPushed += 1;
         }
+        faceNormalWorldForBias = faceNormalWorld;
+      }
+      // Coplanarity lift: the screen-aligned perpendicular can be
+      // exactly tangent to the surface when the camera looks straight
+      // down a flat face (e.g. box top face viewed from above). In
+      // that case the flip above has no effect (dot ≈ 0) and the
+      // ribbon quad lies IN the surface plane — the polygon offset
+      // wins some depth pixels but the ribbon still z-fights and reads
+      // as faint/dotted. Add a small outward component along the face
+      // normal so the ribbon always has a non-coplanar offset,
+      // regardless of camera angle. Magnitude is a fraction of `width`
+      // so the visual thickness change on curved primitives (where
+      // the flip already provides most of the outward push) is
+      // negligible.
+      if (faceNormalWorldForBias) {
+        const liftAmount = width * 0.5;
+        const liftLocal = new THREE.Vector3()
+          .copy(faceNormalWorldForBias)
+          .transformDirection(invParent)
+          .multiplyScalar(liftAmount);
+        offsetLocal.add(liftLocal);
       }
       const aL = A;
       const aR = A.clone().add(offsetLocal);
@@ -1430,12 +1465,13 @@ export class CycleModelerController {
   _objectEdgeOverlay(object) {
     // Build the edge geometry from the EditableMesh's polygon edges so the
     // hover outline matches the user-visible wireframe (no triangulation
-    // diagonals on round shapes).
+    // diagonals on round shapes, and subdivisions of a Subdivided box
+    // show as hover-able edges instead of being collapsed away).
     const meshJson = object?.userData?.cycoModeler?.mesh;
     if (meshJson && meshJson.faces && meshJson.vertices) {
       try {
         const editable = EditableMesh.fromJSON(meshJson);
-        const eg = editable.toEdgesGeometry(1);
+        const eg = editable.toEdgesGeometry(0);
         eg.userData._wireParent = object;
         return eg;
       } catch (err) {
@@ -2082,39 +2118,52 @@ export class CycleModelerController {
 
   _applyDimensions(obj, dims) {
     const oldGeometry = obj.geometry;
-    obj.geometry = this._geometryFromDimensions(dims);
+    const built = this._geometryFromDimensions(dims);
+    obj.geometry = built.geometry;
     oldGeometry?.dispose?.();
     obj.position.y = dims.primitive === 'rounded-box' ? dims.height / 2 : 0;
+    // Rebuild `cycoModeler.mesh` from the same EditableMesh the
+    // geometry came from (or null for primitives without one). Without
+    // this, `_syncWireOverlay` reads the OLD mesh JSON and renders the
+    // pre-subdivide outline, hiding the new polygon subdivisions
+    // (`_faceIndicesFromHit` / push-pull also use this same JSON, so
+    // keeping it in sync fixes selection regressions too).
     obj.userData.cycoModeler = {
       ...(obj.userData.cycoModeler || {}),
       primitive: dims.primitive,
       dimensions: { width: dims.width, height: dims.height, depth: dims.depth },
       bevel: dims.bevel ?? 0,
       segments: dims.segments ?? obj.userData.cycoModeler?.segments ?? 1,
+      mesh: built.mesh ? built.mesh.toJSON() : null,
+      // A subdivision invalidates the previous polygon selection —
+      // face indices no longer map 1:1 to the new mesh.
+      selectedFaces: [],
+      selectedEdges: [],
+      selectedVertices: [],
     };
     this._syncWireOverlay(obj);
   }
 
   _geometryFromDimensions(dims) {
     if (dims.primitive === 'rounded-box') {
-      return new RoundedBoxGeometry(dims.width, dims.height, dims.depth, 3, dims.bevel ?? 1);
+      // RoundedBoxGeometry's triangulation doesn't map to a clean
+      // polygon mesh, so we can't build an EditableMesh for it. The
+      // wireframe overlay falls back to `THREE.EdgesGeometry(obj.geometry)`
+      // when `cycoModeler.mesh` is null, which still gives an accurate
+      // outline of the rounded shape (no flat subdivisions to show
+      // anyway).
+      return { geometry: new RoundedBoxGeometry(dims.width, dims.height, dims.depth, 3, dims.bevel ?? 1), mesh: null };
     }
     if (dims.primitive === 'box-subdivided') {
-      const geometry = new THREE.BoxGeometry(
-        dims.width,
-        dims.height,
-        dims.depth,
-        dims.segments ?? 2,
-        dims.segments ?? 2,
-        dims.segments ?? 2
-      );
-      geometry.translate(0, dims.height / 2, 0);
-      return geometry;
+      const segments = Math.max(1, Math.round(dims.segments ?? 2));
+      const mesh = EditableMesh.boxSubdivided(dims.width, dims.height, dims.depth, segments);
+      return { geometry: mesh.toBufferGeometry(), mesh };
     }
-    return EditableMesh.boxFromBounds(
+    const mesh = EditableMesh.boxFromBounds(
       new THREE.Vector3(-dims.width / 2, 0, -dims.depth / 2),
       new THREE.Vector3(dims.width / 2, dims.height, dims.depth / 2)
-    ).toBufferGeometry();
+    );
+    return { geometry: mesh.toBufferGeometry(), mesh };
   }
 
   _modelerHitFromEvent(event) {
@@ -2130,7 +2179,13 @@ export class CycleModelerController {
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, camera);
     const targets = [];
-    scene.traverse(obj => { if (obj.userData?.cycoModeler?.mesh) targets.push(obj); });
+    scene.traverse(obj => {
+      // Any object tagged as a modeler object is pickable, even if its
+      // `cycoModeler.mesh` is null (e.g. a `rounded-box` whose triangulation
+      // doesn't map cleanly to a polygon mesh — selection still works on
+      // the underlying BufferGeometry).
+      if (obj.userData?.cycoModeler) targets.push(obj);
+    });
     const hits = raycaster.intersectObjects(targets, false);
     if (!hits.length) return null;
     // Prefer the closest hit whose world-space face normal faces the
@@ -2253,7 +2308,15 @@ export class CycleModelerController {
     if (meshJson && meshJson.faces && meshJson.vertices) {
       try {
         const editable = EditableMesh.fromJSON(meshJson);
-        edgesGeom = editable.toEdgesGeometry(1);
+        // Threshold 0 → keep every polygon boundary edge including
+        // subdivision lines (e.g. the Subdivide tool splits each
+        // box face into s×s cells; threshold 1 would cull those
+        // internal coplanar edges and the wireframe would show only
+        // the box outline, hiding the subdivisions the user just
+        // applied). Spheres and other primitives still draw their
+        // silhouette correctly because non-coplanar face boundaries
+        // are always emitted.
+        edgesGeom = editable.toEdgesGeometry(0);
       } catch (err) {
         edgesGeom = null;
       }
@@ -2262,13 +2325,20 @@ export class CycleModelerController {
     edgesGeom.userData._wireParent = obj;
     // Line2 (LineSegments2 + LineMaterial) so the thickness slider
     // produces a visible result on screen.
+    // `depthTest: false` so the wireframe ALWAYS renders on top of the
+    // underlying mesh — never occluded by surface tangent segments
+    // (e.g. front-face subdivision lines on a subdivided box, where
+    // the screen-aligned perpendicular is tangent to the surface and
+    // the ribbon quad's depth can lose the depth test to the surface
+    // itself, producing faint / dotted lines). Matches the
+    // hover/selection overlay behaviour.
     const targetPos = this._getObjectWorldCenter(obj);
     const wire = this._buildFatEdges(
       edgesGeom,
       this._wireStyle.color,
       this._wireStyle.thickness,
       this._wireStyle.opacity,
-      /* depthTest */ true,
+      /* depthTest */ false,
       targetPos,
     );
     wire.name = 'CycleModelerWireOverlay';
