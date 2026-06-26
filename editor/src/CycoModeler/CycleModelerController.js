@@ -507,7 +507,14 @@ export class CycleModelerController {
       this.selectionManager?.suspend?.();
       window.__cyco = window.__cyco || {};
       window.__cyco._suppressSelectionManagerClick = true;
-      this._boxDrag = { pointerId: event.pointerId, start: point.clone(), end: point.clone() };
+      this._boxDrag = {
+        pointerId: event.pointerId,
+        start: point.clone(),
+        end: point.clone(),
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        lastClientY: event.clientY,
+      };
       this._updatePreview();
       return;
     }
@@ -547,6 +554,8 @@ export class CycleModelerController {
       event.preventDefault();
       event.stopImmediatePropagation();
       this._boxDrag.end.copy(point);
+      // Track vertical drag in screen pixels for height adjustment.
+      this._boxDrag.lastClientY = event.clientY;
       this._updatePreview();
       return;
     }
@@ -640,7 +649,7 @@ export class CycleModelerController {
     this.selectionManager?.resume?.();
     try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
     this._hoverClear();
-    const object = this._buildPrimitiveObject(drag.start, drag.end, false);
+    const object = this._buildPrimitiveObject(drag.start, drag.end, false, drag);
     this._cancelPreview();
     this._commitObject(object);
     try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
@@ -826,7 +835,7 @@ export class CycleModelerController {
 
   _updatePreview() {
     if (!this._boxDrag) return;
-    const preview = this._buildPrimitiveObject(this._boxDrag.start, this._boxDrag.end, true);
+    const preview = this._buildPrimitiveObject(this._boxDrag.start, this._boxDrag.end, true, this._boxDrag);
     this._cancelPreview();
     this._preview = preview;
     this.viewportEngine.scene?.add(preview);
@@ -1532,7 +1541,7 @@ export class CycleModelerController {
     this._preview = null;
   }
 
-  _buildPrimitiveObject(start, end, preview) {
+  _buildPrimitiveObject(start, end, preview, drag) {
     const cell = this._gridCellSize();
     const minX = Math.min(start.x, end.x);
     const maxX = Math.max(start.x, end.x);
@@ -1540,9 +1549,25 @@ export class CycleModelerController {
     const maxZ = Math.max(start.z, end.z);
     const width = Math.max(cell, maxX - minX);
     const depth = Math.max(cell, maxZ - minZ);
-    const centerX = minX + width / 2;
-    const centerZ = minZ + depth / 2;
-    const height = cell;
+    // Anchor the primitive at the initial click point (mouse pointer),
+    // not at the centre of the drag rectangle — this matches how
+    // every other Box-modeler "draw" tool behaves (the shape grows
+    // out from the cursor, just like a marquee). The clicked grid
+    // cell becomes the bottom-back corner of the footprint.
+    const anchorX = start.x;
+    const anchorZ = start.z;
+    // Height: defaults to one grid cell. Drag the mouse UP from the
+    // initial click to grow the height (drag-down collapses back to
+    // the floor). We translate the screen-pixel delta into world units
+    // using the current camera so a 100px upward drag yields the same
+    // world height regardless of zoom.
+    const startClientY = drag?.startClientY;
+    const lastClientY = drag?.lastClientY;
+    const heightPx = (typeof startClientY === 'number' && typeof lastClientY === 'number')
+      ? (startClientY - lastClientY)
+      : 0;
+    const heightWorldPerPx = this._heightWorldPerPixel();
+    const height = Math.max(cell, cell + heightPx * heightWorldPerPx);
     // Every primitive is built as an EditableMesh so it has the
     // `faceId` attribute and the per-face JSON the rest of the modeler
     // (hover, polygon / edge / vertex selection, Push/Pull, eraser,
@@ -1572,14 +1597,30 @@ export class CycleModelerController {
     // (cylinder, cone, sphere, capsule, torus, icosahedron) are centered
     // around their origin, so they need Y = height/2 to rest on the
     // grid like a box.
+    //
+    // Floor-anchored primitives are POSITIONED at the initial click
+    // point (the bottom-back corner of the footprint), so the shape
+    // grows out from the cursor as the user drags — matching marquee
+    // / box-draw conventions used by every other modeler. Round
+    // primitives anchor their origin at the click point and use
+    // max(width, depth) as their horizontal extent.
     const floorAnchored = new Set([
       'box', 'room', 'stair', 'side-stair', 'spiral-stair',
       'line', 'parallel', 'arc', 'disk', 'rounded-rectangle',
     ]);
+    const isFloor = floorAnchored.has(this.primitiveTool);
+    // Floor-anchored primitives (box, room, stair, side-stair,
+    // spiral-stair, line/parallel/arc/disk/rounded-rectangle) all
+    // position their local origin at the click point — the clicked
+    // cell becomes the bottom-back corner for box-shaped footprints,
+    // or the centre for radially symmetric ones (spiral-stair).
+    // Round primitives (cylinder, cone, sphere, capsule, torus,
+    // icosahedron) have their origin at the geometric centre, so
+    // they also anchor at the click point without any offset.
     object.position.set(
-      centerX,
-      floorAnchored.has(this.primitiveTool) ? 0 : height / 2,
-      centerZ,
+      anchorX,
+      isFloor ? 0 : height / 2,
+      anchorZ,
     );
     object.castShadow = !preview;
     object.receiveShadow = !preview;
@@ -1611,10 +1652,40 @@ export class CycleModelerController {
         );
       case 'room':
         return EditableMesh.room(width, height, depth);
-      case 'stair':
-        return EditableMesh.stair(width, height, depth);
-      case 'side-stair':
-        return EditableMesh.sideStair(width, height, depth);
+      case 'stair': {
+        // Rotate the stair 180° about Y so its FRONT (the low end,
+        // first riser) faces +Z toward the default camera, matching
+        // how every other modeler (Blender, SketchUp, UModeler)
+        // orients a freshly-drawn stair.
+        const stair = EditableMesh.stair(width, height, depth);
+        for (const v of stair.vertices) {
+          const x = v.x;
+          const z = v.z;
+          v.x = -x;
+          v.z = -z;
+        }
+        // Reverse the back-face winding so its outward normal still
+        // points away from the stair body after the 180° flip (the
+        // vertex mirror flips the normals of every face; the back
+        // face needs explicit correction).
+        const last = stair.faces[stair.faces.length - 1];
+        stair.faces[stair.faces.length - 1] = [last[0], last[3], last[2], last[1]];
+        return stair;
+      }
+      case 'side-stair': {
+        // Same 180° Y rotation as `stair` — applied AFTER the 90°
+        // rotation that `sideStair` performs internally.
+        const stair = EditableMesh.sideStair(width, height, depth);
+        for (const v of stair.vertices) {
+          const x = v.x;
+          const z = v.z;
+          v.x = -x;
+          v.z = -z;
+        }
+        const last = stair.faces[stair.faces.length - 1];
+        stair.faces[stair.faces.length - 1] = [last[0], last[3], last[2], last[1]];
+        return stair;
+      }
       case 'spiral-stair':
         return EditableMesh.spiralStair(width, height, depth);
       case 'cylinder':
@@ -2231,6 +2302,26 @@ export class CycleModelerController {
       return Math.max(1, Number(s.checkerSize) || GRID_DEFAULTS.checkerSize);
     }
     return Math.max(1, Number(s.cellSize) || GRID_DEFAULTS.cellSize);
+  }
+
+  /**
+   * Convert vertical screen-pixel drag into world-units so that
+   * dragging the mouse UP grows the primitive's height by a sensible
+   * amount independent of camera zoom. Uses the camera's vertical
+   * FOV and the distance from the camera to the Y=0 plane to derive a
+   * pixels-to-world ratio: a 1px upward drag = (2 * dist * tan(fov/2)
+   * / viewportHeight) world units.
+   */
+  _heightWorldPerPixel() {
+    const camera = this.viewportEngine?.camera;
+    const renderer = this.viewportEngine?.rendererManager?.renderer;
+    if (!camera || !renderer?.domElement) return this._gridCellSize() * 0.05;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const viewportHeight = rect.height || 1;
+    const fovRad = (camera.fov ?? 50) * Math.PI / 180;
+    const camPos = camera.position;
+    const dist = Math.max(1, Math.hypot(camPos.x, camPos.y, camPos.z));
+    return Math.max(0.001, (2 * dist * Math.tan(fovRad / 2)) / viewportHeight);
   }
 
   _status(message) {
