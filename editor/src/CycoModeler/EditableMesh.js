@@ -7,9 +7,27 @@ const DEFAULT_SEGMENTS = 24;
 const STAIR_TREADS = 8;
 
 export class EditableMesh {
-  constructor({ vertices = [], faces = [] } = {}) {
+  constructor({ vertices = [], faces = [], faceGroups = null } = {}) {
     this.vertices = vertices.map(v => new THREE.Vector3(v.x, v.y, v.z));
     this.faces = faces.map(face => [...face]);
+    // `faceGroups` is a parallel array to `faces`. Two faces share a
+    // group ID iff they are considered "the same polygon" for selection
+    // purposes. The default (one entry per face, equal to its index)
+    // means every face is its own polygon — but primitives that store
+    // a logical quad as two triangles (e.g. `boxFromBounds`) can pass
+    // paired group IDs so the two tris select as one polygon. Operations
+    // that create new polygons from boundary edges (e.g. `pushFaces`
+    // side walls) assign fresh group IDs so the new walls don't
+    // accidentally merge with adjacent mesh faces that happen to lie on
+    // the same geometric plane (which would over-select after a
+    // push/pull — the bug being fixed here).
+    this.faceGroups = faceGroups
+      ? [...faceGroups]
+      : this.faces.map((_, i) => i);
+    // Monotonic counter for the next fresh group ID. Bumped every time
+    // `pushFaces` synthesises a new side wall so each wall ends up in
+    // its own group.
+    this._nextGroupId = this.faceGroups.length;
   }
 
   static box(size = 100) {
@@ -21,6 +39,15 @@ export class EditableMesh {
   }
 
   static boxFromBounds(min, max) {
+    // The box is stored as 12 triangles (2 per quad) so the wireframe
+    // overlay can render the diagonals if it ever needs to. For
+    // SELECTION purposes each pair is one logical polygon: face 0+1
+    // are the back quad, 2+3 the front, etc. We pass explicit
+    // `faceGroups` so the modeler's polygon picker treats each pair
+    // as one face — without this `coplanarFaces` would still group
+    // them (same plane), but if any future operation adds a face on
+    // the same plane (e.g. an extrude side wall), the group IDs keep
+    // it isolated.
     return new EditableMesh({
       vertices: [
         { x: min.x, y: min.y, z: min.z }, { x: max.x, y: min.y, z: min.z },
@@ -35,6 +62,16 @@ export class EditableMesh {
         [3, 6, 2], [3, 7, 6],
         [1, 2, 6], [1, 6, 5],
         [0, 4, 7], [0, 7, 3],
+      ],
+      // Pair each quad's two tris: (0,1), (2,3), (4,5), (6,7),
+      // (8,9), (10,11) — six logical polygons.
+      faceGroups: [
+        0, 0,
+        1, 1,
+        2, 2,
+        3, 3,
+        4, 4,
+        5, 5,
       ],
     });
   }
@@ -629,9 +666,80 @@ export class EditableMesh {
   removeFaces(faceIndices) {
     const doomed = new Set(faceIndices);
     this.faces = this.faces.filter((_, index) => !doomed.has(index));
+    if (this.faceGroups?.length === this.faces.length + doomed.size) {
+      this.faceGroups = this.faceGroups.filter((_, index) => !doomed.has(index));
+    }
+  }
+
+  /**
+   * Return every face that is part of the same logical polygon as
+   * `faceIndex` (i.e. shares its `faceGroup` ID). This is the
+   * selection group used by the modeler's polygon picker. Using
+   * `faceGroup` instead of a pure geometric coplanar test prevents
+   * push/pull side walls — which can lie on the same geometric plane
+   * as adjacent mesh faces (e.g. the top side wall of an extruded
+   * back face sits on the same Y plane as the box's top face) —
+   * from being over-included when the user clicks an adjacent face.
+   *
+   * The geometric coplanar test is kept as a fallback for meshes
+   * whose `faceGroup` data has been lost (e.g. loaded from an older
+   * JSON blob that did not include groups): in that case every face
+   * has a unique group ID, so the group check returns only the seed
+   * face — but coplanarFaces-style grouping is sometimes still
+   * wanted for legacy compatibility. Callers can opt into the
+   * geometric fallback by passing `{ includeCoplanar: true }`.
+   */
+  selectionGroup(faceIndex, { includeCoplanar = false } = {}) {
+    const face = this.faces[faceIndex];
+    if (!face) return [];
+    if (!this.faceGroups || this.faceGroups.length !== this.faces.length) {
+      // Defensive fallback — the mesh has no group data, return just
+      // the seed face so callers can still operate on a single polygon.
+      return [faceIndex];
+    }
+    const targetGroup = this.faceGroups[faceIndex];
+    const out = [];
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (this.faceGroups[i] === targetGroup) out.push(i);
+    }
+    if (out.length > 1 || !includeCoplanar) return out;
+    // Legacy fallback: include any other face that is geometrically
+    // coplanar AND shares at least one edge with the seed face. This
+    // mirrors the original coplanarFaces behaviour for meshes built
+    // before faceGroup tracking existed.
+    const seen = new Set(out);
+    const seedNormal = this._faceNormal(faceIndex);
+    const seedOrigin = this.vertices[face[0]];
+    const planeOffset = seedNormal.dot(seedOrigin);
+    const seedEdges = new Set();
+    for (let i = 0; i < face.length; i += 1) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      seedEdges.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+    }
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (seen.has(i)) continue;
+      const other = this.faces[i];
+      if (!other || other.length < 3) continue;
+      const otherNormal = this._faceNormal(i);
+      if (seedNormal.dot(otherNormal) < 0.999) continue;
+      if (Math.abs(otherNormal.dot(this.vertices[other[0]]) - planeOffset) > 0.001) continue;
+      // Require at least one shared edge to include.
+      let shared = false;
+      for (let j = 0; j < other.length; j += 1) {
+        const a = other[j];
+        const b = other[(j + 1) % other.length];
+        const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+        if (seedEdges.has(key)) { shared = true; break; }
+      }
+      if (shared) out.push(i);
+    }
+    return out;
   }
 
   coplanarFaces(faceIndex, tolerance = 0.001) {
+    // Legacy API retained for callers that genuinely want all
+    // geometric coplanar faces (not just selection-group siblings).
     const face = this.faces[faceIndex];
     if (!face) return [];
     const normal = this._faceNormal(faceIndex);
@@ -686,6 +794,17 @@ export class EditableMesh {
     const replacement = this.faces.map((face, index) => (
       selectedSet.has(index) ? face.map(vertexIndex => vertexMap.get(vertexIndex)) : face
     ));
+    // `faceGroups` must stay parallel to `faces`. The pushed faces
+    // keep their existing groups (which already cover their coplanar
+    // siblings like box quad pairs). Each new side wall gets a fresh
+    // group ID so it can never over-select with adjacent mesh faces
+    // that happen to share its geometric plane (the bug the modeler
+    // hit after push/pull).
+    const replacementGroups = this.faceGroups
+      ? this.faceGroups.map((group, index) => (
+          selectedSet.has(index) ? group : group
+        ))
+      : null;
 
     for (const [a, b] of boundary.values()) {
       // Wind side quads so their outward normal points away from the
@@ -701,9 +820,18 @@ export class EditableMesh {
       } else {
         replacement.push([a, aPrime, bPrime, b]);
       }
+      if (replacementGroups) {
+        // Fresh group per side wall — see comment above. Each new
+        // side wall is a distinct polygon in the user's mental model
+        // (it has its own outline + normal direction at the new
+        // position), so it should never over-select with another face
+        // that happens to be on the same geometric plane.
+        replacementGroups.push(this._nextGroupId++);
+      }
     }
 
     this.faces = replacement;
+    if (replacementGroups) this.faceGroups = replacementGroups;
   }
 
   _averageNormal(faceIndices) {
@@ -758,6 +886,10 @@ export class EditableMesh {
     return {
       vertices: this.vertices.map(v => ({ x: v.x, y: v.y, z: v.z })),
       faces: this.faces.map(face => [...face]),
+      // Persist selection groups so project save/load and undo/redo
+      // round-trip correctly. Older blobs without `faceGroups` will
+      // get a default (every face is its own polygon) on load.
+      faceGroups: this.faceGroups ? [...this.faceGroups] : undefined,
     };
   }
 

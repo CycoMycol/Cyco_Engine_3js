@@ -7,9 +7,27 @@ const DEFAULT_SEGMENTS = 24;
 const STAIR_TREADS = 8;
 
 export class EditableMesh {
-  constructor({ vertices = [], faces = [] } = {}) {
+  constructor({ vertices = [], faces = [], faceGroups = null } = {}) {
     this.vertices = vertices.map(v => new THREE.Vector3(v.x, v.y, v.z));
     this.faces = faces.map(face => [...face]);
+    // `faceGroups` is a parallel array to `faces`. Two faces share a
+    // group ID iff they are considered "the same polygon" for selection
+    // purposes. The default (one entry per face, equal to its index)
+    // means every face is its own polygon — but primitives that store
+    // a logical quad as two triangles (e.g. `boxFromBounds`) can pass
+    // paired group IDs so the two tris select as one polygon. Operations
+    // that create new polygons from boundary edges (e.g. `pushFaces`
+    // side walls) assign fresh group IDs so the new walls don't
+    // accidentally merge with adjacent mesh faces that happen to lie on
+    // the same geometric plane (which would over-select after a
+    // push/pull — the bug being fixed here).
+    this.faceGroups = faceGroups
+      ? [...faceGroups]
+      : this.faces.map((_, i) => i);
+    // Monotonic counter for the next fresh group ID. Bumped every time
+    // `pushFaces` synthesises a new side wall so each wall ends up in
+    // its own group.
+    this._nextGroupId = this.faceGroups.length;
   }
 
   static box(size = 100) {
@@ -21,6 +39,15 @@ export class EditableMesh {
   }
 
   static boxFromBounds(min, max) {
+    // The box is stored as 12 triangles (2 per quad) so the wireframe
+    // overlay can render the diagonals if it ever needs to. For
+    // SELECTION purposes each pair is one logical polygon: face 0+1
+    // are the back quad, 2+3 the front, etc. We pass explicit
+    // `faceGroups` so the modeler's polygon picker treats each pair
+    // as one face — without this `coplanarFaces` would still group
+    // them (same plane), but if any future operation adds a face on
+    // the same plane (e.g. an extrude side wall), the group IDs keep
+    // it isolated.
     return new EditableMesh({
       vertices: [
         { x: min.x, y: min.y, z: min.z }, { x: max.x, y: min.y, z: min.z },
@@ -35,6 +62,16 @@ export class EditableMesh {
         [3, 6, 2], [3, 7, 6],
         [1, 2, 6], [1, 6, 5],
         [0, 4, 7], [0, 7, 3],
+      ],
+      // Pair each quad's two tris: (0,1), (2,3), (4,5), (6,7),
+      // (8,9), (10,11) — six logical polygons.
+      faceGroups: [
+        0, 0,
+        1, 1,
+        2, 2,
+        3, 3,
+        4, 4,
+        5, 5,
       ],
     });
   }
@@ -178,72 +215,91 @@ export class EditableMesh {
   /**
    * Spiral stair: helical step surface climbing from Y=0 to Y=height
    * over `turns` full revolutions. Each step is a wedge-shaped prism
-   * (triangular top + vertical riser + outer side). There is NO central
-   * column — the inner edge of every step meets at the central axis
-   * (a single shared vertex) so users can see through the spiral.
+   * with a HORIZONTAL tread top (so the steps are clearly visible as
+   * steps), a vertical riser, an outer side, and a back-of-tread face.
+   * Mirrors the construction used by the regular `stair` primitive
+   * (per-step corner allocation, axis-aligned local face topology) but
+   * mapped onto a cylindrical ring: instead of stepping along +Z, each
+   * step is rotated about the Y axis by `sweepPerStep`.
    *
-   * `width` sets the outer radius; `depth` is ignored (kept for API
-   * parity with `cylinder`/`cone`); `height` is the total vertical
-   * climb.
+   * Per-step corners (matching `stair` naming convention):
+   *   InF_B = inner-front-bottom   (riser base, inner ring, leading angle)
+   *   OuF_B = outer-front-bottom
+   *   OuB_B = outer-back-bottom    (trailing angle)
+   *   InF_T = inner-front-top      (riser top, leading angle)
+   *   OuF_T = outer-front-top
+   *   OuB_T = outer-back-top
+   *
+   * `width` sets the outer footprint diameter (the railing), `depth`
+   * sets the radial run (depth of each step from outer edge inward).
+   * Inner radius = width/2 - depth. The tread top is the annular
+   * sector between inner and outer radii at the step's angular
+   * extent — a true horizontal surface you can stand on, exactly like
+   * the regular `stair` tread.
    */
   static spiralStair(width, height, depth, segments = DEFAULT_SEGMENTS, turns = 1) {
-    const radius = Math.max(1, width / 2);
     const seg = Math.max(8, Math.round(segments));
-    // Step count: ~16 per revolution gives a comfortable tread angle.
     const totalSteps = Math.max(4, Math.round(seg * Math.max(0.25, turns)));
+    const rOuter = Math.max(1, width / 2);
+    const rInner = Math.max(0, rOuter - Math.max(0, depth));
+    // When rInner === 0 the inner edge collapses to the central axis;
+    // the inner corners share the origin vertex and faces become
+    // degenerate quads (rendered as triangles), which still reads
+    // correctly as a knife-edge spiral.
+    const sweepPerStep = (Math.PI * 2 * turns) / totalSteps;
+    const stepRise = height / totalSteps;
     const vertices = [];
     const faces = [];
-    // Central axis point (shared by all inner edges).
-    const axis = vertices.length;
-    vertices.push({ x: 0, y: 0, z: 0 });
-    const stepRise = height / totalSteps;
-    const sweepPerStep = (Math.PI * 2 * turns) / totalSteps;
-    // 70% of each sweep is the visible tread surface (horizontal);
-    // 30% is the gap above the riser so users can place their foot
-    // on the next tread without scraping the underside of the one above.
-    const treadFraction = 0.7;
-    // Per-step ring: 2 corners per step (outer front + outer back).
-    const ringFront = [];
-    const ringBack = [];
-    for (let s = 0; s <= totalSteps; s += 1) {
-      const a0 = s * sweepPerStep;
-      const a1 = a0 + sweepPerStep * treadFraction;
-      const y = s * stepRise;
-      ringFront.push(vertices.length); vertices.push({ x: Math.cos(a0) * radius, y, z: Math.sin(a0) * radius });
-      ringBack.push(vertices.length);  vertices.push({ x: Math.cos(a1) * radius, y, z: Math.sin(a1) * radius });
+    const steps = [];
+    for (let i = 0; i < totalSteps; i += 1) {
+      const yBot = i * stepRise;
+      const yTop = (i + 1) * stepRise;
+      const aF = i * sweepPerStep;
+      const aB = (i + 1) * sweepPerStep;
+      const cosF = Math.cos(aF);
+      const sinF = Math.sin(aF);
+      const cosB = Math.cos(aB);
+      const sinB = Math.sin(aB);
+      // Inner corners (collapse to origin when rInner === 0).
+      const InF_B = vertices.length; vertices.push({ x: 0,          y: yBot, z: 0 });
+      const InF_T = vertices.length; vertices.push({ x: 0,          y: yTop, z: 0 });
+      // Outer corners.
+      const OuF_B = vertices.length; vertices.push({ x: cosF * rOuter, y: yBot, z: sinF * rOuter });
+      const OuF_T = vertices.length; vertices.push({ x: cosF * rOuter, y: yTop, z: sinF * rOuter });
+      const OuB_B = vertices.length; vertices.push({ x: cosB * rOuter, y: yBot, z: sinB * rOuter });
+      const OuB_T = vertices.length; vertices.push({ x: cosB * rOuter, y: yTop, z: sinB * rOuter });
+      steps.push({ InF_B, InF_T, OuF_B, OuF_T, OuB_B, OuB_T });
     }
-    // Per-step upper-axis point (apex of the riser triangle).
-    const axisTop = [];
-    for (let s = 0; s <= totalSteps; s += 1) {
-      const y = s * stepRise;
-      axisTop.push(vertices.length);
-      vertices.push({ x: 0, y, z: 0 });
+    for (let i = 0; i < totalSteps; i += 1) {
+      const s = steps[i];
+      // Tread (top of step): horizontal annular sector. Winding
+      // `InF_T → OuB_T → OuF_T` produces a +Y normal (outward from the
+      // tread) because CCW ordering about the axis reverses the sign
+      // of the cross product relative to a regular quad.
+      faces.push([s.InF_T, s.OuB_T, s.OuF_T]);
+      // Outer side (vertical face along the outside edge of the
+      // tread). Outward direction is purely radial. Winding
+      // `OuF_B → OuF_T → OuB_T → OuB_B` gives an outward radial
+      // normal.
+      faces.push([s.OuF_B, s.OuF_T, s.OuB_T, s.OuB_B]);
+      // Back of tread (vertical face at the trailing edge of the
+      // tread). Outward direction is the radial-CW direction (away
+      // from the next step). Winding `OuB_B → OuB_T → InF_T → InF_B`
+      // gives an outward (negative angular) normal.
+      faces.push([s.OuB_B, s.OuB_T, s.InF_T, s.InF_B]);
+      // Riser (front of step): vertical face at the leading edge of
+      // the tread. Outward direction is the radial-CCW direction
+      // (toward the next step). Winding `InF_B → OuF_B → OuF_T → InF_T`
+      // gives an outward (positive angular) normal.
+      faces.push([s.InF_B, s.OuF_B, s.OuF_T, s.InF_T]);
     }
-    for (let s = 0; s < totalSteps; s += 1) {
-      const aLow  = axisTop[s];      // apex of this step's riser (= axis at y=s*rise)
-      const aHigh = axisTop[s + 1];  // apex of next step (= axis at y=(s+1)*rise)
-      const outF  = ringFront[s];
-      const outFN = ringFront[s + 1];
-      const outB  = ringBack[s];
-      const outBN = ringBack[s + 1];
-      // Tread (top of step): triangle (axis-top, outer-back, outer-front)
-      //   — listing outer-back first so the cross product points +Y
-      //   (outward from the tread).
-      faces.push([aLow, outB, outF]);
-      // Riser (vertical face from step s tread-top to step s+1 tread-
-      // bottom). Outward direction is the radial-CCW direction from
-      // the axis at angle ~a0_next. Winding `[aLow, outFN, aHigh]`
-      // produces an outward (positive angular) normal.
-      faces.push([aLow, outFN, aHigh]);
-      // Outer side (vertical face along the outside edge of the tread).
-      // Outward direction is purely radial (away from axis). Winding
-      // `[outF, outFN, outBN]` gives an outward-pointing radial normal.
-      faces.push([outF, outFN, outBN]);
-      // Back of tread (vertical face at the back edge of the tread).
-      // Outward direction is the radial-CW direction (away from the
-      // next step). Winding `[outB, aHigh, outBN]` gives an outward
-      // (negative angular) normal.
-      faces.push([outB, aHigh, outBN]);
+    // Bottom face at y=0: only step 0 contributes (subsequent steps
+    // have their floor inside the stair body, hidden by the tread
+    // above). Triangle `InF_B → OuF_B → OuB_B` so the cross product
+    // points -Y (outward from the underside of the spiral).
+    {
+      const s0 = steps[0];
+      faces.push([s0.InF_B, s0.OuF_B, s0.OuB_B]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -610,9 +666,80 @@ export class EditableMesh {
   removeFaces(faceIndices) {
     const doomed = new Set(faceIndices);
     this.faces = this.faces.filter((_, index) => !doomed.has(index));
+    if (this.faceGroups?.length === this.faces.length + doomed.size) {
+      this.faceGroups = this.faceGroups.filter((_, index) => !doomed.has(index));
+    }
+  }
+
+  /**
+   * Return every face that is part of the same logical polygon as
+   * `faceIndex` (i.e. shares its `faceGroup` ID). This is the
+   * selection group used by the modeler's polygon picker. Using
+   * `faceGroup` instead of a pure geometric coplanar test prevents
+   * push/pull side walls — which can lie on the same geometric plane
+   * as adjacent mesh faces (e.g. the top side wall of an extruded
+   * back face sits on the same Y plane as the box's top face) —
+   * from being over-included when the user clicks an adjacent face.
+   *
+   * The geometric coplanar test is kept as a fallback for meshes
+   * whose `faceGroup` data has been lost (e.g. loaded from an older
+   * JSON blob that did not include groups): in that case every face
+   * has a unique group ID, so the group check returns only the seed
+   * face — but coplanarFaces-style grouping is sometimes still
+   * wanted for legacy compatibility. Callers can opt into the
+   * geometric fallback by passing `{ includeCoplanar: true }`.
+   */
+  selectionGroup(faceIndex, { includeCoplanar = false } = {}) {
+    const face = this.faces[faceIndex];
+    if (!face) return [];
+    if (!this.faceGroups || this.faceGroups.length !== this.faces.length) {
+      // Defensive fallback — the mesh has no group data, return just
+      // the seed face so callers can still operate on a single polygon.
+      return [faceIndex];
+    }
+    const targetGroup = this.faceGroups[faceIndex];
+    const out = [];
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (this.faceGroups[i] === targetGroup) out.push(i);
+    }
+    if (out.length > 1 || !includeCoplanar) return out;
+    // Legacy fallback: include any other face that is geometrically
+    // coplanar AND shares at least one edge with the seed face. This
+    // mirrors the original coplanarFaces behaviour for meshes built
+    // before faceGroup tracking existed.
+    const seen = new Set(out);
+    const seedNormal = this._faceNormal(faceIndex);
+    const seedOrigin = this.vertices[face[0]];
+    const planeOffset = seedNormal.dot(seedOrigin);
+    const seedEdges = new Set();
+    for (let i = 0; i < face.length; i += 1) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      seedEdges.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+    }
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (seen.has(i)) continue;
+      const other = this.faces[i];
+      if (!other || other.length < 3) continue;
+      const otherNormal = this._faceNormal(i);
+      if (seedNormal.dot(otherNormal) < 0.999) continue;
+      if (Math.abs(otherNormal.dot(this.vertices[other[0]]) - planeOffset) > 0.001) continue;
+      // Require at least one shared edge to include.
+      let shared = false;
+      for (let j = 0; j < other.length; j += 1) {
+        const a = other[j];
+        const b = other[(j + 1) % other.length];
+        const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+        if (seedEdges.has(key)) { shared = true; break; }
+      }
+      if (shared) out.push(i);
+    }
+    return out;
   }
 
   coplanarFaces(faceIndex, tolerance = 0.001) {
+    // Legacy API retained for callers that genuinely want all
+    // geometric coplanar faces (not just selection-group siblings).
     const face = this.faces[faceIndex];
     if (!face) return [];
     const normal = this._faceNormal(faceIndex);
@@ -667,6 +794,17 @@ export class EditableMesh {
     const replacement = this.faces.map((face, index) => (
       selectedSet.has(index) ? face.map(vertexIndex => vertexMap.get(vertexIndex)) : face
     ));
+    // `faceGroups` must stay parallel to `faces`. The pushed faces
+    // keep their existing groups (which already cover their coplanar
+    // siblings like box quad pairs). Each new side wall gets a fresh
+    // group ID so it can never over-select with adjacent mesh faces
+    // that happen to share its geometric plane (the bug the modeler
+    // hit after push/pull).
+    const replacementGroups = this.faceGroups
+      ? this.faceGroups.map((group, index) => (
+          selectedSet.has(index) ? group : group
+        ))
+      : null;
 
     for (const [a, b] of boundary.values()) {
       // Wind side quads so their outward normal points away from the
@@ -682,9 +820,18 @@ export class EditableMesh {
       } else {
         replacement.push([a, aPrime, bPrime, b]);
       }
+      if (replacementGroups) {
+        // Fresh group per side wall — see comment above. Each new
+        // side wall is a distinct polygon in the user's mental model
+        // (it has its own outline + normal direction at the new
+        // position), so it should never over-select with another face
+        // that happens to be on the same geometric plane.
+        replacementGroups.push(this._nextGroupId++);
+      }
     }
 
     this.faces = replacement;
+    if (replacementGroups) this.faceGroups = replacementGroups;
   }
 
   _averageNormal(faceIndices) {
@@ -739,6 +886,10 @@ export class EditableMesh {
     return {
       vertices: this.vertices.map(v => ({ x: v.x, y: v.y, z: v.z })),
       faces: this.faces.map(face => [...face]),
+      // Persist selection groups so project save/load and undo/redo
+      // round-trip correctly. Older blobs without `faceGroups` will
+      // get a default (every face is its own polygon) on load.
+      faceGroups: this.faceGroups ? [...this.faceGroups] : undefined,
     };
   }
 

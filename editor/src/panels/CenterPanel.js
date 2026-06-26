@@ -148,6 +148,118 @@ const MODELER_TOOLS = {
   ],
 };
 
+// ── Tool → required Element-mode mapping ─────────────────────────────────────
+// 'object'  = tool only meaningful in Object mode (primitives, transform, etc.)
+// 'polygon' = tool only meaningful when polygons are selected
+// 'edge'    = tool only meaningful when edges are selected
+// 'vertex'  = tool only meaningful when vertices are selected
+// 'all'     = works regardless of active mode (selection ops, surface ops)
+// null      = not a model-tool (e.g. settings, snap, wire cycle — always available)
+// Mapping follows Blender/3ds Max/Cinema 4D conventions.
+const TOOL_MODES = {
+  // ── Add (geometry creation / duplication) ─────────────────────────────────
+  'push-pull':          'polygon',
+  'multi-push-pull':    'polygon',
+  'extrude-edge':       'edge',
+  'inset':              'polygon',
+  'bevel':              'edge',     // bevels selected edges (works on faces too, but edge-mode is the canonical use)
+  'loop-slice':         'edge',
+  'subdivide':          'polygon',
+  'bridge':             'edge',     // bridges between two edge selections
+  'clone':              'all',
+  'duplicate':          'all',
+  'mirror':             'all',
+  'boolean':            'object',   // booleans operate on whole objects
+
+  // ── Remove ───────────────────────────────────────────────────────────────
+  'eraser':             'polygon',
+  'cut':                'edge',     // cuts along edges
+  'clip':               'polygon',  // clips faces against a plane
+  'collapse':           'edge',     // collapses selected edges
+  'detach':             'polygon',  // detaches polygons to a new object
+  'combine':            'edge',     // combines edges into one
+  'combine-vertices':   'vertex',
+  'combine-polygons':   'polygon',
+  'remove-doubles':     'vertex',
+
+  // ── Deform ───────────────────────────────────────────────────────────────
+  'flatten':            'polygon',
+  'align':              'polygon',
+  'snap-move':          'all',
+  'axis-flip':          'polygon',
+
+  // ── Surface ──────────────────────────────────────────────────────────────
+  'material':           'all',
+  'uv':                 'all',
+  'vertex-color':       'vertex',
+  'polygon-color':      'polygon',
+  'smoothing-group':    'polygon',
+  'hotspot-layout':     'polygon',
+
+  // ── Tweak ────────────────────────────────────────────────────────────────
+  'flip':               'polygon',
+  'pivot':              'all',
+  'pivot-center':       'all',
+  'bake-transform':     'all',
+
+  // ── Selection (always available — works on current selection) ────────────
+  'all-select':         'all',
+  'none-select':        'all',
+  'invert-select':      'all',
+  'grow-select':        'all',
+  'shrink-select':      'all',
+  'loop-select':        'edge',
+  'ring-select':        'edge',
+  'isolated-select':    'all',
+
+  // ── Misc / Multiple ──────────────────────────────────────────────────────
+  'new-object':         'all',
+  'cursor':             'all',
+  'settings':           null,       // always available (not element-specific)
+  'local-settings':     null,
+  'polygon-group':      'polygon',
+  'collider':           'all',
+  'export':             'all',
+  'refresh':            'all',
+  'combine-objects':    'object',
+  'mirror-object':      'object',
+  'refresh-all':        'all',
+
+  // ── Primitives / Drawing are object-mode only (creation tools) ───────────
+  'box':                'object',
+  'room':               'object',
+  'stair':              'object',
+  'cylinder':           'object',
+  'cone':               'object',
+  'sphere':             'object',
+  'capsule':            'object',
+  'torus':              'object',
+  'spiral-stair':       'object',
+  'icosahedron':        'object',
+  'line':               'object',
+  'arc':                'object',
+  'disk':               'object',
+  'parallel':           'object',
+  'rounded-rectangle':  'object',
+  'side-stair':         'object',
+
+  // ── System actions (always available) ────────────────────────────────────
+  'translate':          'all',
+  'rotate':             'all',
+  'scale':              'all',
+  'snap':               null,
+  'confirm':            null,
+  'cancel':             null,
+  'uv-editor':          null,
+};
+
+// Element mode that "object" tools should silently fall back to when the
+// user has a vertex/edge/polygon mode active but clicks an object-only tool.
+// We don't *change* the user's mode — we just disable those tools so the
+// user must explicitly switch back to Object mode.
+const OBJECT_MODE = 'object';
+const ELEMENT_MODE_IDS = new Set(['object', 'vertex', 'edge', 'polygon']);
+
 // ── Panel class ───────────────────────────────────────────────────────────────
 
 export class CenterPanel extends BasePanel {
@@ -180,6 +292,7 @@ export class CenterPanel extends BasePanel {
     this._modelerWireMode = 'solid-wire';
     this._modelerSearchOpen = false;
     this._modelerRoot = null;
+    this._currentElementMode = OBJECT_MODE;
 
     this._onHistoryChange     = this._onHistoryChange.bind(this);
     this._onRuntimeState      = this._onRuntimeState.bind(this);
@@ -188,6 +301,7 @@ export class CenterPanel extends BasePanel {
     this._onCycoAction        = this._onCycoAction.bind(this);
     this._onModelerMode       = this._onModelerMode.bind(this);
     this._onModelerStatus     = this._onModelerStatus.bind(this);
+    this._onModelerElementEvt = this._onModelerElementEvt.bind(this);
     window.addEventListener('cyco-history-change',        this._onHistoryChange);
     window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
@@ -196,6 +310,7 @@ export class CenterPanel extends BasePanel {
     document.addEventListener('cyco-action',              this._onCycoAction);
     window.addEventListener('cyco-modeler-mode',          this._onModelerMode);
     window.addEventListener('cyco-modeler-status',        this._onModelerStatus);
+    window.addEventListener('cyco-modeler-element',       this._onModelerElementEvt);
   }
 
   _buildContent() {
@@ -546,13 +661,34 @@ export class CenterPanel extends BasePanel {
 
   _selectModelerElement(id) {
     this._modelerTool = id;
+    this._currentElementMode = id;
     window.dispatchEvent(new CustomEvent('cyco-modeler-element', {
       detail: { mode: id }
     }));
     this._refreshModelerButtons();
   }
 
+  // External `cyco-modeler-element` listener — keeps the panel's tracked
+  // mode in sync when another component (e.g. CycleModelerController or a
+  // future hotkey) changes the active element mode outside of our own UI.
+  _onModelerElementEvt(event) {
+    const mode = event?.detail?.mode;
+    if (!ELEMENT_MODE_IDS.has(mode)) return;
+    this._currentElementMode = mode;
+    this._refreshModelerButtons();
+  }
+
   _selectModelerTool(id) {
+    // Auto-activate the element mode this tool requires. If the tool is
+    // mode-bound (TOOL_MODES[id] is one of object/vertex/edge/polygon) and
+    // the current element mode differs, switch to the tool's mode first so
+    // the user doesn't have to manually click the top-bar element button.
+    const required = TOOL_MODES[id];
+    if (required && ELEMENT_MODE_IDS.has(required)) {
+      if (this._modelerTool !== required && this._currentElementMode !== required) {
+        this._selectModelerElement(required);
+      }
+    }
     this._modelerTool = id;
     window.dispatchEvent(new CustomEvent('cyco-modeler-tool', {
       detail: { tool: id, group: this._modelerGroup }
@@ -605,6 +741,37 @@ export class CenterPanel extends BasePanel {
     });
     this._modelerRoot.querySelectorAll('[data-modeler-kind="group"]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.modelerId === this._modelerGroup);
+    });
+    // ── Per-mode tool availability ────────────────────────────────────────
+    // Grey out tools that don't apply to the currently selected element
+    // mode. The buttons remain clickable so clicking a tool that's bound
+    // to a different mode auto-activates that mode (see _selectModelerTool).
+    const mode = this._currentElementMode;
+    this._modelerRoot.querySelectorAll('[data-modeler-kind="tool"]').forEach(btn => {
+      const id = btn.dataset.modelerId;
+      const required = TOOL_MODES[id];
+      // Tools that have no entry, or `null` (system actions like snap /
+      // settings), are always available. Tools marked 'all' are always
+      // available regardless of mode.
+      let disabled = false;
+      if (required === 'polygon' || required === 'edge' || required === 'vertex') {
+        disabled = mode !== required;
+      } else if (required === 'object') {
+        // Object-mode tools (primitives, drawing, boolean, mirror-object,
+        // combine-objects) are only available when Object mode is active.
+        disabled = mode !== OBJECT_MODE;
+      }
+      btn.classList.toggle('disabled', disabled);
+      // Use aria-disabled instead of the native `disabled` attribute so
+      // the button stays clickable — the click handler will auto-switch
+      // the element mode when needed.
+      btn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+    });
+    // Also grey out the element-mode buttons themselves when one is
+    // active (it's the current selection, not a tool to invoke).
+    this._modelerRoot.querySelectorAll('[data-modeler-kind="element"]').forEach(btn => {
+      const id = btn.dataset.modelerId;
+      btn.classList.toggle('disabled', id === this._currentElementMode);
     });
     this._modelerRoot.querySelectorAll('[data-modeler-gizmo]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.modelerGizmo === this._modelerGizmo);

@@ -717,7 +717,16 @@ export class CycleModelerController {
       const vertexIndex = triIndex * 3;
       if (vertexIndex < faceIdAttr.count) index = Math.max(0, faceIdAttr.getX(vertexIndex) | 0);
     }
-    return mesh.coplanarFaces(index);
+    // Use the mesh's `faceGroup` (selection-group) rather than a raw
+    // geometric coplanar test. After Push/Pull, side walls can lie on
+    // the same geometric plane as adjacent mesh faces (e.g. the top
+    // side wall of an extruded back face sits on the same Y plane as
+    // the box's top face) — the geometric coplanar check would
+    // over-select those walls, so the user clicking the top face
+    // would "select all the squares". `selectionGroup` returns just
+    // the polygons that share an explicit selection group ID with the
+    // seed face, which is what the modeler wants.
+    return mesh.selectionGroup(index);
   }
 
   _pushDistanceFromDrag(drag) {

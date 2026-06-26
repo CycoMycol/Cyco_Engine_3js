@@ -2951,6 +2951,21 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   background: rgba(224,114,40,0.14);
   border-color: rgba(224,114,40,0.34);
 }
+/* Disabled (greyed-out) state for tools that don't apply to the
+   currently selected element mode (Object/Vertex/Edge/Polygon). The
+   button stays clickable — clicking a disabled tool auto-activates the
+   element mode it requires (see CenterPanel._selectModelerTool). */
+.cyco-modeler-icon-btn.disabled,
+.cyco-modeler-icon-btn[aria-disabled="true"] {
+  opacity: 0.32;
+  filter: grayscale(1);
+  color: var(--ce-text-muted);
+}
+.cyco-modeler-icon-btn.disabled:hover,
+.cyco-modeler-icon-btn[aria-disabled="true"]:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--ce-text-primary);
+}
 .cyco-modeler-mini-btn {
   height: 28px;
   min-width: 28px;
