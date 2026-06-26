@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../editor/libs/three/build/three.module.min.js';
 
 // Default segment counts for parametric primitives (cylinder/cone/sphere/etc.).
 // Kept small enough that the editable mesh stays manageable but large enough

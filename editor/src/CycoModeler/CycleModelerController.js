@@ -1170,6 +1170,18 @@ export class CycleModelerController {
   }
 
   _objectEdgeOverlay(object) {
+    // Build the edge geometry from the EditableMesh's polygon edges so the
+    // hover outline matches the user-visible wireframe (no triangulation
+    // diagonals on round shapes).
+    const meshJson = object?.userData?.cycoModeler?.mesh;
+    if (meshJson && meshJson.faces && meshJson.vertices) {
+      try {
+        const editable = EditableMesh.fromJSON(meshJson);
+        return editable.toEdgesGeometry(1);
+      } catch (err) {
+        // Fall through to the raw geometry below.
+      }
+    }
     return new THREE.EdgesGeometry(object.geometry, 1);
   }
 
@@ -1286,15 +1298,13 @@ export class CycleModelerController {
     const centerX = minX + width / 2;
     const centerZ = minZ + depth / 2;
     const height = cell;
-    const editableMesh = this.primitiveTool === 'box'
-      ? EditableMesh.boxFromBounds(
-          new THREE.Vector3(-width / 2, 0, -depth / 2),
-          new THREE.Vector3(width / 2, height, depth / 2)
-        )
-      : null;
-    // Boxes use the EditableMesh as their rendered geometry so the
-    // faceId attribute is present from the start, keeping raycasts /
-    // polygon selection / Push-Pull consistent before any deformation.
+    // Every primitive is built as an EditableMesh so it has the
+    // `faceId` attribute and the per-face JSON the rest of the modeler
+    // (hover, polygon / edge / vertex selection, Push/Pull, eraser,
+    // subdivide, etc.) relies on. Without this the non-box primitives
+    // were rendered as raw Three.js geometry with no editable mesh and
+    // therefore could not be interacted with.
+    const editableMesh = this._makeEditablePrimitive(this.primitiveTool, width, height, depth);
     const geometry = editableMesh
       ? editableMesh.toBufferGeometry()
       : this._makePrimitiveGeometry(this.primitiveTool, width, height, depth);
@@ -1310,7 +1320,22 @@ export class CycleModelerController {
     object.name = preview
       ? `Cycle Modeler ${this._label(this.primitiveTool)} Preview`
       : `Cycle Modeler ${this._label(this.primitiveTool)}`;
-    object.position.set(centerX, this.primitiveTool === 'box' ? 0 : height / 2, centerZ);
+    // Box-shaped primitives (box, room, stair, side-stair, spiral-stair,
+    // and the thin line / arc / disk / rounded-rectangle / parallel
+    // placeholders) sit with their floor at local Y=0, so the object
+    // can be placed directly on the grid (Y=0). Round primitives
+    // (cylinder, cone, sphere, capsule, torus, icosahedron) are centered
+    // around their origin, so they need Y = height/2 to rest on the
+    // grid like a box.
+    const floorAnchored = new Set([
+      'box', 'room', 'stair', 'side-stair', 'spiral-stair',
+      'line', 'parallel', 'arc', 'disk', 'rounded-rectangle',
+    ]);
+    object.position.set(
+      centerX,
+      floorAnchored.has(this.primitiveTool) ? 0 : height / 2,
+      centerZ,
+    );
     object.castShadow = !preview;
     object.receiveShadow = !preview;
     object.userData._editorOnly = preview;
@@ -1325,6 +1350,68 @@ export class CycleModelerController {
     return object;
   }
 
+  /**
+   * Build an EditableMesh for every supported primitive so the result is
+   * fully editable (face selection, Push/Pull, vertex / edge hover, etc.).
+   * Returns null for primitives that intentionally do not produce 3D
+   * faces (the thin line / parallel "rectangle" pieces) so the caller
+   * falls back to `_makePrimitiveGeometry` for those.
+   */
+  _makeEditablePrimitive(tool, width, height, depth) {
+    switch (tool) {
+      case 'box':
+        return EditableMesh.boxFromBounds(
+          new THREE.Vector3(-width / 2, 0, -depth / 2),
+          new THREE.Vector3(width / 2, height, depth / 2)
+        );
+      case 'room':
+        return EditableMesh.room(width, height, depth);
+      case 'stair':
+        return EditableMesh.stair(width, height, depth);
+      case 'side-stair':
+        return EditableMesh.sideStair(width, height, depth);
+      case 'spiral-stair':
+        return EditableMesh.spiralStair(width, height, depth);
+      case 'cylinder':
+        return EditableMesh.cylinder(width, height, depth);
+      case 'cone':
+        return EditableMesh.cone(width, height, depth);
+      case 'sphere':
+        return EditableMesh.sphere(width, height, depth);
+      case 'capsule':
+        return EditableMesh.capsule(width, height, depth);
+      case 'torus':
+        return EditableMesh.torus(width, height, depth);
+      case 'icosahedron':
+        return EditableMesh.icosahedron(width, height, depth);
+      case 'arc':
+      case 'disk':
+      case 'rounded-rectangle':
+      case 'line':
+      case 'parallel':
+        // Thin shapes are kept as raw geometries so they render flat, but
+        // we still wrap them in an EditableMesh so the modeler treats
+        // them like every other primitive for selection / hover purposes.
+        return EditableMesh.boxFromBounds(
+          new THREE.Vector3(-width / 2, 0, -depth / 2),
+          new THREE.Vector3(width / 2, Math.max(1, height * 0.08), depth / 2)
+        );
+      default:
+        return EditableMesh.boxFromBounds(
+          new THREE.Vector3(-width / 2, 0, -depth / 2),
+          new THREE.Vector3(width / 2, height, depth / 2)
+        );
+    }
+  }
+
+  /**
+   * Fallback thin-geometry factory for shapes that look wrong as solid
+   * blocks (e.g. an `arc` should be a half-torus, a `disk` should be a
+   * thin cylinder, a `rounded-rectangle` should be a RoundedBox). The
+   * editable mesh above provides the polygon topology for selection /
+   * Push/Pull; this factory only fills in the visible geometry when
+   * the editable mesh is a placeholder box.
+   */
   _makePrimitiveGeometry(tool, width, height, depth) {
     switch (tool) {
       case 'line':
@@ -1830,10 +1917,27 @@ export class CycleModelerController {
     else if (obj.material) obj.material.visible = visible;
     if (this.wireMode === 'solid') return;
     if (!this._wireStyle.enabled) return;
+    // Build the wireframe from the EditableMesh's polygon edges (not the
+    // triangulated BufferGeometry). The polygon-based path keeps the
+    // wireframe outline aligned with the source faces — a sphere shows
+    // latitude + longitude quads, a stair shows step treads + risers
+    // (no diagonal slashes), etc. Falls back to the triangulated mesh
+    // for objects whose EditableMesh data is missing (legacy / imported).
+    let edgesGeom = null;
+    const meshJson = obj.userData.cycoModeler?.mesh;
+    if (meshJson && meshJson.faces && meshJson.vertices) {
+      try {
+        const editable = EditableMesh.fromJSON(meshJson);
+        edgesGeom = editable.toEdgesGeometry(1);
+      } catch (err) {
+        edgesGeom = null;
+      }
+    }
+    if (!edgesGeom) edgesGeom = new THREE.EdgesGeometry(obj.geometry, 1);
     // Line2 (LineSegments2 + LineMaterial) so the thickness slider
     // produces a visible result on screen.
     const wire = this._buildFatEdges(
-      new THREE.EdgesGeometry(obj.geometry, 1),
+      edgesGeom,
       this._wireStyle.color,
       this._wireStyle.thickness,
       this._wireStyle.opacity,
