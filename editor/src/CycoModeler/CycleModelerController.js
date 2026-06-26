@@ -898,15 +898,18 @@ export class CycleModelerController {
     const worldPerPx = (2 * Math.tan(fov / 2) * cameraDist) / canvasH;
     const widthWorld = Math.max(worldPerPx * 0.25, widthPx * worldPerPx);
 
-    // Start with a default-geometry ribbon. The screen-aligned version
-    // is rebuilt lazily in `onBeforeRender` once we know the parent's
-    // current world matrix and the active camera. The initial pass uses
-    // a world-axis perpendicular (good enough to draw something while
-    // the first frame is being scheduled).
+    // Build a view-aligned ribbon up front (NOT a degenerate world-axis
+    // fallback) so the wireframe is visible on the very first paint.
+    // We force-update the parent's world matrix first, then build with
+    // `initial=false` so the proper view-aligned perpendicular is used
+    // for every segment — including the back-side ones that the
+    // previous version culled (which produced the "wireframe disappears
+    // as you rotate" symptom).
     const parent = edgesGeom.userData?._wireParent;
+    if (parent) parent.updateWorldMatrix(true, false);
     const parentWorld = parent ? parent.matrixWorld : new THREE.Matrix4();
     let ribbonGeom = this._expandEdgesToRibbon(
-      edgesGeom, widthWorld, camera, parentWorld, /* initial */ true,
+      edgesGeom, widthWorld, camera, parentWorld, /* initial */ false,
     );
     const wireMesh = new THREE.Mesh(
       ribbonGeom,
@@ -918,10 +921,24 @@ export class CycleModelerController {
         depthWrite: false,
         side: THREE.DoubleSide,
         toneMapped: false,
+        // Bias the ribbon toward the camera so it draws on top of the
+        // mesh surface (no z-fighting, and the front-facing side of the
+        // wireframe is no longer occluded by the mesh when depthTest is
+        // enabled). The negative units move the ribbon "closer" to the
+        // camera in depth-buffer terms. With depthTest=false this is a
+        // no-op (the ribbon always draws).
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -4,
       }),
     );
     wireMesh.renderOrder = 9999;
     // Track inputs so onBeforeRender can rebuild only when needed.
+    // `_needsFirstRebuild` forces one rebuild on the next render in
+    // case the initial build was skipped or the camera/parent matrices
+    // were not yet valid when the ribbon was constructed. This
+    // guarantees the wireframe is visible from the very first painted
+    // frame, not just after the user starts orbiting.
     wireMesh.userData._wireInputs = {
       edgesGeom,
       widthWorld,
@@ -931,6 +948,7 @@ export class CycleModelerController {
       // Cached parent world matrix; when it changes, rebuild ribbon.
       cachedParentMatrix: new THREE.Matrix4().copy(parentWorld),
       width: widthWorld,
+      _needsFirstRebuild: true,
     };
     const self = this;
     wireMesh.onBeforeRender = function (_renderer, _scene, activeCamera) {
@@ -941,8 +959,16 @@ export class CycleModelerController {
       if (!parentNode) return;
       parentNode.updateWorldMatrix(true, false);
       const parentMat = parentNode.matrixWorld;
-      // Skip if neither the camera nor the parent has moved.
-      if (camMat.equals(data.cachedCamMatrix) && parentMat.equals(data.cachedParentMatrix)) return;
+      // Skip if neither the camera nor the parent has moved AND we've
+      // already produced at least one view-aligned rebuild. This keeps
+      // per-frame cost flat during idle frames while still guaranteeing
+      // the first view-aligned ribbon is in place before the user sees
+      // the wireframe.
+      if (
+        !data._needsFirstRebuild &&
+        camMat.equals(data.cachedCamMatrix) &&
+        parentMat.equals(data.cachedParentMatrix)
+      ) return;
       data.cachedCamMatrix.copy(camMat);
       data.cachedParentMatrix.copy(parentMat);
       const newGeom = self._expandEdgesToRibbon(
@@ -950,6 +976,7 @@ export class CycleModelerController {
       );
       const oldGeom = this.geometry;
       this.geometry = newGeom;
+      data._needsFirstRebuild = false;
       // Dispose the previous ribbon on a microtask so we don't stomp on
       // shadow / multisample passes that are still referencing it.
       queueMicrotask(() => { try { oldGeom?.dispose?.(); } catch (_) { /* already gone */ } });
@@ -986,9 +1013,9 @@ export class CycleModelerController {
    * @param {number} width                     ribbon half-width in world units
    * @param {THREE.Camera} camera              active camera (for view dir)
    * @param {THREE.Matrix4} parentWorld        parent's world matrix
-   * @param {boolean} initial                  true on first call (no parent matrix yet)
+   * @param {boolean} _initial                 deprecated — kept for callers; no longer used
    */
-  _expandEdgesToRibbon(edgesGeom, width, camera, parentWorld, initial) {
+  _expandEdgesToRibbon(edgesGeom, width, camera, parentWorld, _initial) {
     const src = edgesGeom.attributes.position;
     if (!src) return edgesGeom;
     const segCount = (src.count / 2) | 0;
@@ -1000,71 +1027,50 @@ export class CycleModelerController {
     const viewDir = new THREE.Vector3();
     const perpW = new THREE.Vector3();
     const offsetLocal = new THREE.Vector3();
+    // Per-segment face normals (LOCAL space) attached by
+    // EditableMesh.toEdgesGeometry. Used to push the ribbon outward
+    // away from the surface so depth-tested wireframes don't get
+    // occluded by the mesh they're drawn on top of.
+    const segNormalsLocal = edgesGeom.userData?._segFaceNormals;
+    const faceNormalLocal = new THREE.Vector3();
+    const faceNormalWorld = new THREE.Vector3();
     const invParent = new THREE.Matrix4();
-    if (parentWorld && !initial) {
+    if (parentWorld) {
       invParent.copy(parentWorld).invert();
     }
-    // Stable fall-back axes for the initial-frame / no-camera case.
+    // Stable fall-back axes for the no-camera case (rare — the editor
+    // always supplies a camera). The view-aligned path is preferred
+    // because it stays continuous across adjacent ring segments.
     const AXES = [
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(0, 1, 0),
       new THREE.Vector3(0, 0, 1),
     ];
     const camPos = camera?.position;
-    // Per-segment face normals (local space) attached by
-    // EditableMesh.toEdgesGeometry. Used to cull back-facing segments:
-    // a segment is skipped if BOTH of its adjacent face normals point
-    // away from the camera. This prevents the back-side ribbon
-    // perpendiculars from poking out at the silhouette as the camera
-    // orbits, which is what produced the "wireframe disappears/reappears
-    // on the right side as you rotate" bug.
-    const segFaceNormals = edgesGeom.userData?._segFaceNormals;
     let o = 0;
     let skippedView = 0;
     let usedAxisFallback = 0;
-    let culledBackface = 0;
-    const faceN = new THREE.Vector3();
-    const faceNW = new THREE.Vector3();
+    let outwardPushed = 0;
     for (let i = 0; i < segCount; i++) {
       A.fromBufferAttribute(src, i * 2);
       B.fromBufferAttribute(src, i * 2 + 1);
       dir.subVectors(B, A);
       if (dir.lengthSq() < 1e-10) continue;
       dir.normalize();
-      // Back-face cull: skip this segment entirely if every adjacent
-      // face normal points away from the camera. A boundary edge (1
-      // face) keeps its single face normal as the test.
-      if (!initial && camera && segFaceNormals && segFaceNormals[i]) {
-        const normals = segFaceNormals[i];
-        const nCount = normals.length / 3;
-        if (nCount > 0) {
-          // Compute segment midpoint in world for the dot test.
-          const midLocal = A.clone().add(B).multiplyScalar(0.5);
-          const midWorld = midLocal.applyMatrix4(parentWorld);
-          const camToMid = new THREE.Vector3().subVectors(camPos, midWorld).normalize();
-          let anyFront = false;
-          for (let k = 0; k < nCount; k++) {
-            faceN.set(normals[k * 3], normals[k * 3 + 1], normals[k * 3 + 2]);
-            // Transform the local-space normal into world space (no
-            // translation, but with scale/rotation).
-            faceNW.copy(faceN).transformDirection(parentWorld);
-            if (faceNW.dot(camToMid) > 0) { anyFront = true; break; }
-          }
-          if (!anyFront) {
-            // Every adjacent face is back-facing relative to the
-            // camera — this segment is on the far side of the mesh.
-            culledBackface += 1;
-            continue;
-          }
-        }
-      }
+      // No back-face culling: the wireframe must remain continuously
+      // visible from every angle, including the far side of the mesh
+      // (x-ray mode). The view-aligned perpendicular naturally
+      // compresses the ribbon on segments perpendicular to the camera
+      // (so they read as thin lines, not flaps), but we never drop
+      // segments — that was the source of the "wireframe disappears as
+      // you rotate" report.
       let useFallback = false;
       let chosen = AXES[2];
-      if (initial || !camera) {
-        // First-frame build (no camera bound to the mesh yet) — fall
-        // back to a world-axis perpendicular. onBeforeRender will
-        // replace this geometry with a view-aligned one before the
-        // first user-visible frame.
+      let perpIsScreenAligned = false;
+      if (!camera) {
+        // No camera bound to the scene — fall back to a world-axis
+        // perpendicular for every segment. This branch is unreachable
+        // under normal editor use; the modeler always has a camera.
         useFallback = true;
       } else {
         // Transform the segment direction into world space, then
@@ -1089,6 +1095,7 @@ export class CycleModelerController {
             skippedView += 1;
           } else {
             perpW.normalize();
+            perpIsScreenAligned = true;
             // Convert the world-space perpendicular back to local.
             offsetLocal.copy(perpW).transformDirection(invParent).multiplyScalar(width);
           }
@@ -1105,6 +1112,50 @@ export class CycleModelerController {
         if (tmpN.lengthSq() < 1e-6) continue;
         tmpN.normalize();
         offsetLocal.copy(tmpN).multiplyScalar(width);
+      }
+      // Push the ribbon OUTWARD away from the surface so depth-tested
+      // wireframes aren't occluded by the mesh they're drawn on. The
+      // view-aligned perpendicular lives in the screen plane and can
+      // point in either of two directions along the segment; without
+      // disambiguation, half of the front-facing segments will end up
+      // with their ribbon offset INTO the mesh (and occluded by it).
+      // We use the adjacent face normal(s) to pick the outward side.
+      //
+      // Procedure (when face normals are available):
+      //   1. Average the 1-2 adjacent face normals to get the segment's
+      //      outward direction in local space.
+      //   2. Transform to world, then take the projection onto the
+      //      screen-aligned perpendicular (already in world space).
+      //   3. If the dot product is negative, flip the perpendicular so
+      //      the ribbon offset points away from the surface.
+      //
+      // This guarantees the ribbon sits on the outside of the mesh
+      // regardless of camera angle, so depth-tested wireframes are
+      // visible on the front-facing side (the side that was being
+      // occluded before this fix).
+      if (perpIsScreenAligned && segNormalsLocal && segNormalsLocal[i] && segNormalsLocal[i].length >= 3) {
+        const nf = segNormalsLocal[i];
+        faceNormalLocal.set(nf[0], nf[1], nf[2]).normalize();
+        faceNormalWorld.copy(faceNormalLocal).transformDirection(parentWorld);
+        const dot = perpW.dot(faceNormalWorld);
+        if (dot < 0) {
+          offsetLocal.multiplyScalar(-1);
+          outwardPushed += 1;
+        }
+      } else if (perpIsScreenAligned && segNormalsLocal && segNormalsLocal[i] && segNormalsLocal[i].length >= 6) {
+        // Two adjacent faces — average them.
+        const nf = segNormalsLocal[i];
+        faceNormalLocal.set(
+          (nf[0] + nf[3]) * 0.5,
+          (nf[1] + nf[4]) * 0.5,
+          (nf[2] + nf[5]) * 0.5,
+        ).normalize();
+        faceNormalWorld.copy(faceNormalLocal).transformDirection(parentWorld);
+        const dot = perpW.dot(faceNormalWorld);
+        if (dot < 0) {
+          offsetLocal.multiplyScalar(-1);
+          outwardPushed += 1;
+        }
       }
       const aL = A;
       const aR = A.clone().add(offsetLocal);
@@ -1129,8 +1180,7 @@ export class CycleModelerController {
         segCount,
         skippedView,
         usedAxisFallback,
-        culledBackface,
-        initial: !!initial,
+        outwardPushed,
         hasCamera: !!camera,
       };
     }
