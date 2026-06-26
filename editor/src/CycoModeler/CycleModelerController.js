@@ -42,7 +42,7 @@ export class CycleModelerController {
     // the modeler still renders correctly if settings aren't imported.
     // Hover style is per-mode (polygon/edge/vertex) so each mode can
     // have its own colour, opacity and vertex size.
-    this._wireStyle = { color: 0x151515, opacity: 1.0, thickness: 1, enabled: true };
+    this._wireStyle = { color: 0x000000, opacity: 1.0, thickness: 2, enabled: true };
     this._hoverStyle = {
       polygon: { color: 0xff3333, opacity: 0.9, enabled: true },
       edge:    { color: 0xffaa00, opacity: 0.95, thickness: 3, enabled: true },
@@ -1194,18 +1194,28 @@ export class CycleModelerController {
       // exactly tangent to the surface when the camera looks straight
       // down a flat face (e.g. box top face viewed from above). In
       // that case the flip above has no effect (dot ≈ 0) and the
-      // ribbon quad lies IN the surface plane — the polygon offset
-      // wins some depth pixels but the ribbon still z-fights and reads
-      // as faint/dotted. Add a small outward component along the face
-      // normal so the ribbon always has a non-coplanar offset,
-      // regardless of camera angle. Magnitude is a fraction of `width`
-      // so the visual thickness change on curved primitives (where
-      // the flip already provides most of the outward push) is
-      // negligible.
-      if (faceNormalWorldForBias) {
-        const liftAmount = width * 0.5;
+      // ribbon quad lies IN the surface plane — without a guaranteed
+      // depth bias, the ribbon would z-fight the surface (and read as
+      // faint / dotted) under `depthTest: true`.
+      //
+      // Lift direction: the **camera view direction** (NOT the face
+      // normal). Previously this lift was applied along the face
+      // normal, which projected onto the screen plane as a variable
+      // offset depending on the face's angle relative to the camera —
+      // some segments ended up with 2–3× the requested screen-pixel
+      // width while others stayed at the requested width, producing
+      // the visible "added geometry outline is thinner than the
+      // original box outline" inconsistency reported in the editor.
+      // Lifting along viewDir pulls the quad toward the camera in
+      // depth-buffer terms (winning the depth test) without changing
+      // the perp's screen projection, so every segment renders at the
+      // requested screen-pixel thickness regardless of which face it
+      // borders. `polygonOffset` (set on the wireframe material) is
+      // applied on top of this lift as a second line of defence.
+      if (faceNormalWorldForBias && viewDir.lengthSq() > 1e-10) {
+        const liftAmount = width * 2.0;
         const liftLocal = new THREE.Vector3()
-          .copy(faceNormalWorldForBias)
+          .copy(viewDir)
           .transformDirection(invParent)
           .multiplyScalar(liftAmount);
         offsetLocal.add(liftLocal);
@@ -1629,7 +1639,12 @@ export class CycleModelerController {
       transparent: preview,
       roughness: 0.7,
       metalness: 0.1,
-      side: THREE.DoubleSide,
+      // Front-only for committed primitives — solid / solid+wire
+      // mode should show only the outer surface (back faces are
+      // culled, so the inside of the box isn't visible through the
+      // front face). Preview primitives keep `DoubleSide` so the
+      // user sees the whole volume while dragging.
+      side: preview ? THREE.DoubleSide : THREE.FrontSide,
     });
     const object = new THREE.Mesh(geometry, material);
     object.name = preview
@@ -2323,22 +2338,36 @@ export class CycleModelerController {
     }
     if (!edgesGeom) edgesGeom = new THREE.EdgesGeometry(obj.geometry, 1);
     edgesGeom.userData._wireParent = obj;
-    // Line2 (LineSegments2 + LineMaterial) so the thickness slider
-    // produces a visible result on screen.
-    // `depthTest: false` so the wireframe ALWAYS renders on top of the
-    // underlying mesh — never occluded by surface tangent segments
-    // (e.g. front-face subdivision lines on a subdivided box, where
-    // the screen-aligned perpendicular is tangent to the surface and
-    // the ribbon quad's depth can lose the depth test to the surface
-    // itself, producing faint / dotted lines). Matches the
-    // hover/selection overlay behaviour.
+    // Per-mode wireframe rendering:
+    //
+    //   solid-wire : mesh visible behind the lines. `depthTest: true`
+    //                so back-side edges are OCCLUDED by the front
+    //                mesh faces (no X-ray bleed-through to the
+    //                inside of the box). The ribbon code adds an
+    //                outward lift along the face normal so
+    //                front-side edges win the depth test and render
+    //                at full strength.
+    //   wire       : mesh hidden. `depthTest: false` so the lines
+    //                always draw regardless of camera / segment
+    //                orientation. Color forced to white so the lines
+    //                are legible against the dark scene background.
+    let depthTest;
+    let wireColor;
+    if (this.wireMode === 'wire') {
+      depthTest = false;
+      wireColor = 0xffffff;
+    } else {
+      // 'solid-wire'
+      depthTest = true;
+      wireColor = this._wireStyle.color;
+    }
     const targetPos = this._getObjectWorldCenter(obj);
     const wire = this._buildFatEdges(
       edgesGeom,
-      this._wireStyle.color,
+      wireColor,
       this._wireStyle.thickness,
       this._wireStyle.opacity,
-      /* depthTest */ false,
+      /* depthTest */ depthTest,
       targetPos,
     );
     wire.name = 'CycleModelerWireOverlay';

@@ -50,10 +50,17 @@ export const MODELER_SETTINGS_DEFAULTS = Object.freeze({
   },
   wireframe: {
     // Selected object — wireframe LineSegments2 around the mesh.
+    // Color stays black so it reads cleanly against the light mesh in
+    // Solid+Wire / Solid mode and against the rendered mesh preview
+    // in Wire-Only mode (the mesh stays visible as a backdrop).
+    // Wire-Only mode flips the wire color to white automatically
+    // (see CycleModelerController._syncWireOverlay) so it remains
+    // legible against the dark scene background when the mesh is
+    // hidden.
     enabled:   true,
-    color:     '#151515',
-    thickness: 1,            // screen-pixel thickness (Line2.linewidth), 1..15
-    opacity:   0.85,
+    color:     '#000000',
+    thickness: 2,            // screen-pixel thickness (Line2.linewidth), 1..15
+    opacity:   1.0,
   },
   polygonHighlight: {
     // Hover/selected FACE highlight (red by default).
