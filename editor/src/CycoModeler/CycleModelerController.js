@@ -925,6 +925,20 @@ export class CycleModelerController {
       this._middlePick = null;
       this.viewportEngine.controls.enabled = true;
       try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+      // Second-pass deselect: if every polygon this gesture crossed
+      // was already in the selection before the drag began, subtract
+      // them all. This is the "drag over already-selected polygons
+      // to deselect them" half of the middle-click multi-select.
+      if (pick.crossedFaces?.size && pick.hit?.object?.userData?.cycoModeler) {
+        const modeler = pick.hit.object.userData.cycoModeler;
+        const allWereSelected = Array.from(pick.crossedFaces)
+          .every(id => pick.preFaces?.has(id));
+        if (allWereSelected && (modeler.selectedFaces?.length)) {
+          const drop = new Set(modeler.selectedFaces);
+          for (const id of pick.crossedFaces) drop.delete(id);
+          modeler.selectedFaces = Array.from(drop);
+        }
+      }
       // The selection was already written during the sweep (or by
       // the click-pick branch on a no-drag release). Just refresh
       // the overlay + status. Shift / ctrl held → additive; the
@@ -2860,14 +2874,38 @@ export class CycleModelerController {
       // over the same polygon doesn't keep re-applying the additive
       // toggle (which would flip it off).
       visited: new Set(),
+      // Face ids crossed this gesture (used by the second-pass
+      // deselect logic to subtract from the selection if every
+      // crossed face was already selected before this drag began).
+      crossedFaces: new Set(),
+      // Snapshot of selectedFaces taken at gesture start, so we can
+      // tell on a *second* drag whether the user is re-crossing
+      // polygons that are already in the selection.
+      preFaces: new Set((hit.object?.userData?.cycoModeler?.selectedFaces) || []),
     };
     // Apply the bare click immediately so a no-drag middle-click
-    // already shows a fresh pick. Shift / ctrl → additive (toggle
-    // the hit into / out of the existing selection); bare middle-
-    // click is the modeler's multi-select gesture — it unions the
-    // hit onto whatever is already selected so successive picks
-    // (and subsequent sweep samples) all accumulate.
-    this._applyMiddlePick({ additive, hit });
+    // already shows a fresh pick. Live second-pass deselect: any
+    // picked polygon that was already selected before this drag
+    // began gets dropped from the selection right away — matches
+    // "drag over already-selected polygons to deselect them".
+    const modeler = hit.object.userData.cycoModeler;
+    const pickedFaces = this._selectionFromHit(hit).faces || [];
+    const preFaces = this._middlePick?.preFaces;
+    const overlapping = pickedFaces.filter(id => preFaces?.has(id));
+    if (overlapping.length > 0 && this.elementMode === 'polygon' && modeler.selectedFaces?.length) {
+      const drop = new Set(modeler.selectedFaces);
+      for (const id of overlapping) drop.delete(id);
+      modeler.selectedFaces = Array.from(drop);
+      modeler.selectedVertices = [];
+      modeler.selectedEdges = [];
+      this.selectionManager?.setSelectedObjects?.([hit.object]);
+      this._status(this._elemMarqueeSummary());
+      if (this._middlePick.crossedFaces) {
+        for (const id of pickedFaces) this._middlePick.crossedFaces.add(id);
+      }
+    } else {
+      this._applyMiddlePick({ additive, hit });
+    }
     this._refreshSelectionOverlay();
   }
 
@@ -2917,7 +2955,27 @@ export class CycleModelerController {
       const key = this._pickKey(hit);
       if (this._middlePick.visited.has(key)) continue;
       this._middlePick.visited.add(key);
-      this._applyMiddlePick({ additive: this._middlePick.additive, hit });
+      // Second-pass deselect (live): any picked polygon that was already
+      // in the selection before this gesture began gets dropped from
+      // `selectedFaces` on this sweep sample — the highlight updates
+      // as the cursor enters the polygon, not only on pointerup.
+      const modeler = hit.object.userData.cycoModeler;
+      const pickedFaces = this._selectionFromHit(hit).faces || [];
+      const overlapping = pickedFaces.filter(id => this._middlePick.preFaces?.has(id));
+      if (overlapping.length > 0 && this.elementMode === 'polygon' && modeler.selectedFaces?.length) {
+        const drop = new Set(modeler.selectedFaces);
+        for (const id of overlapping) drop.delete(id);
+        modeler.selectedFaces = Array.from(drop);
+        modeler.selectedVertices = [];
+        modeler.selectedEdges = [];
+        this.selectionManager?.setSelectedObjects?.([hit.object]);
+        this._status(this._elemMarqueeSummary());
+        if (this._middlePick.crossedFaces) {
+          for (const id of pickedFaces) this._middlePick.crossedFaces.add(id);
+        }
+      } else {
+        this._applyMiddlePick({ additive: this._middlePick.additive, hit });
+      }
       changed = true;
     }
     if (changed) this._refreshSelectionOverlay();
@@ -2995,15 +3053,23 @@ export class CycleModelerController {
       modeler.selectedVertices = [];
       modeler.selectedFaces = selection.faces;
     } else if (this.elementMode === 'polygon') {
-      // Middle-click multi-select is a union-only gesture: every
-      // polygon the cursor crosses accumulates into the selection.
-      // Passing `replace=false` (was `!additive`) stops the sweep
-      // from toggling the same key out as the cursor lingers on it,
-      // which previously caused "select then disappear" symptoms.
+      // Middle-click multi-select: every polygon the cursor crosses
+      // accumulates into the selection (union mode — passing
+      // `replace=false` stops the sweep from toggling the same key
+      // out as the cursor lingers on it).
       modeler.selectedFaces = this._toggleArray(
         modeler.selectedFaces, selection.faces, false);
       modeler.selectedVertices = [];
       modeler.selectedEdges = [];
+      // Record which polygons this gesture crossed so the release
+      // handler can do a second-pass deselect (subtract these from
+      // the selection if they were all already selected before the
+      // drag began).
+      if (this._middlePick?.crossedFaces) {
+        for (const id of selection.faces || []) {
+          this._middlePick.crossedFaces.add(id);
+        }
+      }
     }
     this.selectionManager?.setSelectedObjects?.([obj]);
     // Live status update so the user sees the multi-select count
