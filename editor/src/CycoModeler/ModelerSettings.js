@@ -59,7 +59,7 @@ export const MODELER_SETTINGS_DEFAULTS = Object.freeze({
     // hidden.
     enabled:   true,
     color:     '#000000',
-    thickness: 2,            // screen-pixel thickness (Line2.linewidth), 1..15
+    thickness: 0.5,          // screen-pixel thickness (Line2.linewidth), 1..15
     opacity:   1.0,
   },
   polygonHighlight: {

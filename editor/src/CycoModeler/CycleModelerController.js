@@ -1766,13 +1766,17 @@ export class CycleModelerController {
     const maxZ = Math.max(start.z, end.z);
     const width = Math.max(cell, maxX - minX);
     const depth = Math.max(cell, maxZ - minZ);
-    // Anchor the primitive at the initial click point (mouse pointer),
-    // not at the centre of the drag rectangle — this matches how
-    // every other Box-modeler "draw" tool behaves (the shape grows
-    // out from the cursor, just like a marquee). The clicked grid
-    // cell becomes the bottom-back corner of the footprint.
-    const anchorX = start.x;
-    const anchorZ = start.z;
+    // Anchor the primitive at the CENTRE of the grid cell the user
+    // clicked on, then grow the footprint symmetrically outward as
+    // they drag. This makes the grid the placement authority: every
+    // primitive snaps to whole grid cells and centres on one, so the
+    // modeler feels like a tile-based editor rather than a free draw.
+    // `_snapPoint` snaps `start` to grid LINES (multiples of `cell`),
+    // so the cell that contains the click runs from
+    // [start.x .. start.x + cell] on X and [start.z .. start.z + cell]
+    // on Z. The cell centre is therefore `start + cell/2` on each axis.
+    const anchorX = start.x + cell / 2;
+    const anchorZ = start.z + cell / 2;
     // Height: defaults to one grid cell. Drag the mouse UP from the
     // initial click to grow the height (drag-down collapses back to
     // the floor). We translate the screen-pixel delta into world units
@@ -1820,11 +1824,13 @@ export class CycleModelerController {
     // around their origin, so they need Y = height/2 to rest on the
     // grid like a box.
     //
-    // Floor-anchored primitives are POSITIONED at the initial click
-    // point (the bottom-back corner of the footprint), so the shape
-    // grows out from the cursor as the user drags — matching marquee
-    // / box-draw conventions used by every other modeler. Round
-    // primitives anchor their origin at the click point and use
+    // Floor-anchored primitives are POSITIONED at the centre of the
+    // grid cell under the cursor (the bottom-back corner of the
+    // footprint shifts to `anchor - width/2`, `anchor - depth/2`),
+    // so every primitive is centred on a grid cell and the grid is
+    // the placement authority. Dragging grows the footprint
+    // symmetrically outward from that cell centre. Round primitives
+    // anchor their origin at the same cell centre and use
     // max(width, depth) as their horizontal extent.
     const floorAnchored = new Set([
       'box', 'room', 'stair', 'side-stair', 'spiral-stair',
