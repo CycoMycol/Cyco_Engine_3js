@@ -2892,8 +2892,13 @@ export class CycleModelerController {
     const pickedFaces = this._selectionFromHit(hit).faces || [];
     const preFaces = this._middlePick?.preFaces;
     const overlapping = pickedFaces.filter(id => preFaces?.has(id));
-    if (overlapping.length > 0 && this.elementMode === 'polygon' && modeler.selectedFaces?.length) {
-      const drop = new Set(modeler.selectedFaces);
+    if (overlapping.length > 0 && this.elementMode === 'polygon') {
+      // Live deselect on the bare click — mirror of the sweep branch.
+      // Guard is intentionally loose (no `selectedFaces?.length`): an
+      // empty selection means the picked pre-selected polygon was
+      // already removed, so we just record the cross and skip the
+      // union re-add that `_applyMiddlePick` would otherwise do.
+      const drop = new Set(modeler.selectedFaces || []);
       for (const id of overlapping) drop.delete(id);
       modeler.selectedFaces = Array.from(drop);
       modeler.selectedVertices = [];
@@ -2962,8 +2967,14 @@ export class CycleModelerController {
       const modeler = hit.object.userData.cycoModeler;
       const pickedFaces = this._selectionFromHit(hit).faces || [];
       const overlapping = pickedFaces.filter(id => this._middlePick.preFaces?.has(id));
-      if (overlapping.length > 0 && this.elementMode === 'polygon' && modeler.selectedFaces?.length) {
-        const drop = new Set(modeler.selectedFaces);
+      if (overlapping.length > 0 && this.elementMode === 'polygon') {
+        // Live deselect — drop every pre-selected polygon the cursor
+        // crosses this sample. The `selectedFaces?.length` guard is
+        // intentionally NOT here: without it, an empty selection
+        // would fall through to `_applyMiddlePick`'s union branch
+        // and re-add the just-deselected polygon on the next sweep
+        // sample.
+        const drop = new Set(modeler.selectedFaces || []);
         for (const id of overlapping) drop.delete(id);
         modeler.selectedFaces = Array.from(drop);
         modeler.selectedVertices = [];
