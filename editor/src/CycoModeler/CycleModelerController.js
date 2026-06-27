@@ -2759,14 +2759,18 @@ export class CycleModelerController {
   // because we need to capture MANY elements with a single drag, not
   // just the one under the cursor.
 
-  /** Toggle-add the items in `incoming` onto `existing`. Items already
-   *  present in `existing` are removed. The returned array is a fresh
-   *  array so callers can write it back to the modeler userData without
-   *  worrying about aliasing. */
-  _toggleArray(existing, incoming) {
+  /** Add the items in `incoming` onto `existing`.
+   *  When `replace` is true (default — used by ctrl/shift click) items
+   *  already present in `existing` are removed (toggle semantics).
+   *  When `replace` is false (used by the multi-select middle-click
+   *  gesture) items are unioned in without removal, so each new pick
+   *  accumulates and never wipes earlier picks.
+   *  The returned array is always a fresh array so callers can write
+   *  it back to the modeler userData without worrying about aliasing. */
+  _toggleArray(existing, incoming, replace = true) {
     const out = new Set(Array.isArray(existing) ? existing : []);
     for (const item of (incoming || [])) {
-      if (out.has(item)) out.delete(item);
+      if (replace && out.has(item)) out.delete(item);
       else out.add(item);
     }
     return Array.from(out);
@@ -2859,7 +2863,10 @@ export class CycleModelerController {
     };
     // Apply the bare click immediately so a no-drag middle-click
     // already shows a fresh pick. Shift / ctrl → additive (toggle
-    // into the existing selection); bare → replace.
+    // the hit into / out of the existing selection); bare middle-
+    // click is the modeler's multi-select gesture — it unions the
+    // hit onto whatever is already selected so successive picks
+    // (and subsequent sweep samples) all accumulate.
     this._applyMiddlePick({ additive, hit });
     this._refreshSelectionOverlay();
   }
@@ -2952,10 +2959,19 @@ export class CycleModelerController {
   }
 
   /**
-   * Apply a middle-pick hit to the active selection. Replaces the
-   * current element-mode selection (or unions it in if `additive`)
-   * and — when symmetry is on — also adds the mirrored element on
-   * every enabled axis through the object's bounding-box centre.
+   * Apply a middle-pick hit to the active selection.
+   *
+   * Middle-button is the modeler's multi-select gesture: every pick
+   * (initial click + every sweep sample) accumulates into the active
+   * selection so a single drag picks every polygon under the cursor
+   * path AND a subsequent middle-click elsewhere unions its hit into
+   * the existing multi-selection. Shift / ctrl make a single hit
+   * toggle (add / remove) the element instead of unioning it; the
+   * `_middlePick.visited` set on the caller keeps the toggle from
+   * re-flipping the same element on every sweep sample.
+   *
+   * When symmetry is on, every picked element's mirror across each
+   * enabled axis is also unioned into the selection.
    */
   _applyMiddlePick({ additive, hit }) {
     const obj = hit.object;
@@ -2969,31 +2985,30 @@ export class CycleModelerController {
       this._expandSelectionWithSymmetry(obj, selection);
     }
     if (this.elementMode === 'vertex') {
-      if (additive) {
-        modeler.selectedVertices = this._toggleArray(modeler.selectedVertices, selection.vertices);
-      } else {
-        modeler.selectedVertices = selection.vertices;
-      }
+      modeler.selectedVertices = this._toggleArray(
+        modeler.selectedVertices, selection.vertices, !additive);
       modeler.selectedEdges = [];
       modeler.selectedFaces = selection.faces;
     } else if (this.elementMode === 'edge') {
-      if (additive) {
-        modeler.selectedEdges = this._toggleArray(modeler.selectedEdges, selection.edges);
-      } else {
-        modeler.selectedEdges = selection.edges;
-      }
+      modeler.selectedEdges = this._toggleArray(
+        modeler.selectedEdges, selection.edges, !additive);
       modeler.selectedVertices = [];
       modeler.selectedFaces = selection.faces;
     } else if (this.elementMode === 'polygon') {
-      if (additive) {
-        modeler.selectedFaces = this._toggleArray(modeler.selectedFaces, selection.faces);
-      } else {
-        modeler.selectedFaces = selection.faces;
-      }
+      // Middle-click multi-select is a union-only gesture: every
+      // polygon the cursor crosses accumulates into the selection.
+      // Passing `replace=false` (was `!additive`) stops the sweep
+      // from toggling the same key out as the cursor lingers on it,
+      // which previously caused "select then disappear" symptoms.
+      modeler.selectedFaces = this._toggleArray(
+        modeler.selectedFaces, selection.faces, false);
       modeler.selectedVertices = [];
       modeler.selectedEdges = [];
     }
     this.selectionManager?.setSelectedObjects?.([obj]);
+    // Live status update so the user sees the multi-select count
+    // grow as they middle-click or sweep across more polygons.
+    this._status(this._elemMarqueeSummary());
   }
 
   /**

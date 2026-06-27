@@ -67,7 +67,13 @@ function fetchJson(path) {
 }
 
 const tabs = await fetchJson('/json');
-const tab = tabs.find(t => /Cyco_Engine/i.test(t.url));
+// Prefer the local dev-server tab (http://127.0.0.1:3000/editor/index.html)
+// — that path fully exposes window.__cyco, whereas a file:// tab waits on
+// the local save bridge and may never finish initializing.
+const tab =
+  tabs.find(t => /^http:\/\/127\.0\.0\.1:3000\/editor\/index\.html/.test(t.url)) ||
+  tabs.find(t => /editor\/index\.html/i.test(t.url)) ||
+  tabs.find(t => /Cyco_Engine/i.test(t.url));
 if (!tab) {
   console.error('FAIL: no Cyco editor tab found at ' + URL);
   console.error('  Open the editor in Chrome with --remote-debugging-port=9222 first.');
@@ -79,8 +85,10 @@ const ws = tab.webSocketDebuggerUrl;
 const sock = new WebSocket(ws);
 let nextId = 1;
 const pending = new Map();
-sock.addEventListener('message', (data) => {
-  const msg = JSON.parse(data.toString());
+sock.addEventListener('message', (event) => {
+  const raw = typeof event.data === 'string' ? event.data : event.data?.toString?.() ?? '';
+  let msg;
+  try { msg = JSON.parse(raw); } catch (_) { return; }
   if (msg.id && pending.has(msg.id)) {
     pending.get(msg.id)(msg);
     pending.delete(msg.id);
@@ -286,6 +294,45 @@ const r = await send('Runtime.evaluate', {
     assert('SYMMETRY OFF: single-face pick (no mirror)',
       noSymFaces.length === frontPickFaces.length,
       'noSym=' + noSymFaces.length + ' front=' + frontPickFaces.length);
+
+    // ── PART 4b — middle-click accumulates (multi-select) ────────────
+    // Two separate middle-clicks at the SAME point, with no clear
+    // between them, must KEEP the first polygon selected and union
+    // the second on top. (Regression: pre-fix the second pick wiped
+    // the first because _applyMiddlePick replaced selectedFaces.)
+    setMode('polygon');
+    await new Promise(r => requestAnimationFrame(r));
+    box.userData.cycoModeler.selectedFaces = [];
+    box.userData.cycoModeler.selectedEdges = [];
+    box.userData.cycoModeler.selectedVertices = [];
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    fire('pointerdown', cx, cy, 1, 4);
+    fire('pointerup',   cx, cy, 1, 0);
+    const afterFirstPick = (box.userData.cycoModeler.selectedFaces ?? []).slice();
+    fire('pointerdown', cx, cy, 1, 4);
+    fire('pointerup',   cx, cy, 1, 0);
+    const afterSecondPick = (box.userData.cycoModeler.selectedFaces ?? []).slice();
+    assert('MULTI: first middle-click selects >1 tri',
+      afterFirstPick.length > 1,
+      'count=' + afterFirstPick.length);
+    assert('MULTI: second middle-click KEEPS first polygon (accumulates)',
+      afterSecondPick.length === afterFirstPick.length,
+      'first=' + afterFirstPick.length + ' second=' + afterSecondPick.length);
+
+    // ── PART 4c — middle-drag sweep accumulates, doesn't wipe ────────
+    // Reset, then sweep across the box — must accumulate EVERY polygon
+    // the ray crosses (>= 2 polygons), not replace on each sample.
+    box.userData.cycoModeler.selectedFaces = [];
+    box.userData.cycoModeler.selectedEdges = [];
+    box.userData.cycoModeler.selectedVertices = [];
+    middleSweep(rect.left + rect.width * 0.30, rect.top + rect.height * 0.40,
+                rect.left + rect.width * 0.70, rect.top + rect.height * 0.60);
+    await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    const sweepAccFaces = (box.userData.cycoModeler.selectedFaces ?? []).slice();
+    assert('SWEEP ACCUM: middle-drag selects >= 2 polygons (> 4 tris)',
+      sweepAccFaces.length >= 4,
+      'count=' + sweepAccFaces.length);
 
     // ── PART 5 — object mode: middle-click does NOT start picker ─────
     setMode('object');
