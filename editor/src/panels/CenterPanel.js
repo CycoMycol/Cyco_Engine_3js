@@ -530,7 +530,18 @@ export class CenterPanel extends BasePanel {
 
     const resize = document.createElement('div');
     resize.className = 'cyco-modeler-resize-handle';
+    resize.title = 'Drag to resize width';
     panel.appendChild(resize);
+
+    const resizeH = document.createElement('div');
+    resizeH.className = 'cyco-modeler-resize-handle-h';
+    resizeH.title = 'Drag to resize height';
+    panel.appendChild(resizeH);
+
+    const resizeC = document.createElement('div');
+    resizeC.className = 'cyco-modeler-resize-handle-c';
+    resizeC.title = 'Drag to resize width and height';
+    panel.appendChild(resizeC);
 
     const header = document.createElement('div');
     header.className = 'cyco-modeler-panel-header';
@@ -809,7 +820,7 @@ export class CenterPanel extends BasePanel {
     el.style.top = `${initial.y ?? el.offsetTop}px`;
 
     el.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0 || e.target.closest('button,input,.cyco-modeler-resize-handle')) return;
+      if (e.button !== 0 || e.target.closest('button,input,.cyco-modeler-resize-handle,.cyco-modeler-resize-handle-h,.cyco-modeler-resize-handle-c')) return;
       const rootRect = boundsRoot.getBoundingClientRect();
       const rect = el.getBoundingClientRect();
       const offsetX = e.clientX - rect.left;
@@ -836,24 +847,70 @@ export class CenterPanel extends BasePanel {
 
   _makeModelerResizable(panel) {
     const handle = panel?.querySelector('.cyco-modeler-resize-handle');
-    if (!panel || !handle || handle._cycoModelerResizable) return;
-    handle._cycoModelerResizable = true;
-    handle.addEventListener('pointerdown', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const startX = e.clientX;
-      const startWidth = panel.getBoundingClientRect().width;
-      const move = (ev) => {
-        const width = Math.max(236, Math.min(460, startWidth + (startX - ev.clientX)));
-        panel.style.width = `${width}px`;
-      };
-      const up = () => {
-        window.removeEventListener('pointermove', move);
-        window.removeEventListener('pointerup', up);
-      };
-      window.addEventListener('pointermove', move);
-      window.addEventListener('pointerup', up);
-    });
+    const hHandle = panel?.querySelector('.cyco-modeler-resize-handle-h');
+    const cHandle = panel?.querySelector('.cyco-modeler-resize-handle-c');
+    if (!panel) return;
+    if (handle && !handle._cycoModelerResizable) {
+      handle._cycoModelerResizable = true;
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startWidth = panel.getBoundingClientRect().width;
+        const move = (ev) => {
+          const width = Math.max(64, Math.min(560, startWidth + (startX - ev.clientX)));
+          panel.style.width = `${width}px`;
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+    }
+    if (hHandle && !hHandle._cycoModelerHResizable) {
+      hHandle._cycoModelerHResizable = true;
+      hHandle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startY = e.clientY;
+        const startHeight = panel.getBoundingClientRect().height;
+        const move = (ev) => {
+          const height = Math.max(64, Math.min(window.innerHeight - 120, startHeight + (ev.clientY - startY)));
+          panel.style.height = `${height}px`;
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+    }
+    if (cHandle && !cHandle._cycoModelerCResizable) {
+      cHandle._cycoModelerCResizable = true;
+      cHandle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX;
+        const startY = e.clientY;
+        const startWidth = panel.getBoundingClientRect().width;
+        const startHeight = panel.getBoundingClientRect().height;
+        const move = (ev) => {
+          const width = Math.max(64, Math.min(560, startWidth + (startX - ev.clientX)));
+          const height = Math.max(64, Math.min(window.innerHeight - 120, startHeight + (ev.clientY - startY)));
+          panel.style.width = `${width}px`;
+          panel.style.height = `${height}px`;
+        };
+        const up = () => {
+          window.removeEventListener('pointermove', move);
+          window.removeEventListener('pointerup', up);
+        };
+        window.addEventListener('pointermove', move);
+        window.addEventListener('pointerup', up);
+      });
+    }
   }
 
   // ── Drag-to-reorder for collapsible modeler tool sections ────────────────

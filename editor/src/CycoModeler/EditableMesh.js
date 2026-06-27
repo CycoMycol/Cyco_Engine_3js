@@ -7,7 +7,7 @@ const DEFAULT_SEGMENTS = 24;
 const STAIR_TREADS = 8;
 
 export class EditableMesh {
-  constructor({ vertices = [], faces = [], faceGroups = null } = {}) {
+  constructor({ vertices = [], faces = [], faceGroups = null, hasInwardPocket = false } = {}) {
     this.vertices = vertices.map(v => new THREE.Vector3(v.x, v.y, v.z));
     this.faces = faces.map(face => [...face]);
     // `faceGroups` is a parallel array to `faces`. Two faces share a
@@ -28,6 +28,11 @@ export class EditableMesh {
     // `pushFaces` synthesises a new side wall so each wall ends up in
     // its own group.
     this._nextGroupId = this.faceGroups.length;
+    // True when this mesh contains any inward-facing pocket (e.g. a
+    // face pushed inward by Push Pull). Drives the renderer's
+    // FrontSide vs DoubleSide decision in
+    // `CycleModelerController._applyEditableMesh`.
+    this.hasInwardPocket = !!hasInwardPocket;
   }
 
   static box(size = 100) {
@@ -991,6 +996,21 @@ export class EditableMesh {
         ))
       : null;
 
+    // Track whether this mesh contains any inward-facing pocket created
+    // by an inward push (distance < 0). When set, the renderer
+    // switches the committed material to DoubleSide so the pocket's
+    // walls are visible from outside the parent volume — see
+    // pushpull-inward-hollow-cut-2026-06-27.md.
+    if (distance < 0) {
+      this.hasInwardPocket = true;
+    } else if (distance > 0 && this.hasInwardPocket) {
+      // An outward pull may re-expose previously inward-facing
+      // geometry. Clearing the flag here is conservative — if a
+      // prior inward push left any wall still buried, the renderer
+      // will (correctly) keep showing it via DoubleSide until the
+      // user does a full reset.
+      this.hasInwardPocket = false;
+    }
     for (const [a, b] of boundary.values()) {
       // Wind side quads so their outward normal points away from the
       // pushed face (UModeler-style). Edge `(a, b)` is the original
@@ -1075,6 +1095,11 @@ export class EditableMesh {
       // round-trip correctly. Older blobs without `faceGroups` will
       // get a default (every face is its own polygon) on load.
       faceGroups: this.faceGroups ? [...this.faceGroups] : undefined,
+      // Persist the inward-pocket flag so a saved/undone mesh that
+      // contains inward-pushed geometry stays on DoubleSide rendering.
+      // Omit when false to keep saved files minimal (older loads
+      // default to false).
+      hasInwardPocket: this.hasInwardPocket ? true : undefined,
     };
   }
 

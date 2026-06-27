@@ -3187,8 +3187,31 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
   width: 8px;
   cursor: ew-resize;
   border-radius: 8px;
+  z-index: 3;
 }
-.cyco-modeler-resize-handle:hover {
+.cyco-modeler-resize-handle-h {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: -4px;
+  height: 8px;
+  cursor: ns-resize;
+  border-radius: 8px;
+  z-index: 3;
+}
+.cyco-modeler-resize-handle-c {
+  position: absolute;
+  right: -4px;
+  bottom: -4px;
+  width: 14px;
+  height: 14px;
+  cursor: nwse-resize;
+  border-radius: 4px;
+  z-index: 4;
+}
+.cyco-modeler-resize-handle:hover,
+.cyco-modeler-resize-handle-h:hover,
+.cyco-modeler-resize-handle-c:hover {
   background: rgba(224,114,40,0.25);
 }
 .cyco-modeler-tool-section {

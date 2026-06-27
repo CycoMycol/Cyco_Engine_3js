@@ -519,6 +519,27 @@ export class CycleModelerController {
   }
 
   _onPointerDown(event) {
+    // Middle (button 1) and right (button 2) clicks over a modeler
+    // object must NOT start an OrbitControls gesture. Middle = pan
+    // (the user wants pan disabled while the cursor starts on an
+    // object), right = orbit / context menu. Block the event in
+    // capture phase so OrbitControls (bubble-phase) never sees it.
+    // Pan/orbit that began OFF an object continues to be handled by
+    // the move-handler below — we only block the START here.
+    if (event.button === 1 || event.button === 2) {
+      const hit = this._modelerHitFromEvent(event);
+      if (hit?.object?.userData?.cycoModeler?.mesh && this.active) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
+    // Right-click is reserved for the viewport context menu.
+    // Ignore it for every modeler interaction (push/pull, extrude,
+    // element marquee, hover, etc.) so a right-click over a modeler
+    // object never starts a tool drag nor replaces the element
+    // selection.
+    if (event.button !== 0) return;
     if (this._canDrawPrimitive(event)) {
       const point = this._gridPointFromEvent(event);
       if (!point) return;
@@ -630,6 +651,11 @@ export class CycleModelerController {
   }
 
   _onPointerMove(event) {
+    // While the right button is held (bit 1 of `buttons`), skip
+    // every modeler-side update so a right-button drag (the viewport
+    // context menu gesture) doesn't drive hover, marquee, or push-
+    // pull previews.
+    if ((event.buttons & 2) !== 0) return;
     if (this._boxDrag && event.pointerId === this._boxDrag.pointerId) {
       const point = this._gridPointFromEvent(event);
       if (!point) return;
@@ -668,15 +694,27 @@ export class CycleModelerController {
       return;
     }
 
+    // Only swallow the move event for modeler tool logic when the user
+    // is actually pressing the PRIMARY (left) button. Middle / right
+    // button drags are owned by OrbitControls (pan / orbit / dolly /
+    // context menu) and must propagate — otherwise moving the cursor
+    // over a modeler object while middle-click panning kills the pan.
+    // buttons bit 0 = left, bit 1 = right, bit 2 = middle (aux).
+    const leftHeld = (event.buttons & 1) !== 0;
     const hit = this._modelerHitFromEvent(event);
     this._updateHover(hit);
-    if (hit?.object?.userData?.cycoModeler?.mesh && this.active) {
+    if (hit?.object?.userData?.cycoModeler?.mesh && this.active && leftHeld) {
       event.preventDefault();
       event.stopImmediatePropagation();
     }
   }
 
   _onClick(event) {
+    // Browsers fire a `click` event for the right button too
+    // (button === 2). Ignore it so right-clicking on an object in
+    // polygon/edge/vertex mode does NOT swap the current face /
+    // edge / vertex selection.
+    if (event.button !== 0) return;
     if (!this.active || !ELEMENT_MODES.has(this.elementMode) || this._boxDrag) return;
     // A drag-marquee was just released — `_elemMarquee` is already
     // cleared by `_onPointerUp`, so suppress the click that fires
@@ -2500,6 +2538,28 @@ export class CycleModelerController {
       dimensions: { width: size.x, height: size.y, depth: size.z },
       mesh: editableMesh.toJSON(),
     };
+    // If this mesh now contains an inward pocket (a face pushed inward
+    // by Push Pull), the side walls face inward — geometrically
+    // correct, but the committed primitive material is FrontSide, so
+    // viewing from outside the parent volume back-face-culls the
+    // pocket and the user sees a hollow cut. Flip the material to
+    // DoubleSide for this object only; the rest of the scene stays on
+    // FrontSide (preserving the 2026-06-29 backface-cull fix for
+    // normal primitives).
+    if (editableMesh.hasInwardPocket) {
+      const mat = obj.material;
+      if (mat && !Array.isArray(mat) && mat.side !== THREE.DoubleSide) {
+        mat.side = THREE.DoubleSide;
+        mat.needsUpdate = true;
+      } else if (Array.isArray(mat)) {
+        mat.forEach((m) => {
+          if (m && m.side !== THREE.DoubleSide) {
+            m.side = THREE.DoubleSide;
+            m.needsUpdate = true;
+          }
+        });
+      }
+    }
     this._syncWireOverlay(obj);
   }
 
