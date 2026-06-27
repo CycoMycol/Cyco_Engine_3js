@@ -133,7 +133,8 @@ const MODELER_TOOLS = {
   ],
   misc: [
     { id: 'new-object', label: 'New Cyco Modeler Object', icon: 'Icon_Misc_NewCycoModelerObject.png' },
-    { id: 'cursor', label: '3D Cursor', icon: 'Icon_Misc_Cursor.png' },
+    { id: 'backface-cull', label: 'Backface Cull', icon: 'Icon_Misc_BackfaceCull.png' },
+    { id: 'symmetry', label: 'Symmetry', icon: 'Icon_Misc_Symmetry.png' },
     { id: 'settings', label: 'Settings', icon: 'Icon_Misc_Settings.png' },
     { id: 'local-settings', label: 'Local Settings', icon: 'Icon_Misc_LocalSettings.png' },
     { id: 'polygon-group', label: 'Polygon Group', icon: 'Icon_Misc_PolygonGroup.png' },
@@ -214,7 +215,11 @@ const TOOL_MODES = {
 
   // ── Misc / Multiple ──────────────────────────────────────────────────────
   'new-object':         'all',
-  'cursor':             'all',
+  // Backface-cull + symmetry are picker-policy toggles, not element-
+  // bound tools — they work regardless of which element mode the user
+  // is in. Null → never mode-restricted.
+  'backface-cull':      null,
+  'symmetry':           null,
   'settings':           null,       // always available (not element-specific)
   'local-settings':     null,
   'polygon-group':      'polygon',
@@ -293,6 +298,13 @@ export class CenterPanel extends BasePanel {
     this._modelerSearchOpen = false;
     this._modelerRoot = null;
     this._currentElementMode = OBJECT_MODE;
+    // Picker-policy state. Mirrored on the controller for the actual
+    // picking math; mirrored here so the toolbar can show active-
+    // class styling and so the dropdown can render its current axis
+    // set when reopened. Defaults match UModeler: backface cull on,
+    // symmetry off.
+    this._backfaceCull = true;
+    this._symmetryAxes = new Set();
 
     this._onHistoryChange     = this._onHistoryChange.bind(this);
     this._onRuntimeState      = this._onRuntimeState.bind(this);
@@ -464,12 +476,21 @@ export class CenterPanel extends BasePanel {
 
     [
       { id: 'snap', label: 'Snap' },
-      { id: 'cursor', label: '3D Cursor', icon: 'Icon_Misc_Cursor.png' },
+      // Backface Cull toggle: replaces the legacy "3D Cursor" button
+      // on the top toolbar. Click to flip cull on/off; the button
+      // glows while cull is enabled (matches how Snap glows when on).
+      { id: 'backface-cull-top', label: 'Backface Cull', icon: 'Icon_Misc_BackfaceCull.png' },
+      // Symmetry dropdown: replaces the cursor button on the top
+      // toolbar (sibling to Backface Cull). Click opens the
+      // checkbox dropdown — any axis selected unions the mirror
+      // face into every middle-click selection.
+      { id: 'symmetry-top', label: 'Symmetry', icon: 'Icon_Misc_Symmetry.png' },
     ].forEach(item => {
       const btn = document.createElement('button');
       btn.className = 'cyco-modeler-mini-btn cyco-modeler-icon-only';
       btn.type = 'button';
       btn.title = item.label;
+      btn.dataset.miniId = item.id;
       if (item.icon) {
         const img = document.createElement('img');
         img.alt = '';
@@ -485,6 +506,26 @@ export class CenterPanel extends BasePanel {
           window.dispatchEvent(new CustomEvent('cyco-modeler-snap', {
             detail: { enabled: active }
           }));
+        });
+      } else if (item.id === 'backface-cull-top') {
+        // Mirror the panel-side `_backfaceCull` state and dispatch
+        // the same toggle event the side-rail button uses, so the
+        // controller doesn't need a separate listener.
+        btn.classList.toggle('active', this._backfaceCull);
+        btn.addEventListener('click', () => {
+          this._backfaceCull = !this._backfaceCull;
+          btn.classList.toggle('active', this._backfaceCull);
+          window.dispatchEvent(new CustomEvent('cyco-modeler-toggle-backface-cull', {
+            detail: { enabled: this._backfaceCull }
+          }));
+          this._refreshModelerButtons();
+        });
+      } else if (item.id === 'symmetry-top') {
+        btn.classList.toggle('active', this._symmetryAxes.size > 0);
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          this._openSymmetryDropdown('symmetry', 'Symmetry');
+          btn.classList.toggle('active', this._symmetryAxes.size > 0);
         });
       } else {
         btn.addEventListener('click', () => this._selectModelerTool(item.id));
@@ -567,7 +608,12 @@ export class CenterPanel extends BasePanel {
     searchWrap.appendChild(search);
     header.appendChild(searchWrap);
 
-    panel.appendChild(header);
+    // Scrollable body -- wraps header + scrollable content so the resize
+    // handles (siblings of body) are not clipped by overflow.
+    const body = document.createElement('div');
+    body.className = 'cyco-modeler-panel-body';
+    panel.appendChild(body);
+    body.appendChild(header);
 
     // ── Section order is user-customizable via drag-and-drop on the
     //    collapsible headers. Load persisted order (if any) so users keep
@@ -618,10 +664,26 @@ export class CenterPanel extends BasePanel {
       const grid = document.createElement('div');
       grid.className = 'cyco-modeler-tool-grid';
       tools.forEach(item => {
-        grid.appendChild(this._modelerIconButton(item, 'tool', () => {
-          this._modelerGroup = groupId;
-          this._selectModelerTool(item.id);
-        }));
+        // Picker-policy toggles (`backface-cull`, `symmetry`) get their
+        // own click handlers so they don't dispatch the modeler-tool
+        // event (they're not tools — they're settings that change how
+        // the middle-click picker behaves).
+        if (item.id === 'backface-cull') {
+          grid.appendChild(this._modelerIconButton(item, 'tool', () => {
+            this._modelerGroup = groupId;
+            this._toggleBackfaceCull(item.id);
+          }));
+        } else if (item.id === 'symmetry') {
+          grid.appendChild(this._modelerIconButton(item, 'tool', () => {
+            this._modelerGroup = groupId;
+            this._openSymmetryDropdown(item.id, item.label);
+          }));
+        } else {
+          grid.appendChild(this._modelerIconButton(item, 'tool', () => {
+            this._modelerGroup = groupId;
+            this._selectModelerTool(item.id);
+          }));
+        }
       });
       section.appendChild(grid);
 
@@ -629,12 +691,12 @@ export class CenterPanel extends BasePanel {
       sectionContainer.appendChild(section);
     });
 
-    panel.appendChild(sectionContainer);
+    body.appendChild(sectionContainer);
 
-    panel.appendChild(_modelerPanelTitle('Tool Properties'));
-    panel.appendChild(_modelerField('Width', '1.00'));
-    panel.appendChild(_modelerField('Depth', '1.00'));
-    panel.appendChild(_modelerField('Height', '1.00'));
+    body.appendChild(_modelerPanelTitle('Tool Properties'));
+    body.appendChild(_modelerField('Width', '1.00'));
+    body.appendChild(_modelerField('Depth', '1.00'));
+    body.appendChild(_modelerField('Height', '1.00'));
 
     const actions = document.createElement('div');
     actions.className = 'cyco-modeler-actions';
@@ -645,7 +707,7 @@ export class CenterPanel extends BasePanel {
       btn.addEventListener('click', () => this._selectModelerTool(label.toLowerCase().replace(/\s+/g, '-')));
       actions.appendChild(btn);
     });
-    panel.appendChild(actions);
+    body.appendChild(actions);
 
     return panel;
   }
@@ -707,6 +769,97 @@ export class CenterPanel extends BasePanel {
     this._refreshModelerButtons();
   }
 
+  // ── Picker-policy toggles ──────────────────────────────────────────────
+  // Backface Cull: when ON (default) the middle-click picker and the
+  // sweep-select skip faces whose world normal points away from the
+  // camera, so the user never accidentally selects the polygon on
+  // the far side of an object. Toggle persists for the current
+  // session via the controller's mirror state.
+  _toggleBackfaceCull(itemId) {
+    this._backfaceCull = !this._backfaceCull;
+    window.dispatchEvent(new CustomEvent('cyco-modeler-toggle-backface-cull', {
+      detail: { enabled: this._backfaceCull }
+    }));
+    // Active-class styling: the button glows when cull is on, dim
+    // when off — same pattern as the wire / snap toggles.
+    this._modelerTool = itemId;
+    this._refreshModelerButtons();
+  }
+
+  // Symmetry: opens a dropdown with checkboxes for X / Y / Z axes
+  // (any combination → XY, XZ, YZ, XYZ). Selected axes are mirrored
+  // through the picked object's bounding-box centre so a click on
+  // the front face also selects the parallel face on the back (and
+  // any other enabled axis pair). Matches Blender's symmetry
+  // selection behaviour.
+  _openSymmetryDropdown(itemId, label) {
+    // Close any already-open symmetry menu before opening a new one.
+    document.querySelectorAll('.cyco-modeler-symmetry-menu').forEach(el => el.remove());
+    const wrap = document.createElement('div');
+    wrap.className = 'cyco-modeler-symmetry-menu';
+    wrap.style.cssText = 'position:absolute;z-index:9999;background:#2a2a2a;border:1px solid #444;'
+      + 'border-radius:4px;padding:6px 8px;color:#ddd;font-size:12px;'
+      + 'box-shadow:0 4px 12px rgba(0,0,0,0.4);display:flex;flex-direction:column;gap:4px;min-width:140px;';
+    const title = document.createElement('div');
+    title.textContent = 'Symmetry axes';
+    title.style.cssText = 'font-weight:600;margin-bottom:2px;color:#fff;';
+    wrap.appendChild(title);
+    const axes = ['x', 'y', 'z'];
+    for (const axis of axes) {
+      const row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;padding:2px 4px;border-radius:3px;';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = this._symmetryAxes.has(axis);
+      cb.addEventListener('change', () => {
+        if (cb.checked) this._symmetryAxes.add(axis);
+        else this._symmetryAxes.delete(axis);
+        window.dispatchEvent(new CustomEvent('cyco-modeler-set-symmetry', {
+          detail: { axes: [...this._symmetryAxes] }
+        }));
+        // Active-class on the toolbar button: any axis → glow.
+        this._refreshModelerButtons();
+      });
+      const lab = document.createElement('span');
+      lab.textContent = axis.toUpperCase() + ' axis';
+      row.append(cb, lab);
+      wrap.appendChild(row);
+    }
+    // Off button — clears every axis so the next click is single-face.
+    const off = document.createElement('button');
+    off.type = 'button';
+    off.textContent = 'Turn Symmetry OFF';
+    off.style.cssText = 'margin-top:6px;background:#3a3a3a;color:#eee;border:1px solid #555;border-radius:3px;'
+      + 'padding:4px 8px;cursor:pointer;';
+    off.addEventListener('click', () => {
+      this._symmetryAxes.clear();
+      window.dispatchEvent(new CustomEvent('cyco-modeler-set-symmetry', {
+        detail: { axes: [] }
+      }));
+      this._refreshModelerButtons();
+      wrap.remove();
+    });
+    wrap.appendChild(off);
+    // Position next to the clicked toolbar button.
+    const btn = this._modelerRoot?.querySelector(`[data-modeler-id="${itemId}"]`);
+    if (btn) {
+      const r = btn.getBoundingClientRect();
+      wrap.style.left = `${r.right + 4}px`;
+      wrap.style.top = `${r.top}px`;
+    }
+    document.body.appendChild(wrap);
+    // Dismiss on outside click.
+    const onDocClick = (ev) => {
+      if (!wrap.contains(ev.target)) {
+        wrap.remove();
+        document.removeEventListener('mousedown', onDocClick, true);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', onDocClick, true), 0);
+    this._modelerTool = itemId;
+    this._refreshModelerButtons();
+  }
+
   _buildModelerWireMenu() {
     const wrap = document.createElement('div');
     wrap.className = 'cyco-modeler-wire-wrap';
@@ -748,7 +901,16 @@ export class CenterPanel extends BasePanel {
   _refreshModelerButtons() {
     if (!this._modelerRoot) return;
     this._modelerRoot.querySelectorAll('[data-modeler-kind="tool"], [data-modeler-kind="element"]').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.modelerId === this._modelerTool);
+      // Picker-policy toggles glow based on their POLICY STATE, not
+      // on which button was last clicked: backface-cull is active
+      // when `_backfaceCull === true`; symmetry is active when at
+      // least one axis is selected. All other tool buttons fall
+      // through to the modelerTool-id match (existing behaviour).
+      const id = btn.dataset.modelerId;
+      let active = (id === this._modelerTool);
+      if (id === 'backface-cull') active = this._backfaceCull;
+      else if (id === 'symmetry') active = this._symmetryAxes.size > 0;
+      btn.classList.toggle('active', active);
     });
     this._modelerRoot.querySelectorAll('[data-modeler-kind="group"]').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.modelerId === this._modelerGroup);

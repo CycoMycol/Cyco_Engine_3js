@@ -83,6 +83,27 @@ export class CycleModelerController {
     // additive toggle (ctrl/shift) rather than a destructive
     // replacement of the multi-selection.
     this._elemMarqueeAdditive = false;
+    // Middle-button pick / sweep-select state. Set on pointerdown
+    // when the user middle-clicks in an element mode (polygon / edge
+    // / vertex). A bare click (no drag past threshold) replaces the
+    // selection with the picked element; a drag sweeps the picker
+    // along the cursor path and accumulates every distinct element
+    // the ray crosses — a free-form sweep-select, NOT a rectangular
+    // marquee. Shift / ctrl make the sweep additive (union instead
+    // of replace).
+    this._middlePick = null;
+    // Picker policy toggles. Defaults match UModeler / Blender:
+    //   backfaceCull = true → pickers skip faces whose world normal
+    //     points away from the camera. The user can toggle this off
+    //     from the toolbar "Backface Cull" button.
+    //   symmetryAxes = Set<'x'|'y'|'z'> → empty = off. Any non-empty
+    //     set mirrors the picked element across the listed world
+    //     axes through the object's bounding-box centre. Mirrored
+    //     elements are unioned into the same selection (and on a
+    //     additive sweep, every new pick carries its mirrors with
+    //     it). Independent of backfaceCull.
+    this._backfaceCull = true;
+    this._symmetryAxes = new Set();
 
     this._onMode = this._onMode.bind(this);
     this._onTool = this._onTool.bind(this);
@@ -97,6 +118,8 @@ export class CycleModelerController {
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
     this._onClick = this._onClick.bind(this);
+    this._onBackfaceCullToggle = this._onBackfaceCullToggle.bind(this);
+    this._onSymmetrySet = this._onSymmetrySet.bind(this);
 
     window.addEventListener('cyco-vp-ready', this._onVpReady);
     window.addEventListener('cyco-renderer-changed', this._onRendererChanged);
@@ -106,9 +129,36 @@ export class CycleModelerController {
     window.addEventListener('cyco-modeler-frame', this._onFrame);
     window.addEventListener('cyco-modeler-snap', this._onSnap);
     window.addEventListener('cyco-modeler-wire', this._onWire);
+    window.addEventListener('cyco-modeler-toggle-backface-cull', this._onBackfaceCullToggle);
+    window.addEventListener('cyco-modeler-set-symmetry', this._onSymmetrySet);
     window.addEventListener('cyco-select-node', this._onSelectionChanged);
     window.addEventListener('cyco-deselect-all', this._onSelectionChanged);
     setTimeout(() => this._attachCanvas(this.viewportEngine?.rendererManager?.renderer?.domElement), 0);
+  }
+
+  // ── Picker-policy event handlers ──────────────────────────────────────
+  // Driven by the top-menu toolbar buttons. Both replace the
+  // previous "3D Cursor" entry (a tool that set the 3D cursor's
+  // origin to the grid — superseded by snap-to-grid; the button
+  // was repurposed for backface-cull toggle, with symmetry as a
+  // sibling dropdown). State is mirrored on `__cyco.cycleModeler`
+  // so the toolbar can read it for active-class styling on next
+  // render.
+
+  _onBackfaceCullToggle(event) {
+    const enabled = event.detail?.enabled;
+    this._backfaceCull = (enabled != null) ? !!enabled : !this._backfaceCull;
+    this._status(`Backface cull ${this._backfaceCull ? 'ON' : 'OFF'}`);
+  }
+
+  _onSymmetrySet(event) {
+    const axes = event.detail?.axes;
+    this._symmetryAxes = new Set(Array.isArray(axes) ? axes : []);
+    if (this._symmetryAxes.size === 0) {
+      this._status('Symmetry OFF');
+    } else {
+      this._status(`Symmetry: ${[...this._symmetryAxes].join(' + ').toUpperCase()}`);
+    }
   }
 
   _onMode(event) {
@@ -532,6 +582,19 @@ export class CycleModelerController {
         event.preventDefault();
         event.stopImmediatePropagation();
       }
+      // Middle button = element pick in an element mode (polygon /
+      // edge / vertex). A bare click selects the polygon under the
+      // cursor; a drag (pointermove with the button still held)
+      // sweeps the picker along the cursor path and accumulates
+      // every distinct polygon the ray crosses — a free-form
+      // sweep-select (NOT a rectangular marquee), matching how
+      // UModeler/Blender's "lasso by cursor" feels.
+      // In object mode, fall through so OrbitControls keeps the
+      // middle-button pan.
+      if (event.button === 1 && this.active
+          && ELEMENT_MODES.has(this.elementMode) && this.elementMode !== 'object') {
+        this._startMiddlePick(event);
+      }
       return;
     }
     // Right-click is reserved for the viewport context menu.
@@ -643,6 +706,8 @@ export class CycleModelerController {
     // Fires when the user click-drags on a modeler object — or in
     // empty space near one — while in an element mode and the active
     // tool is not push/pull / extrude-edge / a primitive drawer.
+    // Left button only — middle button has its own pick+sweep path
+    // (handled at the top of this handler).
     if (this.active && ELEMENT_MODES.has(this.elementMode) && this.elementMode !== 'object'
         && event.button === 0) {
       this._startElementMarquee(event);
@@ -691,6 +756,17 @@ export class CycleModelerController {
       // Rebuild the candidate set on every move so the user sees
       // their selection grow/shrink as the rect drags over faces.
       this._updateElementMarqueePreview();
+      return;
+    }
+
+    if (this._middlePick && event.pointerId === this._middlePick.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this._middlePick.lastClient = { x: event.clientX, y: event.clientY };
+      // Sweep the picker along the cursor. The first move past the
+      // drag threshold promotes the bare-click pick into a sweep;
+      // before threshold we just update the live hover position.
+      this._updateMiddleSweep();
       return;
     }
 
@@ -839,6 +915,22 @@ export class CycleModelerController {
       // `_onClick`. Without this defer, the click replaces the
       // marquee selection with a single-element click selection.
       requestAnimationFrame(() => { this._suppressNextClick = false; });
+      try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
+      return;
+    }
+    if (this._middlePick && event.pointerId === this._middlePick.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const pick = this._middlePick;
+      this._middlePick = null;
+      this.viewportEngine.controls.enabled = true;
+      try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+      // The selection was already written during the sweep (or by
+      // the click-pick branch on a no-drag release). Just refresh
+      // the overlay + status. Shift / ctrl held → additive; the
+      // sweep branch already honoured that flag.
+      this._refreshSelectionOverlay();
+      this._status(this._elemMarqueeSummary());
       try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
       return;
     }
@@ -2437,10 +2529,14 @@ export class CycleModelerController {
     });
     const hits = raycaster.intersectObjects(targets, false);
     if (!hits.length) return null;
-    // Prefer the closest hit whose world-space face normal faces the
-    // camera (UModeler-style: highlight the side you're looking at).
-    // Among camera-facing hits, distance breaks ties so the visible face
-    // closest to the cursor wins.
+    // Honour the toolbar Backface Cull toggle. When ON (default) we
+    // prefer the closest hit whose world-space face normal faces the
+    // camera (UModeler-style: pick the side you're looking at). When
+    // OFF we return the closest hit as-is, so the picker "sees
+    // through" to back-facing geometry — useful when the user has
+    // toggled cull off to grab a polygon through a transparent or
+    // open face, or while editing the inside of a hollow cut.
+    if (!this._backfaceCull) return hits[0];
     const camDir = new THREE.Vector3();
     let best = hits[0];
     let bestScore = -Infinity;
@@ -2718,6 +2814,323 @@ export class CycleModelerController {
     if (e) parts.push(`${e} edge${e === 1 ? '' : 's'}`);
     if (v) parts.push(`${v} vertex${v === 1 ? '' : 'es'}`);
     return parts.length ? `Selected: ${parts.join(' + ')}` : 'Selection cleared';
+  }
+
+  // ── Middle-click pick / sweep-select ─────────────────────────────────
+  // Middle-click on a modeler object in polygon / edge / vertex mode
+  // is a single-point pick. If the user holds and drags past a small
+  // threshold the gesture promotes to a free-form sweep: every
+  // distinct element the ray crosses along the cursor path is
+  // unioned into the selection. Backface-cull and symmetry policy
+  // flags (set by the toolbar) are honoured by both paths.
+
+  /**
+   * Begin a middle-button pick. If the pointer barely moves the
+   * gesture stays a single-element click-select. If it drags past
+   * the sweep threshold (4 px in screen space) `_updateMiddleSweep`
+   * promotes the gesture to a sweep-select. Additive shift / ctrl
+   * toggles the per-object element into the existing selection
+   * instead of replacing it.
+   */
+  _startMiddlePick(event) {
+    if (this._boxDrag || this._faceDrag || this._elemMarquee) return;
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    const hit = this._modelerHitFromEvent(event);
+    // If the click missed any modeler object, drop through — the
+    // user is just panning empty space with the middle button.
+    if (!hit?.object?.userData?.cycoModeler) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try { this._canvas?.setPointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+    this.viewportEngine.controls.enabled = false;
+    window.__cyco = window.__cyco || {};
+    window.__cyco._suppressSelectionManagerClick = true;
+    this._middlePick = {
+      pointerId: event.pointerId,
+      startClient: { x: event.clientX, y: event.clientY },
+      lastClient: { x: event.clientX, y: event.clientY },
+      additive,
+      hit,
+      // Track which (object, elementKey) pairs have already been
+      // unioned into the selection during this drag so a slow sweep
+      // over the same polygon doesn't keep re-applying the additive
+      // toggle (which would flip it off).
+      visited: new Set(),
+    };
+    // Apply the bare click immediately so a no-drag middle-click
+    // already shows a fresh pick. Shift / ctrl → additive (toggle
+    // into the existing selection); bare → replace.
+    this._applyMiddlePick({ additive, hit });
+    this._refreshSelectionOverlay();
+  }
+
+  /**
+   * Sweep the picker along the cursor path. Walks a small number
+   * of ray samples from the start position to the current cursor,
+   * raycasts each, and unions every distinct (object, element)
+   * pair into the active selection. The `visited` set on
+   * `_middlePick` keeps the additive toggle from re-flipping
+   * already-claimed polygons as the cursor lingers on them.
+   */
+  _updateMiddleSweep() {
+    if (!this._middlePick) return;
+    const minX = Math.min(this._middlePick.startClient.x, this._middlePick.lastClient.x);
+    const minY = Math.min(this._middlePick.startClient.y, this._middlePick.lastClient.y);
+    const maxX = Math.max(this._middlePick.startClient.x, this._middlePick.lastClient.x);
+    const maxY = Math.max(this._middlePick.startClient.y, this._middlePick.lastClient.y);
+    // Below sweep threshold — still a bare click; nothing to do.
+    if (Math.hypot(maxX - minX, maxY - minY) < 4) return;
+    const renderer = this.viewportEngine?.rendererManager?.renderer;
+    const camera = this.viewportEngine?.camera;
+    if (!renderer?.domElement || !camera) return;
+    const scene = this.sceneManager?.getActiveScene?.();
+    if (!scene) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    const targets = [];
+    scene.traverse(obj => { if (obj.userData?.cycoModeler) targets.push(obj); });
+    const raycaster = new THREE.Raycaster();
+    let changed = false;
+    // Sample 8 evenly-spaced raycasts between the drag start and the
+    // current cursor — fast drags don't lose polygons they skipped.
+    const STEPS = 8;
+    for (let i = 1; i <= STEPS; i += 1) {
+      const t = i / STEPS;
+      const px = this._middlePick.startClient.x
+        + (this._middlePick.lastClient.x - this._middlePick.startClient.x) * t;
+      const py = this._middlePick.startClient.y
+        + (this._middlePick.lastClient.y - this._middlePick.startClient.y) * t;
+      const ndc = new THREE.Vector2(
+        ((px - rect.left) / rect.width) * 2 - 1,
+        -((py - rect.top) / rect.height) * 2 + 1
+      );
+      raycaster.setFromCamera(ndc, camera);
+      const hits = raycaster.intersectObjects(targets, false);
+      const hit = this._pickBestHit(hits, raycaster);
+      if (!hit?.object?.userData?.cycoModeler) continue;
+      const key = this._pickKey(hit);
+      if (this._middlePick.visited.has(key)) continue;
+      this._middlePick.visited.add(key);
+      this._applyMiddlePick({ additive: this._middlePick.additive, hit });
+      changed = true;
+    }
+    if (changed) this._refreshSelectionOverlay();
+  }
+
+  /**
+   * Filter a Three.js raycast hit list down to a single best hit.
+   * Honours the `_backfaceCull` flag: when true, drops every hit
+   * whose world-space face normal faces away from the camera. When
+   * false, returns the closest hit (so the picker "sees through" to
+   * back-facing geometry — useful when the user toggles cull off
+   * to grab a polygon through a transparent or open face).
+   */
+  _pickBestHit(hits, raycaster) {
+    if (!hits?.length) return null;
+    if (!this._backfaceCull) return hits[0];
+    const camDir = new THREE.Vector3();
+    let best = null;
+    let bestScore = -Infinity;
+    for (const hit of hits) {
+      if (!hit.face) continue;
+      camDir.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+      const facing = -camDir.dot(raycaster.ray.direction);
+      if (facing <= 0) continue;
+      const score = facing * 1e3 - hit.distance;
+      if (score > bestScore) { bestScore = score; best = hit; }
+    }
+    return best || hits[0];
+  }
+
+  /**
+   * Stable per-hit identity used by the sweep's `visited` set so
+   * the same polygon isn't toggled in and out repeatedly as the
+   * cursor lingers on it.
+   */
+  _pickKey(hit) {
+    const fid = hit.face?.a ?? hit.faceIndex ?? -1;
+    return `${hit.object.uuid}:${fid}`;
+  }
+
+  /**
+   * Apply a middle-pick hit to the active selection. Replaces the
+   * current element-mode selection (or unions it in if `additive`)
+   * and — when symmetry is on — also adds the mirrored element on
+   * every enabled axis through the object's bounding-box centre.
+   */
+  _applyMiddlePick({ additive, hit }) {
+    const obj = hit.object;
+    const modeler = obj.userData.cycoModeler;
+    this._lastModelerObject = obj;
+    const selection = this._selectionFromHit(hit);
+    // Mirror every picked element across each enabled symmetry axis
+    // through the object's bbox centre (in object-local space).
+    // Mirrors are unioned into the SAME per-mode selection array.
+    if (this._symmetryAxes.size > 0 && modeler.mesh) {
+      this._expandSelectionWithSymmetry(obj, selection);
+    }
+    if (this.elementMode === 'vertex') {
+      if (additive) {
+        modeler.selectedVertices = this._toggleArray(modeler.selectedVertices, selection.vertices);
+      } else {
+        modeler.selectedVertices = selection.vertices;
+      }
+      modeler.selectedEdges = [];
+      modeler.selectedFaces = selection.faces;
+    } else if (this.elementMode === 'edge') {
+      if (additive) {
+        modeler.selectedEdges = this._toggleArray(modeler.selectedEdges, selection.edges);
+      } else {
+        modeler.selectedEdges = selection.edges;
+      }
+      modeler.selectedVertices = [];
+      modeler.selectedFaces = selection.faces;
+    } else if (this.elementMode === 'polygon') {
+      if (additive) {
+        modeler.selectedFaces = this._toggleArray(modeler.selectedFaces, selection.faces);
+      } else {
+        modeler.selectedFaces = selection.faces;
+      }
+      modeler.selectedVertices = [];
+      modeler.selectedEdges = [];
+    }
+    this.selectionManager?.setSelectedObjects?.([obj]);
+  }
+
+  /**
+   * Symmetry expansion. For every picked face index in `selection`
+   * compute its centroid (object-local), reflect across each enabled
+   * axis through the bbox centre, then find the polygon whose
+   * centroid is closest to the reflected point. Mirror face indices
+   * are unioned into `selection.faces` so the apply step picks them
+   * up. Edge / vertex mirrors are computed the same way: reflect the
+   * picked edge midpoint or vertex position, find the closest edge /
+   * vertex in the editable mesh, add it to `selection.edges` /
+   * `selection.vertices`.
+   */
+  _expandSelectionWithSymmetry(obj, selection) {
+    const editable = obj.userData.cycoModeler.mesh
+      ? EditableMesh.fromJSON(obj.userData.cycoModeler.mesh) : null;
+    if (!editable || !editable.vertices?.length) return;
+    if (!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    const centre = bb.getCenter(new THREE.Vector3());
+    const reflect = (p) => {
+      const out = p.clone();
+      if (this._symmetryAxes.has('x')) out.x = 2 * centre.x - p.x;
+      if (this._symmetryAxes.has('y')) out.y = 2 * centre.y - p.y;
+      if (this._symmetryAxes.has('z')) out.z = 2 * centre.z - p.z;
+      return out;
+    };
+    // Faces: each picked triangle is one half of a polygon (box has
+    // 2 tris per polygon). Group the picked triangles into polygons,
+    // mirror each POLYGON's bbox-centroid through the object's bbox
+    // centre, then union the mirrored polygon's triangles into
+    // `selection.faces` so the apply step picks them up as a single
+    // mirrored face.
+    if (this.elementMode === 'polygon' && selection.faces?.length) {
+      // Map each triangle face index → the polygon group it belongs
+      // to. selectionGroup returns every tri in the same polygon.
+      const polygonTris = new Map(); // groupId → Set<triIndex>
+      for (const fi of selection.faces.slice()) {
+        const grp = editable.selectionGroup(fi);
+        if (!grp?.length) continue;
+        const key = grp.slice().sort().join('-');
+        if (!polygonTris.has(key)) polygonTris.set(key, new Set(grp));
+      }
+      for (const [, tris] of polygonTris) {
+        // Polygon centroid = mean of its triangles' bbox-centroids
+        // (so a non-symmetric triangulation still mirrors correctly).
+        let cx = 0, cy = 0, cz = 0, n = 0;
+        for (const fi of tris) {
+          const c = this._faceLocalCentroid(editable, editable.faces[fi]);
+          if (!c) continue;
+          cx += c.x; cy += c.y; cz += c.z; n += 1;
+        }
+        if (!n) continue;
+        const polyCentroid = new THREE.Vector3(cx / n, cy / n, cz / n);
+        const reflected = reflect(polyCentroid);
+        const mirrorIdx = this._findClosestFaceByCentroid(editable, reflected, -1);
+        if (mirrorIdx == null || mirrorIdx < 0) continue;
+        const mirrorGroup = editable.selectionGroup(mirrorIdx);
+        for (const mi of mirrorGroup) {
+          if (!selection.faces.includes(mi)) selection.faces.push(mi);
+        }
+      }
+    }
+    // Edges: reflect each picked edge midpoint and find the closest
+    // other edge midpoint.
+    if (this.elementMode === 'edge' && selection.edges?.length) {
+      const edgesGeom = editable.toEdgesGeometry?.(0);
+      if (edgesGeom) {
+        const pos = edgesGeom.attributes.position;
+        const midpoints = [];
+        for (let s = 0; s < pos.count; s += 2) {
+          midpoints.push(new THREE.Vector3(
+            (pos.getX(s) + pos.getX(s + 1)) / 2,
+            (pos.getY(s) + pos.getY(s + 1)) / 2,
+            (pos.getZ(s) + pos.getZ(s + 1)) / 2,
+          ));
+        }
+        for (const ei of selection.edges.slice()) {
+          const m = midpoints[ei]; if (!m) continue;
+          const reflected = reflect(m);
+          let bestIdx = -1, bestD = Infinity;
+          for (let i = 0; i < midpoints.length; i += 1) {
+            if (i === ei) continue;
+            const d = midpoints[i].distanceToSquared(reflected);
+            if (d < bestD) { bestD = d; bestIdx = i; }
+          }
+          if (bestIdx >= 0 && !selection.edges.includes(bestIdx)) selection.edges.push(bestIdx);
+        }
+        edgesGeom.dispose?.();
+      }
+    }
+    // Vertices: reflect each picked vertex and find the closest
+    // other vertex in the editable mesh.
+    if (this.elementMode === 'vertex' && selection.vertices?.length) {
+      for (const vi of selection.vertices.slice()) {
+        const v = editable.vertices[vi]; if (!v) continue;
+        const reflected = reflect(new THREE.Vector3(v.x, v.y, v.z));
+        let bestIdx = -1, bestD = Infinity;
+        for (let i = 0; i < editable.vertices.length; i += 1) {
+          if (i === vi) continue;
+          const w = editable.vertices[i];
+          const d = (w.x - reflected.x) ** 2 + (w.y - reflected.y) ** 2 + (w.z - reflected.z) ** 2;
+          if (d < bestD) { bestD = d; bestIdx = i; }
+        }
+        if (bestIdx >= 0 && !selection.vertices.includes(bestIdx)) selection.vertices.push(bestIdx);
+      }
+    }
+  }
+
+  /** Local-space bbox-centroid of an n-gon face. */
+  _faceLocalCentroid(editable, face) {
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (const vi of face) {
+      const v = editable.vertices[vi];
+      if (!v) continue;
+      if (v.x < minX) minX = v.x; if (v.x > maxX) maxX = v.x;
+      if (v.y < minY) minY = v.y; if (v.y > maxY) maxY = v.y;
+      if (v.z < minZ) minZ = v.z; if (v.z > maxZ) maxZ = v.z;
+    }
+    if (!isFinite(minX)) return null;
+    return new THREE.Vector3((minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2);
+  }
+
+  /** Find the face whose bbox-centroid is closest to a target point. */
+  _findClosestFaceByCentroid(editable, target, excludeIndex) {
+    let bestIdx = -1, bestD = Infinity;
+    for (let i = 0; i < editable.faces.length; i += 1) {
+      if (i === excludeIndex) continue;
+      const face = editable.faces[i];
+      if (!face?.length) continue;
+      const c = this._faceLocalCentroid(editable, face);
+      if (!c) continue;
+      const d = c.distanceToSquared(target);
+      if (d < bestD) { bestD = d; bestIdx = i; }
+    }
+    return bestIdx;
   }
 
   /**
