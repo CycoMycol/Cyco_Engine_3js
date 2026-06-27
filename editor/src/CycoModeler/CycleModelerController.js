@@ -636,8 +636,27 @@ export class CycleModelerController {
       // multi mode we just no-op (no face to drag).
       if (this.tool === 'push-pull') {
         if (!hit?.object || !modeler?.mesh) return;
-        modeler.selectedFaces = this._faceIndicesFromHit(hit);
+        // If a multi-selection already exists (built by middle-click
+        // sweep, marquee, or shift-click), keep it and promote this
+        // drag to multi behavior. Only seed selection from the hit
+        // face's coplanar group when nothing is selected yet, so we
+        // don't clobber a multi-pick that the user just built.
+        const preSelected = modeler.selectedFaces?.length || 0;
+        const treatAsMulti = preSelected > 1 || this._hasAnyElementSelection();
+        if (preSelected === 0) {
+          modeler.selectedFaces = this._faceIndicesFromHit(hit);
+        } else if (!modeler.selectedFaces.includes(this._faceIndicesFromHit(hit)[0])) {
+          // User clicked an unselected face while a multi-selection
+          // exists — merge its coplanar group into the selection.
+          const seedFaces = this._faceIndicesFromHit(hit);
+          const merged = new Set(modeler.selectedFaces);
+          for (const f of seedFaces) merged.add(f);
+          modeler.selectedFaces = Array.from(merged);
+        }
         if (!modeler.selectedFaces.length) return;
+        // Stash whether this push/pull should commit as multi so the
+        // pointer-up branch routes through the multi-commit path.
+        this._faceDragMultiHint = treatAsMulti || modeler.selectedFaces.length > 1;
       } else {
         if (!hit?.object) {
           // No hit in multi mode — fall through to element marquee.
@@ -663,7 +682,11 @@ export class CycleModelerController {
       window.__cyco._suppressSelectionManagerClick = true;
       // For multi push/pull we snapshot EVERY selected modeler object
       // so we can roll back the whole multi-extrusion on undo.
-      const draggedObjects = this.tool === 'multi-push-pull'
+      // The regular push/pull tool also takes the multi path when a
+      // multi-selection already exists (e.g. built by middle-click
+      // sweep), since dragging should extrude every selected face.
+      const multiActive = this.tool === 'multi-push-pull' || this._faceDragMultiHint;
+      const draggedObjects = multiActive
         ? this._selectedModelerObjects().filter(o => {
             const m = o.userData.cycoModeler;
             return m?.mesh && (m.selectedFaces?.length || m.selectedEdges?.length || m.selectedVertices?.length);
@@ -673,7 +696,7 @@ export class CycleModelerController {
       const before = draggedObjects.map(obj => this._snapshotObjectGeometry(obj));
       const baseMeshes = draggedObjects.map(obj => JSON.parse(JSON.stringify(obj.userData.cycoModeler.mesh || {})));
       // For single push/pull the face the user grabbed defines the
-      // drag direction (its outward normal). For multi-push-pull we
+      // drag direction (its outward normal). For multi-push/pull we
       // use the FIRST selected face's normal as the drag direction —
       // every other selected face extrudes along its OWN face normal
       // at the same world-space distance, so opposite-facing walls
@@ -691,13 +714,13 @@ export class CycleModelerController {
         baseMesh: baseMeshes[0],
         baseFaces: (draggedObjects[0].userData.cycoModeler.selectedFaces || []).slice(),
         // Multi-push/pull state:
-        multi: this.tool === 'multi-push-pull',
+        multi: multiActive,
         draggedObjects,
         baseMeshes,
         seedFaceIndex,
       };
-      this._status(this.tool === 'multi-push-pull'
-        ? `Multi push/pull: drag to extrude ${this._countSelectedElements()} elements`
+      this._status(multiActive
+        ? `Push/pull: drag to extrude ${this._countSelectedElements()} elements`
         : 'Drag to extrude the selected face');
       return;
     }
@@ -891,10 +914,11 @@ export class CycleModelerController {
           }));
         }
       }
-      this._status(drag.multi ? `Multi push/pull applied (${this._countSelectedElements()} elements)` : 'Extrude applied');
+      this._status(drag.multi ? `Push/pull applied (${this._countSelectedElements()} elements)` : 'Extrude applied');
       this._hoverClear();
       this._refreshSelectionOverlay();
       try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
+      try { delete this._faceDragMultiHint; } catch (_) {}
       return;
     }
     if (this._elemMarquee && event.pointerId === this._elemMarquee.pointerId) {
@@ -3242,6 +3266,33 @@ export class CycleModelerController {
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     const hit = this._modelerHitFromEvent(event);
     const seedObject = hit?.object?.userData?.cycoModeler ? hit.object : null;
+    // Left-click in the open area (no modeler object under the cursor)
+    // deselects the current polygon / edge / vertex selection. The
+    // marquee machinery below is for click-drag on or near a modeler
+    // object, so bail out early before we touch the selection state.
+    if (!seedObject) {
+      for (const obj of this._selectedModelerObjects()) {
+        const m = obj.userData.cycoModeler;
+        if (!m) continue;
+        m.selectedFaces = [];
+        m.selectedEdges = [];
+        m.selectedVertices = [];
+      }
+      this._refreshSelectionOverlay();
+      this.viewportEngine.controls.enabled = true;
+      try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+      this._suppressNextClick = false;
+      this._elemMarquee = {
+        pointerId: event.pointerId,
+        startClient: { x: event.clientX, y: event.clientY },
+        lastClient: { x: event.clientX, y: event.clientY },
+        additive,
+        seedObject: null,
+        seedHit: null,
+        emptySpaceClick: true,
+      };
+      return;
+    }
     // Make sure the seed object is part of the scene-level selection
     // (SelectionManager.set) so multi-push/pull can find it later
     // via `_selectedModelerObjects`. When not additive we reset the
@@ -3293,6 +3344,10 @@ export class CycleModelerController {
   _updateElementMarqueePreview() {
     if (window.__cycoDebug?.logMarquee) console.log('[MARQUEE] _updateElementMarqueePreview START, has elemMarquee=', !!this._elemMarquee, 'mode=', this.elementMode);
     if (!this._elemMarquee) return;
+    // Empty-space click in an element mode: nothing to marquee over,
+    // the selection was already cleared at pointerdown time. Skip
+    // every per-frame projection walk.
+    if (this._elemMarquee.emptySpaceClick) return;
     const scene = this.sceneManager?.getActiveScene?.();
     if (!scene) return;
     const _marqueeLog = (msg) => { try { (window.__cycoDebug?.logMarquee) && console.log('[MARQUEE]', msg); } catch(_) {} };
