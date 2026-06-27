@@ -232,8 +232,14 @@ export class ViewportContextMenu {
     });
 
     // Dismiss on outside click / Escape / scroll
+    // Listens on `window` in CAPTURE phase so the dismiss handler runs
+    // BEFORE bubble-phase-or-stopped events from capture-phase canvas
+    // listeners (CycleModelerController calls stopImmediatePropagation
+    // in its capture-phase pointerdown handler when the user starts a
+    // primitive draw in the modeler — that would otherwise block the
+    // dismiss event from ever reaching `document` in the bubble phase).
     setTimeout(() => {
-      document.addEventListener('pointerdown', this._onDismiss);
+      window.addEventListener('pointerdown', this._onDismiss, { capture: true });
       document.addEventListener('keydown', this._onEsc = (e) => { if (e.key === 'Escape') this._hide(); });
       document.addEventListener('wheel', this._hide.bind(this), { once: true });
     }, 0);
@@ -245,7 +251,7 @@ export class ViewportContextMenu {
       this._menu    = null;
       this._submenu = null;
     }
-    document.removeEventListener('pointerdown', this._onDismiss);
+    window.removeEventListener('pointerdown', this._onDismiss, { capture: true });
     if (this._onEsc) document.removeEventListener('keydown', this._onEsc);
   }
 

@@ -315,7 +315,7 @@ export class SelectionManager {
       // walk below.
       if (!(obj.isMesh || obj.isLine || obj.isPoints || obj.isInstancedMesh || obj.isBatchedMesh)) return;
       // Skip anything that has no visible geometry.
-      if (obj.isMesh && !obj.geometry?.boundingSphere) {
+      if (obj.isMesh && obj.geometry && !obj.geometry.boundingSphere) {
         try { obj.geometry.computeBoundingSphere(); } catch (e) { /* ignore */ }
       }
       obj.getWorldPosition(_wp);

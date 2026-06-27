@@ -1205,8 +1205,15 @@ export class CycleModelerController {
    * @param {boolean} _initial                 deprecated — kept for callers; no longer used
    */
   _expandEdgesToRibbon(edgesGeom, width, camera, parentWorld, _initial) {
-    const src = edgesGeom.attributes.position;
-    if (!src) return edgesGeom;
+    const src = edgesGeom?.attributes?.position;
+    if (!src) {
+      // Build a safe empty geometry so the wireframe mesh still has a
+      // valid `boundingSphere` (otherwise the renderer cull would crash
+      // when the previous ribbon's geometry was disposed during a rebuild).
+      const empty = new THREE.BufferGeometry();
+      empty.computeBoundingSphere();
+      return empty;
+    }
     const segCount = (src.count / 2) | 0;
     const positions = new Float32Array(segCount * 6 * 3);
     const A = new THREE.Vector3();
@@ -2292,6 +2299,26 @@ export class CycleModelerController {
 
   _restoreObjectGeometry(obj, snapshot) {
     if (!snapshot) return;
+    // Safety: a snapshot taken before the mesh had a real geometry (e.g.
+    // mid multi-select while another action was rebuilding it) would
+    // leave obj.geometry === undefined, which crashes the renderer cull
+    // every frame and freezes the editor. Skip the restore if the
+    // snapshot has no usable geometry.
+    if (!snapshot.geometry || typeof snapshot.geometry.computeBoundingBox !== 'function') {
+      // Best-effort: rebuild geometry from the userData EditableMesh JSON
+      // if it's still there. Otherwise leave the object alone.
+      const meshJson = snapshot.userData?.cycoModeler?.mesh;
+      if (meshJson && meshJson.faces && meshJson.vertices) {
+        try {
+          const m = EditableMesh.fromJSON(meshJson);
+          this._applyEditableMesh(obj, m);
+        } catch (_) { /* nothing we can do; leave the existing geometry */ }
+      }
+      obj.position.copy(snapshot.position);
+      obj.userData = JSON.parse(JSON.stringify(snapshot.userData || {}));
+      this._syncWireOverlay(obj);
+      return;
+    }
     if (obj.geometry !== snapshot.geometry) obj.geometry?.dispose?.();
     obj.geometry = snapshot.geometry;
     obj.position.copy(snapshot.position);
@@ -2302,6 +2329,7 @@ export class CycleModelerController {
   _applyDimensions(obj, dims) {
     const oldGeometry = obj.geometry;
     const built = this._geometryFromDimensions(dims);
+    if (!built?.geometry) return; // safety: never leave obj.geometry === undefined
     obj.geometry = built.geometry;
     oldGeometry?.dispose?.();
     obj.position.y = dims.primitive === 'rounded-box' ? dims.height / 2 : 0;
@@ -2457,8 +2485,11 @@ export class CycleModelerController {
   }
 
   _applyEditableMesh(obj, editableMesh) {
+    if (!obj || !editableMesh) return;
+    const newGeo = editableMesh.toBufferGeometry?.();
+    if (!newGeo) return; // safety: never leave obj.geometry === undefined (renderer cull would crash every frame)
     const old = obj.geometry;
-    obj.geometry = editableMesh.toBufferGeometry();
+    obj.geometry = newGeo;
     old?.dispose?.();
     obj.geometry.computeBoundingBox();
     const size = obj.geometry.boundingBox.getSize(new THREE.Vector3());
@@ -3067,6 +3098,7 @@ export class CycleModelerController {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
     g.computeVertexNormals();
+    g.computeBoundingSphere();
     return g;
   }
 
@@ -3091,6 +3123,7 @@ export class CycleModelerController {
     if (!keepPositions.length) return null;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(keepPositions, 3));
+    g.computeBoundingSphere();
     g.userData._wireParent = object;
     return g;
   }
@@ -3109,6 +3142,7 @@ export class CycleModelerController {
     if (!points.length) return null;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+    g.computeBoundingSphere();
     return g;
   }
 

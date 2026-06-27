@@ -9,6 +9,31 @@ import * as THREE from 'three';
 THREE.ColorManagement.enabled = true; // ensure correct sRGB handling
 THREE.Cache.enabled           = true; // asset deduplication across loaders
 
+// ── Frustum cull safety patch ────────────────────────────────────────────────
+// Three.js's `Frustum.intersectsObject` reads `obj.geometry.boundingSphere`
+// directly without an undefined check. If a Mesh exists in the scene with
+// `geometry === undefined` (which can happen transiently in the Cycle
+// Modeler during push/pull preview, undo/redo of an object that was
+// snapshotted before its geometry was set, or any code path that replaces
+// `obj.geometry` with `undefined`/`null`), the WebGPURenderer/GLRenderer
+// crashes every frame at ~60Hz during frustum culling, freezing the editor
+// and blocking multi-select inside the Cycle Modeler.
+//
+// We patch `intersectsObject` once, at startup, to treat any object whose
+// geometry is missing as "in frustum" (rendered) instead of throwing. This
+// is safe because Three.js will still skip rendering meshes that lack a
+// geometry — `_projectObject` checks `e.visible` and the draw-call setup
+// would throw on its own. Returning `true` here just prevents the per-frame
+// crash from disabling the editor.
+if (THREE.Frustum && THREE.Frustum.prototype && !THREE.Frustum.prototype.__cycoFrustumPatched) {
+  const _origIntersectsObject = THREE.Frustum.prototype.intersectsObject;
+  THREE.Frustum.prototype.intersectsObject = function patchedIntersectsObject(object, camera) {
+    if (!object || !object.geometry) return true;
+    return _origIntersectsObject.call(this, object, camera);
+  };
+  THREE.Frustum.prototype.__cycoFrustumPatched = true;
+}
+
 // initialize in-page internal log collector used by debug helpers
 if (typeof window !== 'undefined') {
   try {
