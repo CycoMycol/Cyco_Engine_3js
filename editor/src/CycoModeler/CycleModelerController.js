@@ -64,6 +64,25 @@ export class CycleModelerController {
     this._faceDrag = null;
     this._hover = null;
     this._lastModelerObject = null;
+    // Element-level marquee selection state. Set on pointerdown when
+    // the user drags on a modeler object while an element mode is
+    // active and the tool is not push/pull / extrude-edge. Each
+    // element (face/edge/vertex) whose screen-projected centroid
+    // falls inside the marquee rect is appended to the object's
+    // `selectedFaces/Edges/Vertices` array — the multi-push-pull tool
+    // then extrudes all of them together as a single command.
+    this._elemMarquee = null;
+    // Persistent overlay for the currently-selected elements. Unlike
+    // `_hover` (single-element transient outline), this overlay shows
+    // EVERY selected face/edge/vertex across ALL selected modeler
+    // objects so the user can see exactly which polygons will be
+    // affected by the next push/pull / delete / extrude command.
+    this._selOverlay = null;
+    // Set true on pointerdown while the click landed on an
+    // already-selected element. The click handler treats it as an
+    // additive toggle (ctrl/shift) rather than a destructive
+    // replacement of the multi-selection.
+    this._elemMarqueeAdditive = false;
 
     this._onMode = this._onMode.bind(this);
     this._onTool = this._onTool.bind(this);
@@ -112,6 +131,7 @@ export class CycleModelerController {
     this.tool = mode;
     this._hoverClear();
     this._showElementOverlayForSelection();
+    this._refreshSelectionOverlay();
     this._status(`${this._label(mode)} mode`);
   }
 
@@ -524,27 +544,87 @@ export class CycleModelerController {
     if (this.tool === 'push-pull' || this.tool === 'multi-push-pull' || this.tool === 'extrude-edge') {
       const hit = this._modelerHitFromEvent(event);
       const modeler = hit?.object?.userData?.cycoModeler;
-      if (!hit?.object || !modeler?.mesh) return;
-      modeler.selectedFaces = this._faceIndicesFromHit(hit);
-      if (!modeler.selectedFaces.length) return;
+      // For single push/pull we still need an actual hit on a face.
+      // For multi-push-pull the click can land on any modeler object —
+      // the drag extrudes every face currently in the multi-selection,
+      // which may have been built up by previous click-selections or
+      // marquee-drag selections. If the user clicks empty space in
+      // multi mode we just no-op (no face to drag).
+      if (this.tool === 'push-pull') {
+        if (!hit?.object || !modeler?.mesh) return;
+        modeler.selectedFaces = this._faceIndicesFromHit(hit);
+        if (!modeler.selectedFaces.length) return;
+      } else {
+        if (!hit?.object) {
+          // No hit in multi mode — fall through to element marquee.
+          this._startElementMarquee(event);
+          return;
+        }
+        // If we hit a modeler object but it currently has no selected
+        // faces (e.g. user clicked a face on an object that has none
+        // selected), seed the click face into the selection so the
+        // drag has something to extrude.
+        if (!modeler?.mesh) return;
+        const seedFaces = this._faceIndicesFromHit(hit);
+        if (!modeler.selectedFaces?.length && seedFaces.length) {
+          modeler.selectedFaces = seedFaces.slice();
+        }
+        if (!this._hasAnyElementSelection()) return;
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       try { this._canvas?.setPointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
       this.viewportEngine.controls.enabled = false;
       window.__cyco = window.__cyco || {};
       window.__cyco._suppressSelectionManagerClick = true;
+      // For multi push/pull we snapshot EVERY selected modeler object
+      // so we can roll back the whole multi-extrusion on undo.
+      const draggedObjects = this.tool === 'multi-push-pull'
+        ? this._selectedModelerObjects().filter(o => {
+            const m = o.userData.cycoModeler;
+            return m?.mesh && (m.selectedFaces?.length || m.selectedEdges?.length || m.selectedVertices?.length);
+          })
+        : [hit.object];
+      if (!draggedObjects.length) return;
+      const before = draggedObjects.map(obj => this._snapshotObjectGeometry(obj));
+      const baseMeshes = draggedObjects.map(obj => JSON.parse(JSON.stringify(obj.userData.cycoModeler.mesh || {})));
+      // For single push/pull the face the user grabbed defines the
+      // drag direction (its outward normal). For multi-push-pull we
+      // use the FIRST selected face's normal as the drag direction —
+      // every other selected face extrudes along its OWN face normal
+      // at the same world-space distance, so opposite-facing walls
+      // move in opposite world directions (which is exactly what
+      // UModeler-style multi-push does).
+      const seedFaceIndex = draggedObjects[0].userData.cycoModeler.selectedFaces?.[0] ?? 0;
       this._faceDrag = {
         pointerId: event.pointerId,
-        object: hit.object,
+        object: hit?.object ?? draggedObjects[0],
         startClientX: event.clientX,
         startClientY: event.clientY,
         lastClientX: event.clientX,
         lastClientY: event.clientY,
-        before: this._snapshotObjectGeometry(hit.object),
-        baseMesh: JSON.parse(JSON.stringify(hit.object.userData.cycoModeler.mesh || {})),
-        baseFaces: modeler.selectedFaces.slice(),
+        before,
+        baseMesh: baseMeshes[0],
+        baseFaces: (draggedObjects[0].userData.cycoModeler.selectedFaces || []).slice(),
+        // Multi-push/pull state:
+        multi: this.tool === 'multi-push-pull',
+        draggedObjects,
+        baseMeshes,
+        seedFaceIndex,
       };
-      this._status('Drag to extrude the selected face');
+      this._status(this.tool === 'multi-push-pull'
+        ? `Multi push/pull: drag to extrude ${this._countSelectedElements()} elements`
+        : 'Drag to extrude the selected face');
+      return;
+    }
+
+    // Marquee multi-select for element modes (polygon / edge / vertex).
+    // Fires when the user click-drags on a modeler object — or in
+    // empty space near one — while in an element mode and the active
+    // tool is not push/pull / extrude-edge / a primitive drawer.
+    if (this.active && ELEMENT_MODES.has(this.elementMode) && this.elementMode !== 'object'
+        && event.button === 0) {
+      this._startElementMarquee(event);
       return;
     }
   }
@@ -568,8 +648,23 @@ export class CycleModelerController {
       this._faceDrag.lastClientX = event.clientX;
       this._faceDrag.lastClientY = event.clientY;
       const delta = this._pushDistanceFromDrag(this._faceDrag);
-      this._applyPushPreview(this._faceDrag.object, this._faceDrag.baseMesh, delta);
-      this._status('Drag to extrude the selected face');
+      if (this._faceDrag.multi) {
+        this._applyMultiPushPreview(this._faceDrag, delta);
+        this._status(`Multi push/pull: ${delta.toFixed(1)}`);
+      } else {
+        this._applyPushPreview(this._faceDrag.object, this._faceDrag.baseMesh, delta);
+        this._status('Drag to extrude the selected face');
+      }
+      return;
+    }
+
+    if (this._elemMarquee && event.pointerId === this._elemMarquee.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this._elemMarquee.lastClient = { x: event.clientX, y: event.clientY };
+      // Rebuild the candidate set on every move so the user sees
+      // their selection grow/shrink as the rect drags over faces.
+      this._updateElementMarqueePreview();
       return;
     }
 
@@ -583,6 +678,14 @@ export class CycleModelerController {
 
   _onClick(event) {
     if (!this.active || !ELEMENT_MODES.has(this.elementMode) || this._boxDrag) return;
+    // A drag-marquee was just released — `_elemMarquee` is already
+    // cleared by `_onPointerUp`, so suppress the click that fires
+    // after pointerup so we don't replace the marquee selection
+    // with a single-element click selection.
+    if (this._suppressNextClick) {
+      this._suppressNextClick = false;
+      return;
+    }
     const hit = this._modelerHitFromEvent(event);
     if (!hit?.object?.userData?.cycoModeler?.mesh) return;
     event.preventDefault();
@@ -590,21 +693,38 @@ export class CycleModelerController {
     const modeler = hit.object.userData.cycoModeler;
     this._lastModelerObject = hit.object;
     const selection = this._selectionFromHit(hit);
+    // Shift / ctrl held → additive selection (toggle the clicked
+    // element in/out of the existing multi-selection). Holding neither
+    // modifier replaces the multi-selection with just the clicked
+    // element so the user can re-anchor quickly.
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     if (this.elementMode === 'vertex') {
-      modeler.selectedVertices = selection.vertices;
+      if (additive) {
+        modeler.selectedVertices = this._toggleArray(modeler.selectedVertices, selection.vertices);
+      } else {
+        modeler.selectedVertices = selection.vertices;
+      }
       modeler.selectedEdges = [];
       modeler.selectedFaces = selection.faces;
-      this._status(`Vertex ${modeler.selectedVertices[0] ?? 0} selected`);
+      this._status(`Vertex ${modeler.selectedVertices[0] ?? 0} selected (${modeler.selectedVertices.length} total)`);
     } else if (this.elementMode === 'edge') {
-      modeler.selectedEdges = selection.edges;
+      if (additive) {
+        modeler.selectedEdges = this._toggleArray(modeler.selectedEdges, selection.edges);
+      } else {
+        modeler.selectedEdges = selection.edges;
+      }
       modeler.selectedVertices = [];
       modeler.selectedFaces = selection.faces;
-      this._status(`Edge ${modeler.selectedEdges[0] ?? 0} selected`);
+      this._status(`Edge ${modeler.selectedEdges[0] ?? 0} selected (${modeler.selectedEdges.length} total)`);
     } else if (this.elementMode === 'polygon') {
-      modeler.selectedFaces = selection.faces;
+      if (additive) {
+        modeler.selectedFaces = this._toggleArray(modeler.selectedFaces, selection.faces);
+      } else {
+        modeler.selectedFaces = selection.faces;
+      }
       modeler.selectedVertices = [];
       modeler.selectedEdges = [];
-      this._status(`Polygon ${Math.floor((modeler.selectedFaces[0] ?? 0) / 2) + 1} selected`);
+      this._status(`Polygon ${Math.floor((modeler.selectedFaces[0] ?? 0) / 2) + 1} selected (${modeler.selectedFaces.length} polys)`);
     } else {
       modeler.selectedFaces = [];
       modeler.selectedEdges = [];
@@ -612,6 +732,7 @@ export class CycleModelerController {
       this._status('Object selected');
     }
     this.selectionManager?.setSelectedObjects?.([hit.object]);
+    this._refreshSelectionOverlay();
   }
 
   _onPointerUp(event) {
@@ -624,21 +745,62 @@ export class CycleModelerController {
       try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
       const delta = this._pushDistanceFromDrag(drag);
       if (Math.abs(delta) > 0.001) {
-        const finalMesh = EditableMesh.fromJSON(drag.baseMesh);
-        const faces = drag.object.userData.cycoModeler?.selectedFaces?.length
-          ? drag.object.userData.cycoModeler.selectedFaces
-          : this._faceIndicesForSelection(drag.object.userData.cycoModeler);
-        finalMesh.pushFaces(faces, delta);
-        window.dispatchEvent(new CustomEvent('cyco-command-execute', {
-          detail: {
-            name: this._label(this.tool),
-            do: () => this._applyEditableMesh(drag.object, finalMesh),
-            undo: () => this._restoreObjectGeometry(drag.object, drag.before),
-          }
-        }));
+        if (drag.multi) {
+          // Commit each selected object's mesh as a single command so
+          // the entire multi-push is one undo entry.
+          const finals = drag.draggedObjects.map((obj, i) => {
+            const mesh = EditableMesh.fromJSON(drag.baseMeshes[i]);
+            const m = obj.userData.cycoModeler;
+            const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
+            mesh.pushFaces(faces, delta);
+            return mesh;
+          });
+          window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+            detail: {
+              name: 'Multi Push Pull',
+              do: () => drag.draggedObjects.forEach((obj, i) => this._applyEditableMesh(obj, finals[i])),
+              undo: () => drag.draggedObjects.forEach((obj, i) => this._restoreObjectGeometry(obj, drag.before[i])),
+            }
+          }));
+        } else {
+          const finalMesh = EditableMesh.fromJSON(drag.baseMesh);
+          const faces = drag.object.userData.cycoModeler?.selectedFaces?.length
+            ? drag.object.userData.cycoModeler.selectedFaces
+            : this._faceIndicesForSelection(drag.object.userData.cycoModeler);
+          finalMesh.pushFaces(faces, delta);
+          window.dispatchEvent(new CustomEvent('cyco-command-execute', {
+            detail: {
+              name: this._label(this.tool),
+              do: () => this._applyEditableMesh(drag.object, finalMesh),
+              undo: () => this._restoreObjectGeometry(drag.object, drag.before),
+            }
+          }));
+        }
       }
-      this._status('Extrude applied');
+      this._status(drag.multi ? `Multi push/pull applied (${this._countSelectedElements()} elements)` : 'Extrude applied');
       this._hoverClear();
+      this._refreshSelectionOverlay();
+      try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
+      return;
+    }
+    if (this._elemMarquee && event.pointerId === this._elemMarquee.pointerId) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const marquee = this._elemMarquee;
+      this._elemMarquee = null;
+      this.viewportEngine.controls.enabled = true;
+      try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+      // The actual selection was already written to the modeler
+      // userData during `_updateElementMarqueePreview`. Just update
+      // the visual overlay + status here.
+      this._refreshSelectionOverlay();
+      this._status(this._elemMarqueeSummary());
+      // Defer clearing `_suppressNextClick` to the next animation
+      // frame so the synthetic `click` event that the browser fires
+      // after pointerup gets consumed by the suppress guard in
+      // `_onClick`. Without this defer, the click replaces the
+      // marquee selection with a single-element click selection.
+      requestAnimationFrame(() => { this._suppressNextClick = false; });
       try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
       return;
     }
@@ -2396,6 +2558,552 @@ export class CycleModelerController {
   _selectedModelerObjects() {
     return (this.selectionManager?.getSelectedObjects?.() ?? [])
       .filter(obj => obj?.userData?.cycoModeler);
+  }
+
+  // ── Multi-select helpers ──────────────────────────────────────────────────
+  // Helpers for the multi-push-pull tool + element-mode marquee
+  // multi-select. The marquee is screen-rect based (not raycast based)
+  // because we need to capture MANY elements with a single drag, not
+  // just the one under the cursor.
+
+  /** Toggle-add the items in `incoming` onto `existing`. Items already
+   *  present in `existing` are removed. The returned array is a fresh
+   *  array so callers can write it back to the modeler userData without
+   *  worrying about aliasing. */
+  _toggleArray(existing, incoming) {
+    const out = new Set(Array.isArray(existing) ? existing : []);
+    for (const item of (incoming || [])) {
+      if (out.has(item)) out.delete(item);
+      else out.add(item);
+    }
+    return Array.from(out);
+  }
+
+  /** True if any modeler object in the current scene selection has at
+   *  least one selected face/edge/vertex. Used by the multi-push/pull
+   *  pointerdown to bail when the user clicks empty space in an
+   *  empty scene. */
+  _hasAnyElementSelection() {
+    return this._selectedModelerObjects().some(obj => {
+      const m = obj.userData.cycoModeler;
+      return m && (m.selectedFaces?.length || m.selectedEdges?.length || m.selectedVertices?.length);
+    });
+  }
+
+  /** Total selected elements across all selected modeler objects.
+   *  Faces, edges and vertices count independently so the status text
+   *  shows e.g. "3 polygons + 2 edges selected". */
+  _countSelectedElements() {
+    let n = 0;
+    for (const obj of this._selectedModelerObjects()) {
+      const m = obj.userData.cycoModeler;
+      if (!m) continue;
+      n += m.selectedFaces?.length || 0;
+      n += m.selectedEdges?.length || 0;
+      n += m.selectedVertices?.length || 0;
+    }
+    return n;
+  }
+
+  /** Returns "N polygons + M edges + K vertices selected" — used by
+   *  status updates after a marquee or push/pull operation. */
+  _elemMarqueeSummary() {
+    let f = 0, e = 0, v = 0;
+    for (const obj of this._selectedModelerObjects()) {
+      const m = obj.userData.cycoModeler;
+      if (!m) continue;
+      f += m.selectedFaces?.length || 0;
+      e += m.selectedEdges?.length || 0;
+      v += m.selectedVertices?.length || 0;
+    }
+    const parts = [];
+    if (f) parts.push(`${f} polygon${f === 1 ? '' : 's'}`);
+    if (e) parts.push(`${e} edge${e === 1 ? '' : 's'}`);
+    if (v) parts.push(`${v} vertex${v === 1 ? '' : 'es'}`);
+    return parts.length ? `Selected: ${parts.join(' + ')}` : 'Selection cleared';
+  }
+
+  /**
+   * Begin an element-level marquee drag. Captures pointer input,
+   * disables OrbitControls, and seeds the selection set to either
+   * the click hit's element group (replace) or the existing multi-
+   * selection (additive shift/ctrl).
+   */
+  _startElementMarquee(event) {
+    if (this._boxDrag || this._faceDrag) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try { this._canvas?.setPointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+    this.viewportEngine.controls.enabled = false;
+    window.__cyco = window.__cyco || {};
+    window.__cyco._suppressSelectionManagerClick = true;
+    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+    const hit = this._modelerHitFromEvent(event);
+    const seedObject = hit?.object?.userData?.cycoModeler ? hit.object : null;
+    // Make sure the seed object is part of the scene-level selection
+    // (SelectionManager.set) so multi-push/pull can find it later
+    // via `_selectedModelerObjects`. When not additive we reset the
+    // selection to just the seed object; when additive we add it
+    // to the existing set.
+    if (seedObject) {
+      const selMgr = this.selectionManager;
+      if (!additive) {
+        selMgr?.setSelectedObjects?.([seedObject]);
+      } else if (!selMgr?.selected?.has?.(seedObject)) {
+        selMgr?.addToSelection?.(seedObject);
+      }
+    }
+    // When NOT additive: clear every selected object first so the
+    // marquee starts from a known-empty state, then the user drags
+    // out a fresh multi-selection. When additive: keep the current
+    // multi-selection and union new elements into it on pointerup.
+    if (!additive) {
+      for (const obj of this._selectedModelerObjects()) {
+        const m = obj.userData.cycoModeler;
+        if (!m) continue;
+        m.selectedFaces = [];
+        m.selectedEdges = [];
+        m.selectedVertices = [];
+      }
+    }
+    this._elemMarquee = {
+      pointerId: event.pointerId,
+      startClient: { x: event.clientX, y: event.clientY },
+      lastClient: { x: event.clientX, y: event.clientY },
+      additive,
+      // Seed the marquee with the click hit's element (so a tiny drag
+      // with no real rect still produces a selection — matches how
+      // UModeler's click-then-marquee behaves).
+      seedObject,
+      seedHit: hit,
+    };
+    this._suppressNextClick = true;
+    this._refreshSelectionOverlay();
+  }
+
+  /**
+   * Recompute the element selection based on the current marquee
+   * rectangle. Walks every face/edge/vertex of every selected modeler
+   * object (plus the marquee's seed object so the user can drag a
+   * rectangle that crosses into a non-selected object), projects
+   * its centroid to NDC, and keeps the ones inside the rect.
+   */
+  _updateElementMarqueePreview() {
+    if (window.__cycoDebug?.logMarquee) console.log('[MARQUEE] _updateElementMarqueePreview START, has elemMarquee=', !!this._elemMarquee, 'mode=', this.elementMode);
+    if (!this._elemMarquee) return;
+    const scene = this.sceneManager?.getActiveScene?.();
+    if (!scene) return;
+    const _marqueeLog = (msg) => { try { (window.__cycoDebug?.logMarquee) && console.log('[MARQUEE]', msg); } catch(_) {} };
+    const minX = Math.min(this._elemMarquee.startClient.x, this._elemMarquee.lastClient.x);
+    const maxX = Math.max(this._elemMarquee.startClient.x, this._elemMarquee.lastClient.x);
+    const minY = Math.min(this._elemMarquee.startClient.y, this._elemMarquee.lastClient.y);
+    const maxY = Math.max(this._elemMarquee.startClient.y, this._elemMarquee.lastClient.y);
+    // Pixel threshold: if the drag hasn't moved more than a few
+    // pixels, skip the projection walk and keep the seed selection.
+    if (Math.hypot(maxX - minX, maxY - minY) < 4) {
+      _marqueeLog('drag too small, seeding');
+      this._seedMarqueeSelection();
+      this._refreshSelectionOverlay();
+      return;
+    }
+    const renderer = this.viewportEngine?.rendererManager?.renderer;
+    const camera = this.viewportEngine?.camera;
+    if (!renderer?.domElement || !camera) return;
+    const rect = renderer.domElement.getBoundingClientRect();
+    // Collect every modeler object in the scene, plus the marquee
+    // seed object (so the marquee can sweep onto a previously
+    // un-selected object). For non-additive marquees we also pick
+    // up new objects as the rect drags over them — a marquee that
+    // starts on object A and crosses into object B should be able to
+    // select polygons on both. Newly-discovered objects are added
+    // to the SelectionManager so multi-push/pull can find them.
+    const objects = [];
+    const seen = new Set();
+    for (const obj of this._selectedModelerObjects()) {
+      if (!seen.has(obj.uuid)) { objects.push(obj); seen.add(obj.uuid); }
+    }
+    if (this._elemMarquee.seedObject && !seen.has(this._elemMarquee.seedObject.uuid)) {
+      objects.push(this._elemMarquee.seedObject);
+      seen.add(this._elemMarquee.seedObject.uuid);
+    }
+    // Walk the rest of the scene's modeler objects. Test the object's
+    // world-space AABB centre against the marquee rect — if the centre
+    // is inside, the object is "in the marquee" and we test its
+    // individual elements below.
+    const objCenters = [];
+    const collectObjCenters = (rootObj) => {
+      rootObj.traverse?.(c => {
+        if (!c.userData?.cycoModeler || seen.has(c.uuid)) return;
+        const m = c.userData.cycoModeler;
+        let cx = 0, cy = 0, cz = 0, n = 0;
+        if (m.mesh?.vertices?.length) {
+          for (const v of m.mesh.vertices) { cx += v.x; cy += v.y; cz += v.z; n += 1; }
+        } else {
+          // Fallback: read from BufferGeometry bounding box.
+          c.geometry?.computeBoundingBox?.();
+          const bb = c.geometry?.boundingBox;
+          if (bb) { cx = (bb.min.x + bb.max.x) / 2; cy = (bb.min.y + bb.max.y) / 2; cz = (bb.min.z + bb.max.z) / 2; n = 1; }
+        }
+        if (!n) return;
+        const center = new THREE.Vector3(cx / n, cy / n, cz / n).applyMatrix4(c.matrixWorld);
+        projTmp.copy(center).project(camera);
+        if (projTmp.z < -1 || projTmp.z > 1) return;
+        const sx = (projTmp.x * 0.5 + 0.5) * rect.width + rect.left;
+        const sy = (-projTmp.y * 0.5 + 0.5) * rect.height + rect.top;
+        if (sx < minX || sx > maxX || sy < minY || sy > maxY) return;
+        objects.push(c);
+        seen.add(c.uuid);
+        objCenters.push(c);
+      });
+    };
+    collectObjCenters(scene);
+    // Project each element's centroid to NDC, test against the rect.
+    const projTmp = new THREE.Vector3();
+    if (window.__cycoDebug?.logMarquee) console.log('[MARQUEE] rect:', minX, minY, maxX, maxY, 'objects:', objects.length);
+    const collectForObject = (obj) => {
+      const m = obj?.userData?.cycoModeler;
+      if (!m) return null;
+      // Make sure the world matrix is current — without this the
+      // projected screen coordinates of each face centroid can lag
+      // behind by one frame (especially right after the marquee
+      // was started, when the parent matrix may have just been
+      // written but not propagated to `matrixWorld` yet).
+      obj.updateMatrixWorld(true, false);
+      // Reset to empty so we rebuild the selection from scratch each
+      // move. Additive is handled by saving off the previous selection
+      // before clearing.
+      const prev = this._elemMarquee.additive
+        ? { faces: m.selectedFaces?.slice() || [], edges: m.selectedEdges?.slice() || [], vertices: m.selectedVertices?.slice() || [] }
+        : { faces: [], edges: [], vertices: [] };
+      // Build the in-rect set by element mode.
+      const newFaces = this._elemMarquee.additive ? new Set(prev.faces) : new Set();
+      const newEdges = this._elemMarquee.additive ? new Set(prev.edges) : new Set();
+      const newVerts = this._elemMarquee.additive ? new Set(prev.vertices) : new Set();
+      // Helper: project a world point and check if it's in the marquee rect.
+      const inRect = (world) => {
+        projTmp.copy(world).project(camera);
+        if (projTmp.z < -1 || projTmp.z > 1) return false;
+        const sx = (projTmp.x * 0.5 + 0.5) * rect.width + rect.left;
+        const sy = (-projTmp.y * 0.5 + 0.5) * rect.height + rect.top;
+        return sx >= minX && sx <= maxX && sy >= minY && sy <= maxY;
+      };
+      // Faces: centroid of each face's vertices.
+      if (this.elementMode === 'polygon' || this.elementMode === 'object') {
+        const editable = m.mesh ? EditableMesh.fromJSON(m.mesh) : null;
+        if (editable) {
+          for (let i = 0; i < editable.faces.length; i += 1) {
+            const face = editable.faces[i];
+            if (!face || face.length < 3) continue;
+            // Use the face's bounding-box centre as the test point
+            // (centroid of arbitrary n-gons is fine for picking).
+            let minXx = Infinity, minYy = Infinity, minZz = Infinity;
+            let maxXx = -Infinity, maxYy = -Infinity, maxZz = -Infinity;
+            for (const vi of face) {
+              const v = editable.vertices[vi];
+              if (!v) continue;
+              if (v.x < minXx) minXx = v.x; if (v.x > maxXx) maxXx = v.x;
+              if (v.y < minYy) minYy = v.y; if (v.y > maxYy) maxYy = v.y;
+              if (v.z < minZz) minZz = v.z; if (v.z > maxZz) maxZz = v.z;
+            }
+            const center = new THREE.Vector3((minXx + maxXx) / 2, (minYy + maxYy) / 2, (minZz + maxZz) / 2);
+            center.applyMatrix4(obj.matrixWorld);
+            if (inRect(center)) {
+              // Add the entire selection-group (a box's top is two
+              // triangles in one group → user wants both, not just
+              // the tri under the cursor).
+              const group = editable.selectionGroup(i);
+              for (const fi of group) newFaces.add(fi);
+              if (window.__cycoDebug?.logMarquee) console.log('[MARQUEE] face', i, 'in rect, group adds', group, 'newFaces.size=', newFaces.size);
+            }
+          }
+        }
+      }
+      // Edges: per-edge midpoint from the EdgesGeometry.
+      if (this.elementMode === 'edge') {
+        try {
+          const eg = (m.mesh && typeof EditableMesh.fromJSON(m.mesh).toEdgesGeometry === 'function')
+            ? EditableMesh.fromJSON(m.mesh).toEdgesGeometry(0)
+            : new THREE.EdgesGeometry(obj.geometry, 1);
+          const pos = eg.attributes.position;
+          for (let s = 0; s < pos.count; s += 2) {
+            const ax = pos.getX(s), ay = pos.getY(s), az = pos.getZ(s);
+            const bx = pos.getX(s + 1), by = pos.getY(s + 1), bz = pos.getZ(s + 1);
+            const mid = new THREE.Vector3((ax + bx) / 2, (ay + by) / 2, (az + bz) / 2);
+            mid.applyMatrix4(obj.matrixWorld);
+            if (inRect(mid)) newEdges.add(s);
+          }
+          eg.dispose?.();
+        } catch (_) { /* edges not selectable for this object */ }
+      }
+      // Vertices: per-vertex position from the EditableMesh.
+      if (this.elementMode === 'vertex') {
+        const editable = m.mesh ? EditableMesh.fromJSON(m.mesh) : null;
+        if (editable) {
+          for (let i = 0; i < editable.vertices.length; i += 1) {
+            const v = editable.vertices[i];
+            if (!v) continue;
+            const wp = new THREE.Vector3(v.x, v.y, v.z).applyMatrix4(obj.matrixWorld);
+            if (inRect(wp)) newVerts.add(i);
+          }
+        }
+      }
+      m.selectedFaces = Array.from(newFaces);
+      if (window.__cycoDebug?.logMarquee) console.log('[MARQUEE] final for obj uuid=', obj.uuid.slice(0,4), 'sel=', m.selectedFaces.length, 'editableFaces=', m.mesh?.faces?.length);
+      m.selectedEdges = Array.from(newEdges);
+      m.selectedVertices = Array.from(newVerts);
+      return { faces: m.selectedFaces.length, edges: m.selectedEdges.length, verts: m.selectedVertices.length };
+    };
+    let totalFaces = 0, totalEdges = 0, totalVerts = 0;
+    _marqueeLog('objects count=' + objects.length);
+    for (const obj of objects) {
+      const r = collectForObject(obj);
+      _marqueeLog('collectForObject obj=' + (obj?.uuid?.slice(0,4) || '?') + ' r=' + JSON.stringify(r) + ' sel=' + JSON.stringify(obj?.userData?.cycoModeler?.selectedFaces?.slice(0,5)) + ' totalLen=' + (obj?.userData?.cycoModeler?.selectedFaces?.length));
+      if (r) { totalFaces += r.faces; totalEdges += r.edges; totalVerts += r.verts; }
+    }
+    // If the marquee discovered new modeler objects that aren't yet
+    // in the scene-level selection, add them so multi-push/pull can
+    // see them via `_selectedModelerObjects()`. We only do this in
+    // non-additive mode so the user doesn't accidentally end up
+    // with a scene selection full of objects they only hovered.
+    if (objCenters.length) {
+      const selMgr = this.selectionManager;
+      if (selMgr?.addToSelection && !this._elemMarquee.additive) {
+        for (const o of objCenters) selMgr.addToSelection(o);
+      }
+    }
+    this._refreshSelectionOverlay();
+    const parts = [];
+    if (totalFaces) parts.push(`${totalFaces} polygons`);
+    if (totalEdges) parts.push(`${totalEdges} edges`);
+    if (totalVerts) parts.push(`${totalVerts} vertices`);
+    this._status(parts.length ? `Marquee selecting: ${parts.join(' + ')}` : 'Drag to select elements');
+  }
+
+  /** If the marquee hasn't moved enough to be a real rectangle, fall
+   *  back to the click hit's element (single-element selection). */
+  _seedMarqueeSelection() {
+    if (!this._elemMarquee?.seedHit) return;
+    const hit = this._elemMarquee.seedHit;
+    const modeler = hit.object?.userData?.cycoModeler;
+    if (!modeler) return;
+    const selection = this._selectionFromHit(hit);
+    if (this.elementMode === 'vertex') {
+      modeler.selectedVertices = selection.vertices;
+      modeler.selectedFaces = selection.faces;
+    } else if (this.elementMode === 'edge') {
+      modeler.selectedEdges = selection.edges;
+      modeler.selectedFaces = selection.faces;
+    } else {
+      modeler.selectedFaces = selection.faces;
+    }
+  }
+
+  /**
+   * Apply a multi-push/pull preview by mutating the live mesh of
+   * every selected object. Each object extrudes its own selected
+   * faces along its OWN face normal — opposite-facing walls move in
+   * opposite world directions at the same screen-pixel drag delta.
+   */
+  _applyMultiPushPreview(drag, distance) {
+    for (let i = 0; i < drag.draggedObjects.length; i += 1) {
+      const obj = drag.draggedObjects[i];
+      const baseMesh = drag.baseMeshes[i];
+      if (!obj?.userData?.cycoModeler?.mesh || !baseMesh) continue;
+      const mesh = EditableMesh.fromJSON(baseMesh);
+      const m = obj.userData.cycoModeler;
+      const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
+      if (!faces.length) continue;
+      // `pushFaces` always extrudes along the AVERAGE normal of the
+      // supplied face set — perfect for groups of coplanar triangles
+      // (e.g. a subdivided box top), but wrong for a multi-selection
+      // that mixes opposing walls. For a multi-push we want each face
+      // extruded along its own normal at the same world distance, so
+      // we group by selection-group (coplanar siblings share a normal)
+      // and call pushFaces once per group.
+      const groups = this._groupCoplanarFaces(mesh, faces);
+      for (const grp of groups) mesh.pushFaces(grp, distance);
+      this._applyEditableMesh(obj, mesh);
+    }
+  }
+
+  /**
+   * Partition `faceIndices` into groups of coplanar siblings (faces
+   * that share a faceGroup ID). Each group can be extruded as a unit
+   * without the "average normal collapses to zero" bug that affects
+   * mixed-orientation multi-push calls.
+   */
+  _groupCoplanarFaces(mesh, faceIndices) {
+    const out = [];
+    const seen = new Set();
+    for (const fi of faceIndices) {
+      if (seen.has(fi)) continue;
+      const gid = mesh.faceGroups?.[fi];
+      const grp = [];
+      if (gid == null) {
+        grp.push(fi);
+      } else {
+        for (let j = 0; j < faceIndices.length; j += 1) {
+          if (mesh.faceGroups?.[faceIndices[j]] === gid) grp.push(faceIndices[j]);
+        }
+      }
+      for (const k of grp) seen.add(k);
+      out.push(grp);
+    }
+    return out;
+  }
+
+  // ── Multi-selection overlay ───────────────────────────────────────────────
+  // A persistent overlay showing all currently-selected elements
+  // (faces/edges/vertices). Rendered as child meshes/line-segments on
+  // the modeler objects so they inherit transforms automatically.
+  // The hover overlay (single-element transient) and this overlay can
+  // coexist: the hover layer draws on top of the selection.
+
+  /** Tear down the multi-selection overlay. Safe to call when no
+   *  overlay exists. */
+  _clearSelectionOverlay() {
+    if (!this._selOverlay) return;
+    for (const entry of this._selOverlay.entries) {
+      entry.mesh?.parent?.remove(entry.mesh);
+      entry.mesh?.geometry?.dispose?.();
+      entry.mesh?.material?.dispose?.();
+    }
+    this._selOverlay = null;
+  }
+
+  /**
+   * Rebuild the multi-selection overlay for the current selection
+   * state. Called after every click-select / marquee-select /
+   * push-pull operation so the visual matches the modeler userData.
+   */
+  _refreshSelectionOverlay() {
+    if (!this.active) { this._clearSelectionOverlay(); return; }
+    if (this.elementMode === 'object') { this._clearSelectionOverlay(); return; }
+    this._clearSelectionOverlay();
+    const entries = [];
+    for (const obj of this._selectedModelerObjects()) {
+      const m = obj.userData?.cycoModeler;
+      if (!m) continue;
+      // Face overlay: filled translucent mesh per selected face.
+      if (m.selectedFaces?.length && (this.elementMode === 'polygon' || this.elementMode === 'object')) {
+        const g = this._selectedFacesOverlayGeometry(obj, m.selectedFaces);
+        if (g) {
+          const style = this._hoverStyle.polygon;
+          const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
+            color: style.color,
+            transparent: true,
+            opacity: 0.45,
+            depthTest: false,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+            toneMapped: false,
+          }));
+          mesh.renderOrder = 9998;
+          obj.add(mesh);
+          entries.push({ object: obj, mesh });
+        }
+      }
+      // Edge overlay: fat line segments for selected edges.
+      if (m.selectedEdges?.length && this.elementMode === 'edge') {
+        const g = this._selectedEdgesOverlayGeometry(obj, m.selectedEdges);
+        if (g) {
+          const style = this._hoverStyle.edge;
+          const targetPos = this._getObjectWorldCenter(obj);
+          const mesh = this._buildFatEdges(
+            g,
+            style.color,
+            Math.max(2, (style.thickness ?? this._wireStyle.thickness ?? 1) + 1),
+            style.opacity,
+            /* depthTest */ false,
+            targetPos,
+          );
+          mesh.renderOrder = 9998;
+          obj.add(mesh);
+          entries.push({ object: obj, mesh });
+        }
+      }
+      // Vertex overlay: instanced spheres at selected vertex positions.
+      if (m.selectedVertices?.length && this.elementMode === 'vertex') {
+        const g = this._selectedVerticesOverlayGeometry(obj, m.selectedVertices);
+        if (g) {
+          const style = this._hoverStyle.vertex;
+          const mesh = this._buildVertexHandles(g, style.color, (style.vertexSize ?? 6) + 1, style.opacity);
+          mesh.renderOrder = 9998;
+          obj.add(mesh);
+          entries.push({ object: obj, mesh });
+        }
+      }
+    }
+    if (entries.length) this._selOverlay = { entries };
+  }
+
+  /** Build a filled BufferGeometry of all `faceIndices` for the given
+   *  object, fan-triangulated. Coordinates are local so the parent
+   *  transform carries them automatically. */
+  _selectedFacesOverlayGeometry(object, faceIndices) {
+    const mesh = object.userData?.cycoModeler?.mesh;
+    if (!mesh) return null;
+    const editable = EditableMesh.fromJSON(mesh);
+    const set = new Set(faceIndices);
+    const positions = [];
+    for (const fi of set) {
+      const face = editable.faces[fi];
+      if (!face || face.length < 3) continue;
+      for (let i = 1; i < face.length - 1; i += 1) {
+        const a = editable.vertices[face[0]];
+        const b = editable.vertices[face[i]];
+        const c = editable.vertices[face[i + 1]];
+        if (!a || !b || !c) continue;
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
+      }
+    }
+    if (!positions.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.computeVertexNormals();
+    return g;
+  }
+
+  /** Build an EdgesGeometry-style BufferGeometry containing ONLY the
+   *  selected edge indices for `object`. */
+  _selectedEdgesOverlayGeometry(object, edgeIndices) {
+    const mesh = object.userData?.cycoModeler?.mesh;
+    if (!mesh) return null;
+    const editable = EditableMesh.fromJSON(mesh);
+    const eg = editable.toEdgesGeometry(0);
+    const pos = eg.attributes.position;
+    const segCount = (pos.count / 2) | 0;
+    const set = new Set(edgeIndices);
+    const keepPositions = [];
+    for (let s = 0; s < segCount; s += 1) {
+      if (!set.has(s)) continue;
+      const ax = pos.getX(s * 2),     ay = pos.getY(s * 2),     az = pos.getZ(s * 2);
+      const bx = pos.getX(s * 2 + 1), by = pos.getY(s * 2 + 1), bz = pos.getZ(s * 2 + 1);
+      keepPositions.push(ax, ay, az, bx, by, bz);
+    }
+    eg.dispose?.();
+    if (!keepPositions.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(keepPositions, 3));
+    g.userData._wireParent = object;
+    return g;
+  }
+
+  /** Build a point-cloud BufferGeometry of selected vertex positions. */
+  _selectedVerticesOverlayGeometry(object, vertexIndices) {
+    const mesh = object.userData?.cycoModeler?.mesh;
+    if (!mesh) return null;
+    const editable = EditableMesh.fromJSON(mesh);
+    const points = [];
+    for (const vi of vertexIndices) {
+      const v = editable.vertices[vi];
+      if (!v) continue;
+      points.push(v.x, v.y, v.z);
+    }
+    if (!points.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(points, 3));
+    return g;
   }
 
   _gridCellSize() {
