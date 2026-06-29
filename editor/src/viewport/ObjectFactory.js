@@ -581,7 +581,26 @@ export class ObjectFactory {
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   _defaultMaterial() {
-    return new THREE.MeshStandardMaterial({ color: 0x8888aa, roughness: 0.7, metalness: 0.1, side: THREE.DoubleSide });
+    // Default scene material:
+    //   - Light warm gray (#c8c8c8) shows shading clearly. Pure white
+    //     flattens into a featureless plane; pure gray loses the
+    //     surface form. The warm gray reads as "modelling clay" --
+    //     the standard convention used by Blender for primitive
+    //     meshes in object mode.
+    //   - Slight roughness (0.55) so the highlight softens instead
+    //     of pinching to a single hot spot; no metalness, so the
+    //     surface reads as dielectric, not chrome.
+    //   - FrontSide: we want to back-face cull (correct for
+    //     closed-manifold geometry) so the user sees a clean
+    //     silhouette. Inward pockets / push-pull cavities are
+    //     flipped to DoubleSide by CycleModelerController when
+    //     they're detected (see _applyEditableMesh).
+    return new THREE.MeshStandardMaterial({
+      color: 0xc8c8c8,
+      roughness: 0.55,
+      metalness: 0.0,
+      side: THREE.FrontSide,
+    });
   }
 
   _mesh(geometry, name) {

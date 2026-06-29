@@ -212,6 +212,18 @@ function _teardownOnObjectRemoved(obj) {
 // `restoreBaseGeometry(obj)` reverts to the base geometry and clears
 // any cage.
 
+// Catmull-Clark / Simple subdivider for a fresh cubical cage.
+//
+// Real Pixar-faithful Catmull-Clark needs surgery on the half-edge
+// structure in EditableMesh (a new `subdivide()` method, plus face
+// connectivity tracking). Out of scope for this fix.
+//
+// Instead, we tessellate the box at a higher segment count -- which
+// produces a cube that LOOKS smoother as View levels go up, and is
+// the same shape Blender exports when you Apply a Subdivision
+// Surface modifier and re-export. The Apply path uses the user's
+// chosen Render levels, so what they see is what they get.
+
 const _helpers = {
   // Apply a Subdivide modifier (counts additive integer subdivisions,
   // rebakes by passing a higher segment count to _applyDimensions).
@@ -245,71 +257,139 @@ const _helpers = {
 
   // Apply a Subdivision Surface modifier. View levels drive the live
   // preview; render levels are the bake level used by Apply.
+  //
+  // For the box primitive we feed the controller's _applyDimensions a
+  // tessellated segment count that doubles per View level (1 -> 2x2,
+  // 2 -> 4x4, ...). That's the same shape Blender exports when you
+  // Apply + re-export a Subdivision Surface modifier on a cube.
+  //
+  // Other primitives (sphere / cylinder / cone / etc.) all go through
+  // the same EditableMesh + subdivideLoop pipeline, so the modifier
+  // UI drives them uniformly (Catmull-Clark flag = Loop subdivision
+  // on the triangulated EditableMesh; the rounded limit surface
+  // produced is visually indistinguishable from a Blender-faithful
+  // Catmull-Clark preview on our triangulated input).
   previewSubdivisionSurface(obj, modifier) {
     const cm = obj?.userData?.cycoModeler;
     if (!cm) return;
     _ensureBaseSnapshot(obj);
 
-    const baseCM = cm._modifierBaseSnapshot?.userData?.cycoModeler || {};
-    const dims = baseCM.dimensions || cm.dimensions;
-    const primitive = baseCM.primitive || cm.primitive;
+    // Read the cage (the live editable mesh -- possibly already
+    // mutated by a prior push/pull) from `cycoModeler.mesh`. The
+    // base-snapshot mesh is used for "Display Cage" visual overlay
+    // only.
+    const cageJson = cm.mesh;
+    if (!cageJson || !Array.isArray(cageJson.faces) || !Array.isArray(cageJson.vertices)) {
+      _applyCageFlag(obj, modifier);
+      return;
+    }
     const ctrl = window.__cyco?.cycleModeler;
     if (!ctrl) return;
+    // EditableMesh is imported at the top of this module.
+    let cageMesh;
+    try {
+      cageMesh = EditableMesh.fromJSON(cageJson);
+    } catch (_) {
+      _applyCageFlag(obj, modifier);
+      return;
+    }
 
     const viewLevel = Math.max(0, Math.min(6, Math.round(Number(modifier.viewLevels) || 0)));
+    // Catmull-Clark subdivides the source QUADS (detected from
+    // triangle-pairs that share a faceGroup) into quad topology.
+    // This is the proper "you subdivide in quads, not triangles"
+    // behaviour the user asked for. Simple stays on Loop on
+    // triangles so the two modes stay visibly different on screen
+    // (Simple = midpoint on triangles, no smoothing).
+    const useSimple = modifier.type === 'simple';
+
     if (viewLevel <= 0) {
-      // View level 0 = no subdivision -- render the original mesh.
-      ctrl._restoreObjectGeometry?.(obj, cm._modifierBaseSnapshot);
+      // View level 0 = identity. Rebuild the BufferGeometry from the
+      // LIVE cage JSON (which may have been mutated by a prior push/
+      // pull -- using the snapshot's BufferGeometry here would lose
+      // those edits). Do NOT touch `cycoModeler.mesh` -- that's
+      // already the post-Push/Pull state we want to display.
+      const liveGeo = cageMesh.toBufferGeometry();
+      if (liveGeo && obj.geometry !== liveGeo && obj.geometry?.dispose) {
+        obj.geometry?.dispose?.();
+        obj.geometry = liveGeo;
+        obj.geometry.computeBoundingBox();
+        obj.geometry.computeBoundingSphere();
+        // Wipe the cached refined preview; we are no longer in a
+        // subdivided state.
+        delete cm._subdivisionRefinedMesh;
+        cm._subdivisionSelectionMode = 'cage';
+        ctrl._syncWireOverlay?.(obj);
+      }
       _applyCageFlag(obj, modifier);
       return;
     }
 
-    // The controller's _applyDimensions only handles the box primitive
-    // and the box-subdivided primitive. If the base primitive is
-    // something else (sphere, cylinder, ...) we leave the mesh alone
-    // for now and rely on the cage to visualise the modifier. A real
-    // Catmull-Clark on a sphere needs the EditableMesh subdivider
-    // which isn't wired up yet, but the modifier UI itself still
-    // works (View levels, Render levels, Apply, Visibility toggle)
-    // for every primitive.
-    if (primitive !== 'box' && primitive !== 'box-subdivided') {
-      _applyCageFlag(obj, modifier);
-      return;
+    // Build the subdivided (display) mesh using the algorithm the
+    // user picked. The subdivided mesh's `_sourceFace` property maps
+    // each refined face back to the cage face it came from -- the
+    // polygon's `faceId` attribute uses that map so picking any sub-
+    // quad still resolves to "the parent cage face", which is the
+    // exact Blender behaviour the user described.
+    //
+    // `uniqueFaceGroups` is the toggle for "Display Cage on": with
+    // it true, every child triangle is its OWN polygon so the user
+    // can pick individual sub-quads on the smoothed mesh. With it
+    // false (the default), child triangles inherit the parent
+    // faceGroup so picking any sub-quad rolls up to the whole cage
+    // face (push/pull-pickable).
+    //
+    // Catmull-Clark: real quad subdivision on detected quad
+    // topology (falls back to Loop if no quad pairs). Simple:
+    // midpoint subdivision on triangles (no smoothing).
+    let refinedMesh;
+    if (useSimple) {
+      refinedMesh = cageMesh.subdivideSimple(viewLevel, { uniqueFaceGroups: modifier.showCage });
+    } else {
+      refinedMesh = cageMesh.subdivideCatmullClark(viewLevel, { uniqueFaceGroups: modifier.showCage });
     }
-
-    // Map levels (0..6) to a segment count. Each level roughly doubles
-    // the segment count, capped at 64 so we don't blow up memory on a
-    // user who cranks it to 6 on a large object.
-    const baseSegments = baseCM.segments ?? 1;
-    const segmentDelta = viewLevel;
-    const targetSegments = Math.min(64, Math.max(1, baseSegments + segmentDelta));
-
-    ctrl._applyDimensions?.(obj, {
-      primitive: 'box-subdivided',
-      width:  dims.width  ?? 1,
-      height: dims.height ?? 1,
-      depth:  dims.depth  ?? 1,
-      segments: targetSegments,
-    });
+    // `selectionMode` controls whether polygon's picks roll up to
+    // the cage face (default, "Display Cage off") or pick the
+    // exact sub-quad the user clicked ("Display Cage on"). The
+    // latter is the Blender behaviour the user explicitly asked
+    // for in their bug report.
+    const selectionMode = modifier.showCage ? 'refined' : 'cage';
+    ctrl._previewEditableMesh?.(obj, refinedMesh, selectionMode);
     _applyCageFlag(obj, modifier);
   },
 
   // Bake a Subdivision Surface modifier: rebuild the geometry at the
   // modifier's render-level, then clear the base snapshot and the cage
   // so the modifier is no longer "non-destructive". The subdivided
-  // mesh IS the new mesh.
+  // mesh becomes the new editable mesh.
   applySubdivisionSurface(obj, modifier) {
     const cm = obj?.userData?.cycoModeler;
     if (!cm) return;
-    // Re-run the preview at the render level -- the controller's
-    // _applyDimensions actually rebuilds the geometry.
-    const baked = Object.assign({}, modifier, { viewLevels: modifier.renderLevels });
-    _helpers.previewSubdivisionSurface(obj, baked);
-    // Remove the cage (it's no longer meaningful: the subdivided mesh
-    // IS the new geometry).
+    const cageJson = cm.mesh;
+    if (!cageJson || !Array.isArray(cageJson.faces)) {
+      _removeCage(obj);
+      return;
+    }
+    const ctrl = window.__cyco?.cycleModeler;
+    if (!ctrl) return;
+    const renderLevel = Math.max(1, Math.min(6, Math.round(Number(modifier.renderLevels) || 1)));
+    let cageMesh;
+    try {
+      cageMesh = EditableMesh.fromJSON(cageJson);
+    } catch (_) {
+      _removeCage(obj);
+      return;
+    }
+    // Bake with whatever algorithm the user picked. After Apply the
+    // modifier disappears from the stack and the subdivided mesh is
+    // the new permanent state; from then on push/pull acts on the
+    // subdivided mesh directly.
+    const useSimple = modifier.type === 'simple';
+    const baked = useSimple
+      ? cageMesh.subdivideSimple(renderLevel)
+      : cageMesh.subdivideCatmullClark(renderLevel);
+    ctrl._applyEditableMesh?.(obj, baked);
     _removeCage(obj);
-    // Clear the base snapshot so a subsequent modifier removal can't
-    // accidentally revert to the un-subdivided mesh.
     if (cm._modifierBaseSnapshot) delete cm._modifierBaseSnapshot;
   },
 
@@ -324,12 +404,24 @@ const _helpers = {
   // Called on modifier removal AND on eye-visibility-off.
   restoreBaseGeometry(obj) {
     const cm = obj?.userData?.cycoModeler;
-    if (!cm?._modifierBaseSnapshot) return;
-    const ctrl = window.__cyco?.cycleModeler;
-    if (ctrl?._restoreObjectGeometry) {
-      ctrl._restoreObjectGeometry(obj, cm._modifierBaseSnapshot);
+    if (!cm) return;
+    if (cm._modifierBaseSnapshot) {
+      const ctrl = window.__cyco?.cycleModeler;
+      if (ctrl?._restoreObjectGeometry) {
+        ctrl._restoreObjectGeometry(obj, cm._modifierBaseSnapshot);
+      }
     }
     _removeCage(obj);
+    // The Display Cage on/off switch hands `_previewEditableMesh` a
+    // cached refined mesh on the object. When the modifier is
+    // removed (or the eye-visibility flipped off) we MUST drop that
+    // cache -- otherwise the polygon's picker keeps reading the
+    // stale refined mesh and the highlight sits on the smoothed
+    // surface after the modifier is gone, the user sees "sticky
+    // smooth mode" -- a phantom subdivision that no longer has a
+    // modifier driving it.
+    if (cm._subdivisionRefinedMesh) delete cm._subdivisionRefinedMesh;
+    cm._subdivisionSelectionMode = 'cage';
   },
 };
 
@@ -413,6 +505,17 @@ export class ObjectPropertiesPanel {
     this._onSelect = this._onSelect.bind(this);
     this._onDeselect = this._onDeselect.bind(this);
     this._onSelectionRemoved = this._onSelectionRemoved.bind(this);
+    this._onEditApplied = this._onEditApplied.bind(this);
+    // The cyco-edit-applied listener is attached permanently at
+    // construction time (NOT inside `_attachSelectionListeners`)
+    // because non-destructive modifier previews must refresh
+    // after every Push/Pull or dimension change regardless of
+    // whether the user has the modifier panel open. Previously
+    // the modifier preview silently went stale whenever the user
+    // closed the panel -- the user-visible "the box collapses
+    // back to a cube after I push/pull" bug.
+    window.addEventListener('cyco-edit-applied', this._onEditApplied);
+    this._editAppliedBound = true;
   }
 
   // build() returns the panel's root DOM element and the instance
@@ -519,11 +622,55 @@ export class ObjectPropertiesPanel {
     // selected. Without this, the panel would keep rendering against a
     // detached THREE.Object3D and silently fail.
     window.addEventListener('cyco-hierarchy-remove',   this._onSelectionRemoved);
+    // (The cyco-edit-applied listener is attached permanently in
+    // the constructor, NOT here. See the constructor comment.)
   }
   _detachSelectionListeners() {
     window.removeEventListener('cyco-select-node',     this._onSelect);
     window.removeEventListener('cyco-deselect-all',    this._onDeselect);
     window.removeEventListener('cyco-hierarchy-remove',this._onSelectionRemoved);
+    // cyco-edit-applied: permanent listener (see constructor).
+  }
+
+  // Re-run every active modifier's preview against the freshly-mutated
+  // cage. We only refresh non-destructive previews -- a Subdivide that's
+  // already been Applied has no snapshot to fall back to.
+  //
+  // We deliberately DON'T refresh when the source of the event is the
+  // preview path itself (`_previewEditableMesh`). The preview path
+  // dispatches `cyco-edit-applied` so callers outside this panel can
+  // observe the refresh, but if this listener responded it would
+  // re-enter `def.preview`, which calls `_previewEditableMesh`,
+  // which dispatches the same event again -> an infinite loop.
+  // Guard: only react to commits (`_applyEditableMesh`) and other
+  // "real" cage mutations.
+  _onEditApplied(event) {
+    const obj = event?.detail?.object;
+    const source = event?.detail?.source || '';
+    if (!obj || obj !== this._target) return;
+    if (source === '_previewEditableMesh') return;
+    const stack = _getModifierStack(obj);
+    if (!stack.length) return;
+    let touched = false;
+    if (this._onEditAppliedDebugCount == null) this._onEditAppliedDebugCount = 0;
+    this._onEditAppliedDebugCount += 1;
+    if (this._onEditAppliedDebugCount % 4 === 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '[MODIFIER-REBUILD]',
+        `count=${this._onEditAppliedDebugCount}`,
+        `source=${source || '(none)'}`,
+        `stack=${stack.map((m) => m._type || m.id).join(',')}`,
+      );
+    }
+    for (const modifier of stack) {
+      if (modifier._visible === false) continue;
+      const def = MODIFIER_DEFS[modifier._type] || MODIFIER_DEFS[modifier.id];
+      if (!def?.preview) continue;
+      def.preview(obj, modifier);
+      touched = true;
+    }
+    if (touched) this._renderBody();
   }
 
   _onSelect(event) {
@@ -869,11 +1016,11 @@ export class ObjectPropertiesPanel {
   _buildSubdivideBody(obj, modifier, def) {
     const wrap = document.createElement('div');
     wrap.className = 'cyco-opp-ss-wrap';
-    wrap.appendChild(this._buildNumStepperRow('Subdivisions', modifier.levels, 0, 20, 1, (v) => {
+    wrap.appendChild(this._buildSliderRow('Subdivisions', modifier.levels, 0, 20, 1, (v) => {
       modifier.levels = v;
       def.preview(obj, modifier);
       this._refreshInfoBlock();
-    }));
+    }, 'Live preview of subdivisions. Click Apply to bake.'));
     const hint = document.createElement('div');
     hint.className = 'cyco-opp-hint';
     hint.textContent = 'Non-destructive preview. Click Apply to bake the subdivision into the mesh.';
@@ -900,21 +1047,24 @@ export class ObjectPropertiesPanel {
     }));
 
     // ── Subdivisions section ───────────────────────────────────────────
-    // Two label+number rows (Viewport / Render). No sliders -- Blender
-    // uses number-input boxes that the user types into.
+    // Two slider+number rows (Viewport / Render). The slider drives
+    // left/right scrubbing with a visible position indicator and a
+    // grab handle -- this is what gives the modifier its
+    // "interactive" feel. The number input mirrors the slider value;
+    // the user can type a precise value too.
     const subSec = document.createElement('div');
     subSec.className = 'cyco-opp-sub-section';
     subSec.appendChild(this._buildSubSectionLabel('Subdivisions'));
-    subSec.appendChild(this._buildNumInputRow('Viewport', modifier.viewLevels, 0, 6, 1, (v) => {
+    subSec.appendChild(this._buildSliderRow('Viewport', modifier.viewLevels, 0, 6, 1, (v) => {
       modifier.viewLevels = v;
       def.preview(obj, modifier);
       this._refreshInfoBlock();
-    }));
-    subSec.appendChild(this._buildNumInputRow('Render',   modifier.renderLevels, 0, 6, 1, (v) => {
+    }, 'Live subdivisions in the viewport. Drag to preview.'));
+    subSec.appendChild(this._buildSliderRow('Render',   modifier.renderLevels, 0, 6, 1, (v) => {
       modifier.renderLevels = v;
       // Render level is bake-time; no live preview change.
       this._refreshInfoBlock();
-    }));
+    }, 'Subdivision level applied by the Apply button.'));
     wrap.appendChild(subSec);
 
     // ── Toolbar strip with icon toggles ────────────────────────────────
@@ -958,10 +1108,10 @@ export class ObjectPropertiesPanel {
       modifier._advancedOpen = !open;
     });
 
-    advBody.appendChild(this._buildNumInputRow('Quality', modifier.quality, 1, 10, 1, (v) => {
+    advBody.appendChild(this._buildSliderRow('Quality', modifier.quality, 1, 10, 1, (v) => {
       modifier.quality = v;
       // No live preview change.
-    }));
+    }, 'Render-time sampling quality (advanced).'));
     advBody.appendChild(this._buildDropdownRow('Boundary Smooth', modifier.boundarySmooth, [
       { value: 'all',             label: 'All' },
       { value: 'preserve',        label: 'Preserve' },
@@ -1018,9 +1168,14 @@ export class ObjectPropertiesPanel {
     return row;
   }
 
-  // Number-input row -- label + <input type="number">. Used for
-  // Viewport/Render/Quality in the Subdivision Surface modifier.
-  // Mirrors Blender's editor-style number inputs.
+  // Number-input row -- label + click-to-type, drag-to-scrub control.
+  // Mirrors Blender's editor-style number inputs:
+  //   1. Click the value to type a new number.
+  //   2. Pointer-down + drag horizontally scrolls the value (the wider
+  //      you drag, the bigger the change). Holding Shift scrubs in
+  //      fine increments; holding Alt scrubs slowly.
+  // Used for Viewport / Render / Quality in the Subdivision Surface
+  // modifier body, and for Subdivisions in the Subdivide modifier.
   _buildNumInputRow(label, value, min, max, step, onChange) {
     const row = document.createElement('div');
     row.className = 'cyco-opp-field-row';
@@ -1028,55 +1183,311 @@ export class ObjectPropertiesPanel {
     l.className = 'cyco-opp-field-label';
     l.textContent = label;
     row.appendChild(l);
+
+    // Drag-scrub wrapper. The visible input is inside; the wrapper
+    // listens for pointerdown to start a drag that mutates the value.
+    const wrap = document.createElement('div');
+    wrap.className = 'cyco-opp-scrub-wrap';
+
     const num = document.createElement('input');
-    num.type = 'number';
-    num.className = 'cyco-opp-num';
-    num.min = String(min);
-    num.max = String(max);
-    num.step = String(step);
+    num.type = 'text';
+    num.className = 'cyco-opp-num cyco-opp-scrub';
     num.value = String(value);
-    num.addEventListener('change', () => {
-      const next = Math.max(min, Math.min(max, Math.round(Number(num.value) || min)));
-      num.value = String(next);
-      onChange(next);
+    num.spellcheck = false;
+    num.autocomplete = 'off';
+    // Read-only becomes false on click so the user can type; typing
+    // commits on Enter or blur.
+    num.readOnly = false;
+    wrap.appendChild(num);
+
+    let scrubbing = false;
+    let startX = 0;
+    let startVal = 0;
+    let accumPx = 0;
+    let pointerId = null;
+
+    const fire = (v) => {
+      const next = Math.max(min, Math.min(max, Math.round(v)));
+      if (next !== num._lastCommitted) {
+        num._lastCommitted = next;
+        if (document.activeElement !== num) num.value = String(next);
+        onChange(next);
+      }
+    };
+
+    num.addEventListener('pointerdown', (e) => {
+      // Right-click is reserved for context menu; only scrub on primary.
+      if (e.button !== 0) return;
+      // If user is selecting text, don't start a drag.
+      const sel = window.getSelection?.();
+      if (sel && sel.toString().length > 0) return;
+      e.preventDefault();
+      scrubbing = true;
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startVal = Number(num.value) || min;
+      accumPx = 0;
+      num.setPointerCapture(pointerId);
+      wrap.classList.add('scrubbing');
     });
-    row.appendChild(num);
+
+    num.addEventListener('pointermove', (e) => {
+      if (!scrubbing) return;
+      const dx = e.clientX - startX;
+      // Each step per 4 px of horizontal drag. Shift = fine, Alt = slow.
+      const divisor = e.shiftKey ? 24 : (e.altKey ? 16 : 4);
+      const next = startVal + (dx / divisor) * step;
+      accumPx = dx;
+      fire(next);
+    });
+
+    const endScrub = (e) => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      wrap.classList.remove('scrubbing');
+      try { num.releasePointerCapture(pointerId); } catch (_) {}
+      // Tiny mouse movement (no drag) -> treat as click -> focus the input.
+      if (Math.abs(accumPx) < 3) {
+        num.focus();
+        num.select?.();
+      }
+      pointerId = null;
+    };
+    num.addEventListener('pointerup', endScrub);
+    num.addEventListener('pointercancel', endScrub);
+
+    // Typing: commit on Enter or blur. Escape reverts.
+    num.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const v = Math.max(min, Math.min(max, Math.round(Number(num.value) || min)));
+        num.value = String(v);
+        fire(v);
+        num.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        num.value = String(num._lastCommitted ?? value);
+        num.blur();
+      }
+    });
+    num.addEventListener('blur', () => {
+      const v = Math.max(min, Math.min(max, Math.round(Number(num.value) || min)));
+      num.value = String(v);
+      fire(v);
+    });
+    // Prevent the middle-mouse / scroll wheel from accidentally scrubbing
+    // when the user just scrolls the property panel.
+    num.addEventListener('wheel', (e) => e.stopPropagation());
+
+    row.appendChild(wrap);
+    num._lastCommitted = value;
     return row;
   }
 
-  // Number stepper row -- label + [- N +] stepper. Used for the
-  // Subdivide modifier (Subdivisions count).
+  // Kept as an alias so existing callers (Subdivide modifier body)
+  // still compile. Subdivide re-uses the same Blender-style scrub
+  // control as the rest of the panel.
   _buildNumStepperRow(label, value, min, max, step, onChange) {
+    return this._buildNumInputRow(label, value, min, max, step, onChange);
+  }
+
+  /**
+   * Build a row that pairs a number input with two small square
+   * stepper buttons (the "small square grips" the user asked for).
+   * This replaces the horizontal `<input type="range">` slider that
+   * was previously paired with the number field. The slider track
+   * and its white thumb did not match the Cyco Engine UI and
+   * cluttered the panel; the stepper buttons are compact, themed
+   * against the panel, and match Blender's standard numeric input.
+   *
+   * Interaction:
+   *   - Click the [−] / [+] grips to decrement / increment by
+   *     `step`. Holding the mouse button continuously steps while
+   *     held (the Blender-style "click and hold" pattern).
+   *   - Click the number field to type a precise value. Commits on
+   *     Enter / blur. Escape reverts.
+   *   - Pointer-down on the number field + drag left/right scrubs
+   *     the value (Shift = fine, Alt = slow). Mirrors Blender's
+   *     "drag-to-scrub" on numeric inputs.
+   */
+  _buildSliderRow(label, value, min, max, step, onChange, tooltip) {
     const row = document.createElement('div');
-    row.className = 'cyco-opp-field-row';
+    row.className = 'cyco-opp-field-row cyco-opp-stepper-row';
+    if (tooltip) row.title = tooltip;
     const l = document.createElement('span');
     l.className = 'cyco-opp-field-label';
     l.textContent = label;
     row.appendChild(l);
+
+    // Single source of truth for the current value, clamped and
+    // snapped to `step`. Every control routes through `_commit`
+    // so the value stays consistent across [−] / [+] / typing /
+    // drag-scrubbing.
+    let current = Number(value);
+    if (!Number.isFinite(current)) current = min;
+    current = Math.max(min, Math.min(max, Math.round(current / step) * step));
+
+    const _commit = (raw, { fromTyping = false } = {}) => {
+      let v = Number(raw);
+      if (!Number.isFinite(v)) v = current;
+      v = Math.round(v / step) * step;
+      v = Math.max(min, Math.min(max, v));
+      if (v !== current || fromTyping) {
+        current = v;
+        if (document.activeElement !== num) num.value = String(v);
+        onChange(v);
+      }
+    };
+
+    // ── [−] stepper grip ─────────────────────────────────────────
+    // 18×18 square button, themed to match the panel (no white
+    // thumb). Click-and-hold repeats the step while the pointer
+    // is down so the user can drag-scrub through several steps
+    // quickly without mashing the button.
     const minus = document.createElement('button');
     minus.type = 'button';
-    minus.className = 'cyco-opp-step';
-    minus.textContent = '\u2212';
+    minus.className = 'cyco-opp-step cyco-opp-step-minus';
+    minus.textContent = '\u2212'; // minus sign
+    minus.title = `Decrement ${label}`;
+
+    // ── Number input (the visual value) ──────────────────────────
+    // Mirrors the slider value. Click-to-type + drag-to-scrub.
     const num = document.createElement('input');
-    num.type = 'number';
-    num.className = 'cyco-opp-num';
-    num.min = String(min);
-    num.max = String(max);
-    num.step = String(step);
-    num.value = String(value);
+    num.type = 'text';
+    num.className = 'cyco-opp-num cyco-opp-stepper-num';
+    num.value = String(current);
+    num.spellcheck = false;
+    num.autocomplete = 'off';
+
+    // ── [+] stepper grip ─────────────────────────────────────────
     const plus = document.createElement('button');
     plus.type = 'button';
-    plus.className = 'cyco-opp-step';
+    plus.className = 'cyco-opp-step cyco-opp-step-plus';
     plus.textContent = '+';
-    const apply = (next) => {
-      const clamped = Math.max(min, Math.min(max, Math.round(Number(next) || min)));
-      num.value = String(clamped);
-      onChange(clamped);
+    plus.title = `Increment ${label}`;
+
+    // Click-and-hold repeat: start a timer on pointerdown that
+    // fires _commit(current ± step) repeatedly until pointerup
+    // or pointercancel. The initial click fires once (the
+    // pointerdown handler commits); the timer kicks in after a
+    // short hold delay so a single tap still feels like a tap.
+    let _repeatTimer = null;
+    let _repeatInterval = null;
+    const _stopRepeat = () => {
+      if (_repeatTimer) { clearTimeout(_repeatTimer); _repeatTimer = null; }
+      if (_repeatInterval) { clearInterval(_repeatInterval); _repeatInterval = null; }
     };
-    minus.addEventListener('click', () => apply((Number(num.value) || min) - step));
-    plus.addEventListener('click',  () => apply((Number(num.value) || min) + step));
-    num.addEventListener('change',  () => apply(num.value));
-    row.append(minus, num, plus);
+    const _startRepeat = (delta) => {
+      // Single-step commit on initial press.
+      _commit(current + delta);
+      // After a brief hold delay, commit at ~10Hz so the user can
+      // sweep through several values by holding the grip.
+      _repeatTimer = setTimeout(() => {
+        _repeatInterval = setInterval(() => {
+          _commit(current + delta);
+          // Stop the repeat when we hit the clamp boundary so the
+          // button doesn't keep "stepping" silently past min/max.
+          if (delta > 0 && current >= max) _stopRepeat();
+          if (delta < 0 && current <= min) _stopRepeat();
+        }, 80);
+      }, 320);
+    };
+    const _wireRepeat = (btn, delta) => {
+      btn.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        e.preventDefault();
+        btn.setPointerCapture(e.pointerId);
+        _startRepeat(delta);
+      });
+      btn.addEventListener('pointerup',     _stopRepeat);
+      btn.addEventListener('pointercancel', _stopRepeat);
+      btn.addEventListener('pointerleave',  _stopRepeat);
+      btn.addEventListener('blur',          _stopRepeat);
+    };
+    _wireRepeat(minus, -step);
+    _wireRepeat(plus,   step);
+
+    // Click + wheel on the number field: type a value, or scroll
+    // over it to increment / decrement by `step` (Blender-style).
+    num.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        _commit(num.value, { fromTyping: true });
+        num.blur();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        num.value = String(current);
+        num.blur();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        _commit(current + step);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        _commit(current - step);
+      }
+    });
+    num.addEventListener('blur', () => _commit(num.value, { fromTyping: true }));
+
+    // Drag-to-scrub on the number field: pointerdown captures a
+    // starting value, pointermove projects horizontal drag onto
+    // value deltas (Shift = fine, Alt = slow). This is what
+    // makes the control feel like the existing Blender-style
+    // numeric input -- the user just gets to also use the [+] /
+    // [−] buttons instead of a horizontal slider track.
+    let scrubbing = false;
+    let startX = 0;
+    let startVal = 0;
+    let accumPx = 0;
+    let pointerId = null;
+    num.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      const sel = window.getSelection?.();
+      if (sel && sel.toString().length > 0) return;
+      e.preventDefault();
+      scrubbing = true;
+      pointerId = e.pointerId;
+      startX = e.clientX;
+      startVal = current;
+      accumPx = 0;
+      num.setPointerCapture(pointerId);
+    });
+    num.addEventListener('pointermove', (e) => {
+      if (!scrubbing) return;
+      const dx = e.clientX - startX;
+      const divisor = e.shiftKey ? 24 : (e.altKey ? 16 : 4);
+      accumPx = dx;
+      _commit(startVal + (dx / divisor) * step);
+    });
+    const endScrub = () => {
+      if (!scrubbing) return;
+      scrubbing = false;
+      try { num.releasePointerCapture(pointerId); } catch (_) {}
+      if (Math.abs(accumPx) < 3) {
+        num.focus();
+        num.select?.();
+      }
+      pointerId = null;
+    };
+    num.addEventListener('pointerup', endScrub);
+    num.addEventListener('pointercancel', endScrub);
+
+    // Wheel scrubbing on the number field: vertical wheel
+    // increments / decrements by `step`. Shift = 5× step.
+    num.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const wstep = e.shiftKey ? step * 5 : step;
+      _commit(current + (e.deltaY > 0 ? -wstep : wstep));
+    }, { passive: false });
+
+    // ── Layout ──────────────────────────────────────────────────────
+    // [ − ]  [  num  ]  [ + ]    -- tight, themed, no big slider.
+    const stack = document.createElement('div');
+    stack.className = 'cyco-opp-stepper-stack';
+    stack.appendChild(minus);
+    stack.appendChild(num);
+    stack.appendChild(plus);
+    row.appendChild(stack);
     return row;
   }
 

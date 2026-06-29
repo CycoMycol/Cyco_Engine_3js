@@ -832,10 +832,20 @@ export class CycleModelerController {
         // mesh), so refreshing per-frame keeps the ribbons glued to
         // the polygons as they extrude — for both right-drag AND
         // left-drag multi-push/pull.
-        if (this._faceDrag.multi) this._refreshSelectionOverlay();
+        this._refreshSelectionOverlay();
         this._status(`Multi push/pull: ${delta.toFixed(1)}`);
       } else {
         this._applyPushPreview(this._faceDrag.object, this._faceDrag.baseMesh, delta);
+        // [PUSHPULL-FIX: per-frame overlay refresh]
+        // Single-face push/pull: the overlay used to stay anchored
+        // at the original face position for the entire drag because
+        // this branch was missing the per-frame refresh. That made
+        // push/pull under the Subdivision Surface modifier look
+        // "stuck" — the smoothed display was updating, but the
+        // pink highlight stayed put on the original cage face.
+        // Now we refresh on every move so the highlight rides the
+        // pushed face in lock-step with the displayed geometry.
+        this._refreshSelectionOverlay();
         this._status('Drag to extrude the selected face');
       }
       return;
@@ -1147,28 +1157,69 @@ export class CycleModelerController {
   }
 
   _faceIndicesFromHit(hit) {
-    const mesh = EditableMesh.fromJSON(hit?.object?.userData?.cycoModeler?.mesh);
+    const cm = hit?.object?.userData?.cycoModeler;
     const geom = hit?.object?.geometry;
     const triIndex = Math.max(0, hit?.faceIndex ?? 0);
-    // Prefer the explicit faceId attribute when present (after Push/Pull
-    // quads are fan-triangulated, triangle index no longer matches face
-    // index 1:1).
+
+    // The faceId attribute on `obj.geometry` is interpreted relative to
+    // the mesh JSON the picker uses. When the Subdivision Surface
+    // modifier is active with "Display Cage" OFF (default), the
+    // attribute is set to the parent cage face index and we read the
+    // cage mesh. When Display Cage is ON, the attribute is the
+    // refined-face index and we read the refined mesh instead. The
+    // polygon's selection then behaves like Blender:
+    //   - cage-mode:  picking any sub-quad selects the WHOLE cage face
+    //     (push/pull safe)
+    //   - refined-mode: picking a sub-quad selects just that sub-quad
+    //     (the user can pick a specific sub-cell on the smoothed mesh)
+    const useRefinedMesh = cm?._subdivisionSelectionMode === 'refined'
+      && cm?._subdivisionRefinedMesh;
+    const meshJson = useRefinedMesh
+      ? cm._subdivisionRefinedMesh
+      : cm?.mesh;
+    // [DEBUG] log the picker resolve path
+    if (this._pickerDebugCount == null) this._pickerDebugCount = 0;
+    this._pickerDebugCount += 1;
+    if (this._pickerDebugCount % 4 === 0) {
+      const fidAttr = geom?.attributes?.faceId;
+      const faceIdFromAttr = fidAttr ? fidAttr.getX(triIndex * 3) | 0 : null;
+      // eslint-disable-next-line no-console
+      console.log(
+        '[PICKER-RESOLVE]',
+        `count=${this._pickerDebugCount}`,
+        `triIndex=${triIndex}`,
+        `faceIdAttr=${faceIdFromAttr}`,
+        `mode=${useRefinedMesh ? 'refined' : 'cage'}`,
+        `meshFaces=${meshJson?.faces?.length ?? 0}`,
+      );
+    }
+    if (!meshJson) return [0];
+    const mesh = EditableMesh.fromJSON(meshJson);
     let index = triIndex;
     const faceIdAttr = geom?.attributes?.faceId;
     if (faceIdAttr) {
       const vertexIndex = triIndex * 3;
       if (vertexIndex < faceIdAttr.count) index = Math.max(0, faceIdAttr.getX(vertexIndex) | 0);
     }
-    // Use the mesh's `faceGroup` (selection-group) rather than a raw
-    // geometric coplanar test. After Push/Pull, side walls can lie on
-    // the same geometric plane as adjacent mesh faces (e.g. the top
-    // side wall of an extruded back face sits on the same Y plane as
-    // the box's top face) â€” the geometric coplanar check would
-    // over-select those walls, so the user clicking the top face
-    // would "select all the squares". `selectionGroup` returns just
-    // the polygons that share an explicit selection group ID with the
-    // seed face, which is what the modeler wants.
     return mesh.selectionGroup(index);
+  }
+
+  /**
+   * Build the polygon's outline geometry for highlight / hover.
+   * Mirrors `_faceIndicesFromHit`: the source mesh is the cage in
+   * default mode and the refined mesh in Display-Cage mode. This
+   * matters because when Display Cage is on, the highlight should
+   * sit on the smoothed mesh's sub-quad the user actually clicked
+   * (not snap back to the cube outline).
+   */
+  _faceGeometryFromMesh(obj) {
+    const cm = obj?.userData?.cycoModeler;
+    if (!cm) return null;
+    const useRefinedMesh = cm._subdivisionSelectionMode === 'refined'
+      && cm._subdivisionRefinedMesh;
+    const meshJson = useRefinedMesh ? cm._subdivisionRefinedMesh : cm.mesh;
+    if (!meshJson) return null;
+    return meshJson;
   }
 
   _pushDistanceFromDrag(drag) {
@@ -1896,7 +1947,14 @@ export class CycleModelerController {
   }
 
   _faceGeometryFromHit(hit) {
-    const mesh = EditableMesh.fromJSON(hit?.object?.userData?.cycoModeler?.mesh);
+    // Pick the mesh the polygon's selection is operating on: the cage
+    // by default, the refined mesh when the Subdivision Surface
+    // modifier's Display Cage is ON. Picking the right one matters
+    // because the highlight is rendered against `mesh.vertices[]` --
+    // an un-refined highlight on a smoothed mesh would visually
+    // mismatch the smoothing the user just applied.
+    const cm = hit?.object?.userData?.cycoModeler;
+    const mesh = EditableMesh.fromJSON(this._faceGeometryFromMesh(hit?.object) || cm?.mesh || {});
     const faces = this._faceIndicesFromHit(hit);
     const positions = [];
     for (const faceIndex of faces) {
@@ -2085,12 +2143,16 @@ export class CycleModelerController {
       ? editableMesh.toBufferGeometry()
       : this._makePrimitiveGeometry(this.primitiveTool, width, height, depth);
     const material = new THREE.MeshStandardMaterial({
-      color: 0x8888aa,
+      // Light warm gray default so the user can read the shading
+      // and edges clearly during modelling (matches Blender's
+      // primitive-shading convention). Pure white flattens into a
+      // featureless plane; pure gray hides the surface form.
+      color: 0xc8c8c8,
       opacity: preview ? 0.45 : 1,
       transparent: preview,
-      roughness: 0.7,
-      metalness: 0.1,
-      // Front-only for committed primitives â€” solid / solid+wire
+      roughness: 0.55,
+      metalness: 0.0,
+      // Front-only for committed primitives -- solid / solid+wire
       // mode should show only the outer surface (back faces are
       // culled, so the inside of the box isn't visible through the
       // front face). Preview primitives keep `DoubleSide` so the
@@ -2737,7 +2799,66 @@ export class CycleModelerController {
     const modeler = obj.userData.cycoModeler;
     const faces = modeler.selectedFaces?.length ? modeler.selectedFaces : this._faceIndicesForSelection(modeler);
     mesh.pushFaces(faces, distance);
-    this._applyEditableMesh(obj, mesh);
+    // [DEBUG] log the preview state to help diagnose subdivision + push/pull
+    if (this._pushPreviewDebugCount == null) this._pushPreviewDebugCount = 0;
+    this._pushPreviewDebugCount += 1;
+    if (this._pushPreviewDebugCount % 4 === 0) {
+      const cm = obj.userData.cycoModeler;
+      const hasRefined = !!cm._subdivisionRefinedMesh;
+      const selMode = cm._subdivisionSelectionMode || 'cage';
+      // eslint-disable-next-line no-console
+      console.log(
+        '[PUSHPULL-PREVIEW]',
+        `count=${this._pushPreviewDebugCount}`,
+        `delta=${distance.toFixed(3)}`,
+        `faces=${JSON.stringify(faces)}`,
+        `cageVerts=${mesh.vertices.length}`,
+        `cageFaces=${mesh.faces.length}`,
+        `hasRefinedCache=${hasRefined}`,
+        `selMode=${selMode}`,
+      );
+    }
+    // [PUSHPULL-FIX: preserve active modifier preview during drag]
+    // `_applyEditableMesh` is destructive — it overwrites both
+    // `obj.geometry` AND `cycoModeler.mesh`, then dispatches
+    // `cyco-edit-applied` so the Object Properties panel re-runs
+    // the modifier preview. That chain is correct on commit
+    // (`_onPointerUp`), but during a per-frame drag preview it
+    // fights the modifier:
+    //   1. We write the pushed CAGE geometry to the renderer.
+    //   2. The panel immediately rebuilds the REFINED geometry.
+    // The user briefly sees the cage flash before the refined mesh
+    // re-appears, which looks like "the cube collapses back to a
+    // box during push/pull" — the exact bug the user reported.
+    // The fix: directly call the modifier's preview path with the
+    // pushed cage so the refined mesh is the only thing the user
+    // sees, and write `cycoModeler.mesh` to the pushed cage so the
+    // selection overlay + future commits see the up-to-date
+    // geometry. This is the same destination the panel's listener
+    // would have reached, just done in one synchronous step with
+    // no cage-then-refined flicker.
+    const cm = obj.userData.cycoModeler;
+    cm.mesh = mesh.toJSON();
+    cm._suppressNextEditApplied = true;
+    if (window.__cyco?.objectPropertiesPanel?._onEditApplied) {
+      // Run the modifier preview path directly. This re-reads
+      // `cm.mesh` (now the pushed cage) and writes a refined
+      // geometry to `obj.geometry`. The re-entry guard in
+      // `_onEditApplied` (`source === '_previewEditableMesh'`)
+      // would otherwise re-fire from the preview path; we suppress
+      // the auto-dispatch by setting `_suppressNextEditApplied`
+      // and clearing it here.
+      try {
+        window.__cyco.objectPropertiesPanel._onEditApplied({
+          detail: { object: obj, source: '_applyPushPreview' },
+        });
+      } finally {
+        cm._suppressNextEditApplied = false;
+      }
+    } else {
+      // Fallback: panel not mounted, just apply the cage geometry.
+      this._applyEditableMesh(obj, mesh);
+    }
   }
 
   _deleteSelectedFaces() {
@@ -2764,6 +2885,87 @@ export class CycleModelerController {
     }));
     this._status('Selected polygon deleted');
     return true;
+  }
+
+  /**
+   * Non-destructive preview of an EditableMesh -- used by the
+   * Subdivision Surface modifier to swap `obj.geometry` to the refined
+   * mesh WITHOUT rewriting `cycoModeler.mesh`. The cage JSON in
+   * `cycoModeler.mesh` stays pointing at the original mesh so:
+   *   - the wireframe overlay continues to outline the un-subdivided
+   *     cage (Blender's "Display Cage" behaviour is implicit here);
+   *   - the polygon picker (`_faceIndicesFromHit`) keeps resolving
+   *     selection to "one face per box side" (the `faceIdMap` of the
+   *     subdivided `BufferGeometry` translates each refined triangle
+   *     back to its parent cage face index).
+   *
+   * Pass-through signature matches `_applyEditableMesh` so the modifier
+   * pipeline can use it as a drop-in.
+   */
+  _previewEditableMesh(obj, editableMesh, selectionMode = 'cage') {
+    if (!obj || !editableMesh) return;
+    // The faceIdMap decides what each triangle's `faceId` attribute
+    // resolves to in the polypicker. Picking the right map is what
+    // makes the modifier's "Display Cage" toggle behave like Blender:
+    //   - 'cage' (default, "Display Cage off"): every refined
+    //     triangle resolves to its parent cage face. Picking any
+    //     sub-quad selects the whole cage face -- the safe
+    //     push/pull-pickable behaviour.
+    //   - 'refined' ("Display Cage on"): each refined triangle is
+    //     its own selectable polygon on the smoothed surface. The
+    //     user can pick individual sub-quads across the smoothed
+    //     mesh (Blender's per-face-on-smoothed-mesh behaviour).
+    let faceIdMap;
+    if (selectionMode === 'refined') {
+      faceIdMap = editableMesh.faces.map((_, i) => i);
+    } else {
+      // Default: back to the cage face every refined child belongs to.
+      faceIdMap = editableMesh._sourceFace || null;
+    }
+    // [DEBUG] trace the modifier preview rebuild
+    if (this._previewEditableMeshCount == null) this._previewEditableMeshCount = 0;
+    this._previewEditableMeshCount += 1;
+    if (this._previewEditableMeshCount % 4 === 0) {
+      // eslint-disable-next-line no-console
+      console.log(
+        '[MODIFIER-PREVIEW]',
+        `count=${this._previewEditableMeshCount}`,
+        `mode=${selectionMode}`,
+        `srcFaces=${editableMesh.faces?.length ?? 0}`,
+        `verts=${editableMesh.vertices?.length ?? 0}`,
+        `srcFaceMap=${editableMesh._sourceFace?.length ?? 0}`,
+        `faceIdMapLen=${faceIdMap?.length ?? 0}`,
+      );
+    }
+    const newGeo = editableMesh.toBufferGeometry?.({ faceIdMap });
+    if (!newGeo) return;
+    const old = obj.geometry;
+    obj.geometry = newGeo;
+    old?.dispose?.();
+    obj.geometry.computeBoundingBox();
+    obj.geometry.computeBoundingSphere();
+    // Cache the refined mesh on the object so the polygon's picker
+    // can rebuild a full EditableMesh from it (needed for the
+    // refined-mode selection path that wants to enumerate selection
+    // groups within the refined mesh, not the cage).
+    const cm = obj.userData?.cycoModeler;
+    if (cm) {
+      cm._subdivisionRefinedMesh = editableMesh.toJSON();
+      cm._subdivisionSelectionMode = selectionMode;
+    }
+    // DO NOT touch cycoModeler.mesh -- that's the whole point of this
+    // method. We DO refresh the polygon highlight overlay because the
+    // wireframe rebuild relies on cycoModeler.mesh (intentional -- it
+    // should keep drawing the un-refined cage outline).
+    this._syncWireOverlay(obj);
+    // Notify any non-destructive modifier previews (e.g. Subdivision
+    // Surface) that the cage mesh has changed underneath the display
+    // mesh. The Object Properties panel listens for this event so
+    // push/pull during modifier preview re-evaluates the display
+    // mesh from the updated cage on the next frame.
+    window.dispatchEvent(new CustomEvent('cyco-edit-applied', {
+      detail: { object: obj, source: '_previewEditableMesh' },
+    }));
   }
 
   _applyEditableMesh(obj, editableMesh) {
@@ -2805,6 +3007,19 @@ export class CycleModelerController {
       }
     }
     this._syncWireOverlay(obj);
+    // If a non-destructive modifier (e.g. Subdivision Surface) is
+    // currently active on this object, the modifier preview must
+    // re-render against the freshly-mutated cage. We dispatch the
+    // same `cyco-edit-applied` event the modifier preview path
+    // uses so any active listener can re-evaluate its display
+    // mesh. This used to ONLY fire from `_previewEditableMesh`,
+    // which meant push/pull commits (which call the destructive
+    // `_applyEditableMesh`) silently left the modifier preview
+    // showing the wrong mesh -- the user-visible "the box
+    // collapses back to a cube after push/pull" bug.
+    window.dispatchEvent(new CustomEvent('cyco-edit-applied', {
+      detail: { object: obj, source: '_applyEditableMesh' },
+    }));
   }
 
   _syncWireOverlay(obj) {

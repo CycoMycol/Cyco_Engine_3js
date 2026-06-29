@@ -1,20 +1,4 @@
-<!doctype html><html><head><meta charset="utf-8"><style>
-body{margin:0;background:#0a0a0a;font-family:system-ui,sans-serif;color:#eee}
-.row{display:flex;gap:8px;padding:8px;flex-wrap:wrap}
-.cell{position:relative;width:380px;height:380px;background:#111;border:1px solid #333;border-radius:6px;overflow:hidden}
-.cell canvas{display:block;width:100%;height:100%}
-.label{position:absolute;left:8px;top:6px;font-size:13px;color:#0ff;z-index:2;text-shadow:0 1px 0 #000;font-weight:600}
-.sub{position:absolute;left:8px;top:24px;font-size:11px;color:#aaa;z-index:2;text-shadow:0 1px 0 #000}
-.bar{position:absolute;left:8px;right:8px;bottom:8px;height:6px;background:#222;border-radius:3px;z-index:2;overflow:hidden}
-.bar>div{height:100%;background:#0f0;width:0%;transition:width 0.1s}
-</style></head><body>
-<div class="row" id="row"></div>
-<script type="importmap">{"imports":{
-  "three":"file:///C:/Users/Cyco Myco/Documents/1_Game_Engines/Cyco_Engine_11/editor/libs/three/build/three.module.min.js"
-}}</script>
-<script type="module">
-import * as THREE from 'three';
-// import handled by harness
+import * as THREE from '../editor/libs/three/build/three.module.min.js';
 
 // Default segment counts for parametric primitives (cylinder/cone/sphere/etc.).
 // Kept small enough that the editable mesh stays manageable but large enough
@@ -420,22 +404,50 @@ function _subdivideSimpleOnce(mesh, options = {}) {
 // 4 new edge points of its parent quad's edges; each vertex point
 // connects to the new edge points of its incident edges.
 //
-// Output is stored as quad-paired triangles (one quad = 2 triangles
-// sharing a faceGroup) so the rest of the pipeline (toBufferGeometry,
-// polygon's picker, push/pull) continues to work without changes.
+// Output is stored as TRUE QUADS in the EditableMesh (4-vertex face
+// entries). Fan-triangulation into the GPU buffer happens exactly
+// once, in `toBufferGeometry`, so:
+//   - the wireframe overlay never shows the internal diagonal slash,
+//   - push/pull treats the whole quad as a single polygon,
+//   - the polygon's `faceId` attribute maps each generated triangle
+//     back to its parent cage face via `faceIdMap`.
 //
-// `_extractQuadPairs` rebuilds a quad topology from the source mesh:
-//   - Group consecutive triangle-pairs that share an edge AND a
-//     faceGroup.
-//   - Order the 4 corners into a CCW quad (so the algorithm can pick
-//     the right face-point edge connections).
-//   - Triangles that don't pair up stay as triangles and are
-//     subdivided with Loop on the second pass (so post-push/pull
-//     meshes with mixed topology still refine cleanly).
+// `_extractQuadPairs` rebuilds a quad topology from the source mesh
+// in two modes:
+//   1. Direct quads: the source mesh already stores 4-vertex faces
+//      (e.g. CC's own output, push/pull side walls). Each entry is
+//      taken as-is with corners ordered around the perimeter.
+//   2. Triangle-pairs: the source mesh stores 2-triangle quads (e.g.
+//      `boxFromBounds` primitives). Group consecutive pairs that
+//      share an edge AND a faceGroup, then order the 4 corners CCW.
+//   Triangles that don't pair up are skipped; the caller falls back
+//      to Loop subdivision for them.
 
 function _extractQuadPairs(mesh) {
-  // Map undirected edges to the triangles that share them.
   const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const triGroup = (fi) => (mesh.faceGroups ? mesh.faceGroups[fi] : fi);
+  const quads = [];
+  const usedAsQuad = new Set();
+
+  // Mode 1: walk every face. If it's already a 4-vertex face, take
+  // it directly. Push/pull side walls, prior CC passes, and any
+  // other 4-corner polygon all flow through this path.
+  for (let fi = 0; fi < mesh.faces.length; fi += 1) {
+    const f = mesh.faces[fi];
+    if (!f || f.length !== 4) continue;
+    quads.push({
+      corners: [f[0], f[1], f[2], f[3]],
+      faceGroup: triGroup(fi),
+      triIndices: [fi],
+    });
+    usedAsQuad.add(fi);
+  }
+  if (quads.length) return quads;
+
+  // Mode 2: triangle-pair extraction (the original CC input shape:
+  // a `boxFromBounds` mesh whose 6 logical quads are each stored as
+  // 2 fan-triangulated triangles sharing a faceGroup).
+  // Map undirected edges to the triangles that share them.
   const edgeToTris = new Map();
   for (let fi = 0; fi < mesh.faces.length; fi += 1) {
     const f = mesh.faces[fi];
@@ -451,9 +463,9 @@ function _extractQuadPairs(mesh) {
   // edge that is NOT shared with any other triangle in the same
   // faceGroup). The diagonal is the quad's internal triangulation
   // edge; finding the other triangle that shares the diagonal (and
-  // shares the faceGroup) gives us the pair.
+  // shares the faceGroup) gives us the pair. (`triGroup` is defined
+  // at the top of this function and shared with mode 1 above.)
   const triPartner = new Map(); // fi -> fi' (paired) or null
-  const triGroup = (fi) => (mesh.faceGroups ? mesh.faceGroups[fi] : fi);
   for (let fi = 0; fi < mesh.faces.length; fi += 1) {
     const f = mesh.faces[fi];
     if (!f || f.length !== 3) continue;
@@ -475,8 +487,9 @@ function _extractQuadPairs(mesh) {
   // Build quads. Walk faceGroups in order; each group with exactly 2
   // paired triangles contributes one quad. Groups with 0 pairs or 1
   // unpaired triangle are skipped here (Loop fallback handles them).
-  const seen = new Set();
-  const quads = [];
+  // (`quads` and `seen` are declared at the top of this function in
+  // mode 1 and reused here for mode 2.)
+  const seen = usedAsQuad; // alias: pairs-by-diagonal tracking
   for (let fi = 0; fi < mesh.faces.length; fi += 1) {
     if (seen.has(fi)) continue;
     const partner = triPartner.get(fi);
@@ -708,13 +721,19 @@ function _subdivideCatmullClarkOnce(mesh, options = {}) {
   }
 
   // ── 5. Emit child quads ───────────────────────────────────────────
-  // For each source quad (a, b, c, d) (CCW corners), the new quad
-  // topology is:
-  //   center quad : F_abc, F_bcd, F_cda, F_dab
-  //   4 corner quads: each (V_i, F_i_prev, F_center, F_i_next)
-  // We translate each quad into two triangles that share a
-  // faceGroup so the polygon's picker + the wireframe overlay
-  // both treat them as a single polygon.
+  // For each source quad (v0, v1, v2, v3) (CCW corners), the new
+  // quad topology is:
+  //   center quad : (e12, e23, e30, e01) — the 4 new edge points
+  //   4 corner quads: each (V_i, e_i_next, fCenter, e_i_prev)
+  // We keep the output as TRUE QUADS in the EditableMesh data
+  // model — NOT pre-fan-triangulated to triangle pairs. This
+  // matches the Wikipedia spec ("the new mesh will consist only
+  // of quadrilaterals") and what Blender's Subdivision Surface
+  // modifier does internally. Fan-triangulation happens exactly
+  // once, in `toBufferGeometry`, so the wireframe overlay never
+  // shows a diagonal slash through every sub-quad, push/pull acts
+  // on the whole quad as a single polygon, and the polygon's
+  // picker round-trip stays one-face-per-quad.
   //
   // Variable naming:
   //   - vN         : the 4 repositioned corner vertices of the quad
@@ -733,15 +752,13 @@ function _subdivideCatmullClarkOnce(mesh, options = {}) {
     const e30 = _ep(v3, v0);
     const fCenter = facePointOfQuad[qi];
     const grp = q.faceGroup;
-    // Center quad: f, e12, f, e23, f, e30, f, e01 -- wait, that's
-    // not right. The CENTER quad uses the 4 edge points (NOT the
-    // face point). The face point is a vertex, the 4 edge points
-    // are the corners of the center quad.
-    newFaces.push([fCenter, e12, e23, e30]);
+    // Center quad: 4 edge points form the corners. The face point
+    // is NOT a corner of the center quad (it's a vertex that the
+    // 4 corner quads use as a shared meeting point).
+    newFaces.push([e12, e23, e30, e01]);
     newGroups.push(options.uniqueFaceGroups ? newGroups.length : grp);
     // The 4 corner quads each use one original corner, two edge
-    // points, and the face point. Split each into 2 triangles so
-    // push/pull picks the whole corner cell as one polygon.
+    // points, and the face point.
     const childQuads = [
       [v0, e01, fCenter, e30],
       [v1, e12, fCenter, e01],
@@ -755,56 +772,27 @@ function _subdivideCatmullClarkOnce(mesh, options = {}) {
     for (let k = 0; k < 5; k += 1) sourceFacesPerCageFace.push(qi);
   }
 
-  // Convert quads into triangle pairs so the rest of the system
-  // (which is triangle-based) can render them. Each quad becomes
-  // two fan-triangulated triangles. The faceGroup ID is preserved
-  // on both triangles so they select together as one polygon.
-  // `uniqueFaceGroups` mode: every child triangle is its own
-  // polygon so the polygon's picker can resolve each sub-tri
-  // individually (the Display Cage ON behaviour).
-  const triFaces = [];
-  const triGroups = [];
-  const triSources = [];
-  const uniqueTriGroup = !!options.uniqueFaceGroups;
-  for (let i = 0; i < newFaces.length; i += 1) {
-    const q = newFaces[i];
-    const g = newGroups[i];
-    const srcFace = sourceFacesPerCageFace[i];
-    if (q.length === 4) {
-      triFaces.push([q[0], q[1], q[2]]);
-      triFaces.push([q[0], q[2], q[3]]);
-      if (uniqueTriGroup) {
-        // Each triangle of the quad gets its own group ID so the
-        // polygon's picker can resolve each child tri separately.
-        // Push the first tri's group (= current length), then the
-        // second tri's group (= new length after the first push).
-        triGroups.push(triGroups.length);
-        triGroups.push(triGroups.length);
-      } else {
-        triGroups.push(g, g);
-      }
-      triSources.push(srcFace, srcFace);
-    } else if (q.length === 3) {
-      triFaces.push(q);
-      triGroups.push(uniqueTriGroup ? triGroups.length : g);
-      triSources.push(srcFace);
-    } else {
-      // Fall back to fan-triangulation for higher-valence polygons.
-      for (let j = 1; j < q.length - 1; j += 1) {
-        triFaces.push([q[0], q[j], q[j + 1]]);
-        triGroups.push(uniqueTriGroup ? triGroups.length : g);
-        triSources.push(srcFace);
-      }
-    }
-  }
-
+  // Build the result. CC's output is QUADS (4-vertex faces), so
+  // `faces` holds 5 quad entries per source quad (1 center + 4
+  // corner) and `faceGroups` is the parallel array. `toBufferGeometry`
+  // will fan-triangulate at render time (existing behaviour; the
+  // `faceIdMap` arg resolves each generated triangle back to the
+  // source quad index so the polygon's picker still hits the right
+  // cage face). `uniqueFaceGroups` mode assigns a unique group to
+  // each child quad so the Display Cage ON toggle gives the user a
+  // per-quad pick target on the smoothed surface (Blender parity).
   const result = new EditableMesh({
     vertices: newVertices.map((v) => ({ x: v.x, y: v.y, z: v.z })),
-    faces: triFaces,
-    faceGroups: triGroups,
+    faces: newFaces,
+    faceGroups: newGroups,
     hasInwardPocket: mesh.hasInwardPocket,
   });
-  result._sourceFacesPerCageFace = triSources;
+  result._sourceFacesPerCageFace = sourceFacesPerCageFace;
+  // [SUBDIV-FIX: quads-only] CC output is quads (NOT pre-triangulated).
+  // The downstream code that previously assumed triangle pairs (the
+  // triangle-count assertions, the 6-quad-×-2-tri faceIdMap arithmetic
+  // in `_previewEditableMesh`) has been updated to count quads
+  // directly and let `toBufferGeometry` fan-triangulate at render time.
   return result;
 }
 
@@ -2243,213 +2231,3 @@ export class EditableMesh {
     return g;
   }
 }
-
-
-// View-aligned ribbon builder (matches controller, with back-face cull)
-function buildRibbon(edgesGeom, width, camera, parentWorld) {
-  const src = edgesGeom.attributes.position;
-  const segCount = (src.count / 2) | 0;
-  const positions = [];
-  const A = new THREE.Vector3();
-  const B = new THREE.Vector3();
-  const dir = new THREE.Vector3();
-  const dirW = new THREE.Vector3();
-  const viewDir = new THREE.Vector3();
-  const perpW = new THREE.Vector3();
-  const offsetLocal = new THREE.Vector3();
-  const invParent = new THREE.Matrix4().copy(parentWorld).invert();
-  const camPos = camera.position;
-  const segFaceNormals = edgesGeom.userData?._segFaceNormals;
-  const faceN = new THREE.Vector3();
-  const faceNW = new THREE.Vector3();
-  for (let i = 0; i < segCount; i++) {
-    A.fromBufferAttribute(src, i * 2);
-    B.fromBufferAttribute(src, i * 2 + 1);
-    dir.subVectors(B, A);
-    if (dir.lengthSq() < 1e-10) continue;
-    dir.normalize();
-    // Back-face cull: skip segment if every adjacent face normal
-    // points away from the camera.
-    if (segFaceNormals && segFaceNormals[i]) {
-      const normals = segFaceNormals[i];
-      const nCount = normals.length / 3;
-      if (nCount > 0) {
-        const midLocal = A.clone().add(B).multiplyScalar(0.5);
-        const midWorld = midLocal.applyMatrix4(parentWorld);
-        const camToMid = new THREE.Vector3().subVectors(camPos, midWorld).normalize();
-        let anyFront = false;
-        for (let k = 0; k < nCount; k++) {
-          faceN.set(normals[k * 3], normals[k * 3 + 1], normals[k * 3 + 2]);
-          faceNW.copy(faceN).transformDirection(parentWorld);
-          if (faceNW.dot(camToMid) > 0) { anyFront = true; break; }
-        }
-        if (!anyFront) continue;
-      }
-    }
-    dirW.copy(dir).transformDirection(parentWorld);
-    const midLocal = A.clone().add(B).multiplyScalar(0.5);
-    const midWorld = midLocal.applyMatrix4(parentWorld);
-    viewDir.subVectors(camPos, midWorld);
-    if (viewDir.lengthSq() < 1e-10) continue;
-    viewDir.normalize();
-    perpW.crossVectors(dirW, viewDir);
-    if (perpW.lengthSq() < 1e-6) continue;
-    perpW.normalize();
-    offsetLocal.copy(perpW).transformDirection(invParent).multiplyScalar(width);
-    const aL = A;
-    const aR = A.clone().add(offsetLocal);
-    const bL = B;
-    const bR = B.clone().add(offsetLocal);
-    positions.push(aL.x, aL.y, aL.z, aR.x, aR.y, aR.z, bR.x, bR.y, bR.z);
-    positions.push(aL.x, aL.y, aL.z, bR.x, bR.y, bR.z, bL.x, bL.y, bL.z);
-  }
-  const ribbon = new THREE.BufferGeometry();
-  ribbon.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  return ribbon;
-}
-
-const tests = [
-  { name: 'Sphere',  fn: () => EditableMesh.sphere(2, 2, 2, 24) },
-  { name: 'Torus',   fn: () => EditableMesh.torus(2, 0.6, 2, 24) },
-  { name: 'Cone',    fn: () => EditableMesh.cone(2, 4, 2, 24) },
-  { name: 'Cylinder', fn: () => EditableMesh.cylinder(2, 4, 2, 24) },
-  { name: 'Capsule', fn: () => EditableMesh.capsule(2, 4, 2, 24) },
-  { name: 'Box',     fn: () => EditableMesh.box(2, 2, 2) },
-];
-
-const row = document.getElementById('row');
-
-// 1 cell per primitive, each with its own context and an animated orbit
-for (const t of tests) {
-  const cell = document.createElement('div');
-  cell.className = 'cell';
-  const label = document.createElement('div');
-  label.className = 'label';
-  label.textContent = t.name;
-  const sub = document.createElement('div');
-  sub.className = 'sub';
-  cell.appendChild(label);
-  cell.appendChild(sub);
-  const bar = document.createElement('div');
-  bar.className = 'bar';
-  const barInner = document.createElement('div');
-  bar.appendChild(barInner);
-  cell.appendChild(bar);
-  row.appendChild(cell);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = 380; canvas.height = 380;
-  cell.appendChild(canvas);
-
-  const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0x111111);
-
-  const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 200);
-  camera.position.set(11, 5, 0);
-  camera.lookAt(0, 0, 0);
-  camera.updateMatrixWorld(true);
-
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(1);
-  renderer.setSize(380, 380, false);
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-  const editable = t.fn();
-  const geom = editable.toBufferGeometry();
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x88aacc, metalness: 0.05, roughness: 0.7, side: THREE.DoubleSide
-  });
-  const mesh = new THREE.Mesh(geom, mat);
-  scene.add(mesh);
-
-  // Build initial ribbon
-  const wireGeom = editable.toEdgesGeometry(1);
-  mesh.updateWorldMatrix(true, false);
-  const fov = camera.fov * Math.PI / 180;
-  const canvasH = 380;
-  const worldPerPx = (2 * Math.tan(fov / 2) * 11) / canvasH;
-  const ribbonWidthWorld = 4 * worldPerPx;
-  let ribbonGeom = buildRibbon(wireGeom, ribbonWidthWorld, camera, mesh.matrixWorld);
-  const pos = ribbonGeom.attributes.position;
-  const rv = new THREE.Vector3();
-  for (let i = 0; i < pos.count; i++) {
-    rv.set(pos.getX(i), pos.getY(i), pos.getZ(i));
-    rv.applyMatrix4(mesh.matrixWorld);
-    pos.setXYZ(i, rv.x, rv.y, rv.z);
-  }
-  pos.needsUpdate = true;
-  ribbonGeom.computeBoundingSphere();
-
-  const ribbonMat = new THREE.MeshBasicMaterial({
-    color: 0xff6a00,
-    side: THREE.DoubleSide,
-    transparent: true,
-    opacity: 0.85,
-    depthTest: false,  // x-ray: front-facing wireframe shows through mesh
-    depthWrite: false,
-  });
-  let ribbon = new THREE.Mesh(ribbonGeom, ribbonMat);
-  ribbon.renderOrder = 9999;
-  scene.add(ribbon);
-
-  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-  const dl = new THREE.DirectionalLight(0xffffff, 1.0);
-  dl.position.set(5, 8, 5);
-  scene.add(dl);
-
-  const grid = new THREE.GridHelper(12, 12, 0x444444, 0x222222);
-  grid.position.y = -3.5;
-  scene.add(grid);
-
-  // Animate: orbit camera around Y, full 360° in 6 seconds
-  const r = 11;
-  const el = 25 * Math.PI / 180;
-  let frame = 0;
-  const start = performance.now();
-  const totalFrames = 360;  // 6 sec at 60fps
-
-  function tick() {
-    const t2 = (performance.now() - start) / 6000;
-    const az = t2 * Math.PI * 2;
-    camera.position.set(
-      r * Math.cos(el) * Math.sin(az),
-      r * Math.sin(el),
-      r * Math.cos(el) * Math.cos(az)
-    );
-    camera.lookAt(0, 0, 0);
-    camera.updateMatrixWorld(true);
-
-    // Rebuild ribbon every frame (mirrors what the controller's
-    // onBeforeRender does).
-    const newGeom = buildRibbon(wireGeom, ribbonWidthWorld, camera, mesh.matrixWorld);
-    const newPos = newGeom.attributes.position;
-    for (let i = 0; i < newPos.count; i++) {
-      rv.set(newPos.getX(i), newPos.getY(i), newPos.getZ(i));
-      rv.applyMatrix4(mesh.matrixWorld);
-      newPos.setXYZ(i, rv.x, rv.y, rv.z);
-    }
-    newPos.needsUpdate = true;
-    newGeom.computeBoundingSphere();
-    const old = ribbon.geometry;
-    ribbon.geometry = newGeom;
-    if (old) old.dispose();
-
-    renderer.render(scene, camera);
-
-    frame++;
-    const pct = Math.min(100, (frame / totalFrames) * 100);
-    barInner.style.width = pct + '%';
-    sub.textContent = 'frame ' + frame + ' / ' + totalFrames + ' — ' + (t2 < 1 ? 'orbiting' : 'done');
-
-    if (frame < totalFrames) {
-      requestAnimationFrame(tick);
-    } else {
-      // Loop
-      frame = 0;
-      requestAnimationFrame(tick);
-    }
-  }
-  tick();
-}
-window.__ready = true;
-</script></body></html>

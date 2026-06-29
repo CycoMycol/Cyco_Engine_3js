@@ -5346,6 +5346,75 @@ input.ce-fp-search, input.ce-fp-search:-webkit-autofill {
 }
 .cyco-opp-step:hover { background: var(--ce-hover-bg); }
 
+/* ── Stepper row (Viewport / Render / Quality in Subdivision Surface) ───
+   Blender-style numeric input with two compact stepper grips
+   flanking a centred number field. The previous implementation
+   paired the number field with a horizontal <input type="range">
+   slider track; the slider's white thumb clashed with the Cyco
+   Engine theme, and the track itself was visually noisy in the
+   modifier panel. The stepper buttons below replace it.
+     [ − ]  [   num   ]  [ + ]
+   - The grips are square (18×18) and theme-coloured (no white
+     thumbs), with a subtle hover highlight and an "active"
+     state while held for the click-and-hold repeat.
+   - The number field is the same compact input used elsewhere
+     in the panel so the field reads consistently.
+*/
+.cyco-opp-stepper-row {
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.cyco-opp-stepper-stack {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.cyco-opp-step {
+  background: var(--ce-bg-raised, #2a2a2a);
+  border: 1px solid var(--ce-border, #444);
+  color: var(--ce-text-primary, #ddd);
+  cursor: pointer;
+  width: 18px;
+  height: 22px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex: 0 0 auto;
+  user-select: none;
+  transition: background 80ms ease, border-color 80ms ease;
+}
+.cyco-opp-step:hover {
+  background: var(--ce-hover-bg, #353535);
+  border-color: var(--ce-accent-purple, #9a64ff);
+}
+.cyco-opp-step:active {
+  background: var(--ce-accent-purple, #9a64ff);
+  border-color: var(--ce-accent-purple, #9a64ff);
+  color: #1a1a1a;
+}
+.cyco-opp-step-minus,
+.cyco-opp-step-plus {
+  font-family: inherit;
+}
+.cyco-opp-stepper-num {
+  flex: 1;
+  min-width: 36px;
+  text-align: center;
+  max-width: 80px;
+  cursor: ew-resize;
+}
+/* Hide the focus outline on the grips; the click feedback is
+   handled by `:active`. */
+.cyco-opp-step:focus { outline: none; }
+
+
 /* ── Icon toggle toolbar (Display Cage / Use Limit Surface) ───────────── */
 .cyco-opp-icon-toolbar {
   display: flex;

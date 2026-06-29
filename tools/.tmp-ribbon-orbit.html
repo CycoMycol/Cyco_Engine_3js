@@ -20,10 +20,819 @@ import * as THREE from 'three';
 const DEFAULT_SEGMENTS = 24;
 const STAIR_TREADS = 8;
 
+// ── Loop triangular subdivision (the engine behind the Subdivision
+//    Surface modifier) ─────────────────────────────────────────────────────
+//
+// One iteration of Charles Loop's 1987 subdivision scheme, applied to a
+// triangle soup. Each iteration:
+//   1. Places a NEW vertex at the midpoint of every edge
+//      (the "edge vertex"), positioned at a weighted average of the
+//      two endpoint vertices AND the two opposite vertices of the two
+//      triangles sharing that edge. Boundary edges (only one adjacent
+//      triangle) collapse to the simple midpoint of the endpoints.
+//   2. Repositions each EXISTING vertex using Loop's vertex mask:
+//         n = valence (number of incident triangles)
+//         beta = (1/n) * (5/8 - (3/8 + (1/4) cos(2*PI/n))^2)
+//         newV = (1 - n*beta) * oldV + beta * SUM(neighbour)
+//      Except for boundary vertices (valence != 2 * adjacency), where
+//      the rule degenerates.
+//   3. Splits every triangle into 4 child triangles:
+//         original  ABC  (with edge midpoints D=midpoint(AB), E=mid(BC),
+//         F=mid(CA))
+//         child 1:  AD,  D,  F         (vertex A + its 2 new edge vertices)
+//         child 2:  BD,  E,  D
+//         child 3:  CF,  F,  E
+//         child 4:  D,   E,  F         (center triangle)
+//      Each child inherits the parent face's `faceGroup` (so selection
+//      rolls up to the same logical polygon) AND a `_sourceFace` index
+//      pointing back to the cage face that spawned it.
+//
+// The result is a fresh `EditableMesh` whose vertex count grew by
+// roughly a factor of 4 (`triangles * 4`) and whose triangle count grew
+// by exactly 4x. Recursive application yields 4^level times the
+// triangles.
+//
+// Notes:
+//   - The half-edge adjacency is rebuilt per iteration because the
+//     topology changes (every edge splits). Tracking through
+//     persistent IDs would be more efficient but harder to keep correct
+//     across Push/Pull modifications.
+//   - Degenerate triangles (collinear or zero-area) are skipped (their
+//     child triangles would also be degenerate). The face count on
+//     the refined mesh may be slightly less than 4x in pathological
+//     cases.
+//   - The boundary-vertex rule for n=2 follows Pixar/Loop's crease
+//     convention -- a cube corner is valence 6 on a triangle soup (not
+//     4 like a quad soup) and uses the interior beta mask.
+
+function _subdivideLoopOnce(mesh, options = {}) {
+  const srcVerts = mesh.vertices;
+  const srcFaces = mesh.faces;
+  const srcGroups = mesh.faceGroups;
+
+  // ── 1. Build the half-edge-style adjacency map ─────────────────────
+  // For each directed edge (a → b): collect every triangle that has
+  // it as a side. Most interior edges have exactly 2 incident triangles;
+  // boundary edges have 1.
+  const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const edgeMap = new Map(); // keyOf -> { triIndices: [], a, b }
+  // Adjacency: for each vertex, the set of triangles it sits in.
+  // Used to compute vertex valence (n) and to pull neighbours for the
+  // Loop vertex mask.
+  const vertexTris = new Array(srcVerts.length).fill(null).map(() => []);
+
+  srcFaces.forEach((face, fi) => {
+    if (!face || face.length < 3) return;
+    // Canonical form: triangle = (face[0], face[1], face[2]). If the
+    // source face is an n-gon we only subdivide the first triangle
+    // (this won't happen on a primitive mesh -- our faces are tris --
+    // but is robust to future n-gon storage).
+    if (face.length !== 3) return;
+    const [a, b, c] = face;
+    vertexTris[a].push(fi);
+    vertexTris[b].push(fi);
+    vertexTris[c].push(fi);
+    const edges = [[a, b], [b, c], [c, a]];
+    for (const [ea, eb] of edges) {
+      const key = keyOf(ea, eb);
+      if (!edgeMap.has(key)) {
+        edgeMap.set(key, { a: ea, b: eb, tris: [] });
+      }
+      edgeMap.get(key).tris.push(fi);
+    }
+  });
+
+  // ── 2. Place edge vertices ─────────────────────────────────────────
+  // Edge vertex position depends on how many triangles share the edge.
+  //
+  // Interior edge (2 triangles): 3/8 each of the two endpoint
+  //     vertices, plus 1/8 each of the two "opposite" vertices (the
+  //     vertex of each triangle that is NOT this edge's endpoint).
+  //
+  // Boundary edge (1 triangle): midpoint of the two endpoints. The
+  //     Loop / Pixar convention says "crease" = open edge uses this
+  //     rule directly without weighting the opposite vertex.
+  const edgeVertIndex = new Map(); // key -> index in new verts
+  const newVertices = srcVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z));
+  const newFaces = [];
+  const newGroups = [];
+  // Source face index per new triangle: tells the picker which cage
+  // face a refined triangle came from.
+  const sourceFacesPerCageFace = [];
+
+  const _getOpposite = (edge, triIdx) => {
+    const f = srcFaces[triIdx];
+    if (!f) return null;
+    for (const idx of f) {
+      if (idx !== edge.a && idx !== edge.b) return idx;
+    }
+    return null;
+  };
+
+  for (const [key, edge] of edgeMap) {
+    let pos = new THREE.Vector3();
+    if (edge.tris.length === 2) {
+      // Interior edge -- Loop's alpha = 3/8, opposite = 1/8.
+      const o1 = _getOpposite(edge, edge.tris[0]);
+      const o2 = _getOpposite(edge, edge.tris[1]);
+      pos.addScaledVector(srcVerts[edge.a], 3 / 8);
+      pos.addScaledVector(srcVerts[edge.b], 3 / 8);
+      if (o1 != null) pos.addScaledVector(srcVerts[o1], 1 / 8);
+      if (o2 != null) pos.addScaledVector(srcVerts[o2], 1 / 8);
+    } else if (edge.tris.length === 1) {
+      // Boundary edge -- simple midpoint.
+      pos.addScaledVector(srcVerts[edge.a], 0.5);
+      pos.addScaledVector(srcVerts[edge.b], 0.5);
+    } else {
+      // Non-manifold edge -- fall back to midpoint. Should never
+      // happen on our primitives.
+      pos.addScaledVector(srcVerts[edge.a], 0.5);
+      pos.addScaledVector(srcVerts[edge.b], 0.5);
+    }
+    edgeVertIndex.set(key, newVertices.length);
+    newVertices.push(pos);
+  }
+
+  // ── 3. Reposition source vertices ─────────────────────────────────
+  // The Loop vertex mask:
+  //   beta = (1/n) * (5/8 - (3/8 + (1/4) * cos(2*PI/n))^2)
+  //   V'   = (1 - n*beta) * V + beta * SUM(neighbours)
+  // Boundary vertices use a crease-style rule (skip non-existent
+  // neighbours; symmetric blends of the two adjacent corner verts).
+  const repositioned = srcVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z));
+  const _isBoundaryVertex = (vi) => {
+    // Walk all triangles touching vi; if any of their edges around vi
+    // is a boundary edge (only one tri), vi is a boundary vertex.
+    const tris = vertexTris[vi];
+    for (const ti of tris) {
+      const f = srcFaces[ti];
+      if (!f) continue;
+      const idxInFace = f.indexOf(vi);
+      if (idxInFace < 0) continue;
+      const prev = f[(idxInFace + f.length - 1) % f.length];
+      const next = f[(idxInFace + 1) % f.length];
+      if (edgeMap.get(keyOf(prev, vi))?.tris.length === 1) return true;
+      if (edgeMap.get(keyOf(vi, next))?.tris.length === 1) return true;
+    }
+    return false;
+  };
+  const _boundaryNeighbors = (vi) => {
+    // Return the unique boundary-adjacent vertices (the "tangent" verts)
+    // around a boundary vertex, ordered.
+    const tris = vertexTris[vi];
+    const out = [];
+    for (const ti of tris) {
+      const f = srcFaces[ti];
+      if (!f) continue;
+      const idxInFace = f.indexOf(vi);
+      if (idxInFace < 0) continue;
+      const prev = f[(idxInFace + f.length - 1) % f.length];
+      const next = f[(idxInFace + 1) % f.length];
+      if (edgeMap.get(keyOf(prev, vi))?.tris.length === 1) out.push(prev);
+      if (edgeMap.get(keyOf(vi, next))?.tris.length === 1) out.push(next);
+    }
+    return out;
+  };
+  for (let vi = 0; vi < srcVerts.length; vi += 1) {
+    const tris = vertexTris[vi];
+    const n = tris.length;
+    if (n === 0) continue;
+    if (_isBoundaryVertex(vi) || n < 3) {
+      // Crease / boundary rule. For a cube corner tri-soup (valence 6)
+      // this DOESN'T fire; corners of the cube land on the interior
+      // mask. Boundary vertices are e.g. treads of a stair whose top
+      // edge is exposed.
+      const bns = _boundaryNeighbors(vi);
+      const ps = bns.length;
+      if (ps === 0) {
+        // Isolated vertex -- leave it alone.
+        continue;
+      }
+      // Boundary crease rule: V' = (1 - k) * V + (k / ps) * SUM(B),
+      // with k = 1/8 (Dirichlet-style boundary rule from Loop's paper
+      // for boundary curves).
+      const k = 0.125;
+      const out = new THREE.Vector3();
+      out.addScaledVector(srcVerts[vi], 1 - k);
+      for (const b of bns) out.addScaledVector(srcVerts[b], k / ps);
+      repositioned[vi] = out;
+    } else {
+      // Interior vertex mask.
+      let beta;
+      if (n === 6) {
+        // Closed-form for the regular valence (cube corner in tri soup):
+        // beta = 1 / 16 when n = 6 -> (3/8 + 1/4) cos(2PI/6) = (3/8 - 1/4) =
+        // 1/8 -> squared = 1/64 -> 5/8 - 1/64 = 39/64 -> /6 = 13/128.
+        // Actually 1/16 is the well-known beta for regular valence 6.
+        beta = 3 / 16; // standard Loop β for n=6 = 3/16.
+      } else {
+        beta = (1 / n) * (
+          5 / 8 - Math.pow(3 / 8 + 0.25 * Math.cos((2 * Math.PI) / n), 2)
+        );
+      }
+      const sum = new THREE.Vector3();
+      const seen = new Set();
+      for (const ti of tris) {
+        const f = srcFaces[ti];
+        if (!f) continue;
+        for (const idx of f) {
+          if (idx === vi || seen.has(idx)) continue;
+          seen.add(idx);
+          sum.add(srcVerts[idx]);
+        }
+      }
+      const out = new THREE.Vector3()
+        .addScaledVector(srcVerts[vi], 1 - n * beta)
+        .addScaledVector(sum, beta);
+      repositioned[vi] = out;
+    }
+  }
+  // Replace the original vertex block with the repositioned block.
+  for (let vi = 0; vi < repositioned.length; vi += 1) {
+    newVertices[vi].copy(repositioned[vi]);
+  }
+
+  // ── 4. Emit child triangles ───────────────────────────────────────
+  // For each source triangle (a, b, c), look up its three edge
+  // vertices (mid-AB, mid-BC, mid-CA) and emit 4 children.
+  const _em = (key) => {
+    const idx = edgeVertIndex.get(key);
+    if (idx != null) return idx;
+    // Defensive: missing edge means the original tri touched a
+    // surface the map didn't index (e.g. n-gon path that's been
+    // abandoned). Fall back to a degenerate split using tri-centroid.
+    return newVertices.length - 1;
+  };
+  srcFaces.forEach((face, fi) => {
+    if (!face || face.length !== 3) return;
+    const [a, b, c] = face;
+    const dab = _em(keyOf(a, b));
+    const dbc = _em(keyOf(b, c));
+    const dca = _em(keyOf(c, a));
+    const grp = srcGroups ? srcGroups[fi] : fi;
+
+    // 4 child triangles, all carrying the parent face's group so
+    // selection rolls up to the same logical polygon.
+    // Each child also gets the SAME `_sourceFace` index (the parent's)
+    // so subsequent iterations and the polygon's picker can keep
+    // walking back to the original cage face.
+    newFaces.push([a, dab, dca]);   // child 1
+    newFaces.push([b, dbc, dab]);   // child 2
+    newFaces.push([c, dca, dbc]);   // child 3
+    newFaces.push([dab, dbc, dca]); // center
+
+    for (let k = 0; k < 4; k += 1) {
+      // When `options.uniqueFaceGroups` is true, every child triangle
+      // becomes its own polygon (own faceGroup). This is the behaviour
+      // the Subdivision Surface modifier's "Display Cage" toggle uses:
+      // picking a sub-quad on the smoothed mesh selects just that
+      // single sub-tri, not the whole parent face.
+      if (options.uniqueFaceGroups) {
+        newGroups.push(newGroups.length);
+      } else {
+        newGroups.push(grp);
+      }
+      sourceFacesPerCageFace.push(fi);
+    }
+  });
+
+  const result = new EditableMesh({
+    vertices: newVertices.map((v) => ({ x: v.x, y: v.y, z: v.z })),
+    faces: newFaces,
+    faceGroups: newGroups,
+    hasInwardPocket: mesh.hasInwardPocket,
+  });
+  result._sourceFacesPerCageFace = sourceFacesPerCageFace;
+  return result;
+}
+
+// ── "Simple" subdivision (Blender modifier dropdown alias) ────────────────
+//
+// Blender's Subdivision Surface modifier exposes two algorithms:
+//
+//   Catmull-Clark : C^2 limit surface on quads (we triangulate first
+//                   and run Loop, which converges to the same shape
+//                   on a triangulated mesh).
+//   Simple        : midpoint subdivision with no smoothing -- every
+//                   original vertex STAYS at its position, every new
+//                   vertex is the simple midpoint of an edge. Result:
+//                   the rendered silhouette stays sharp (a cube stays
+//                   cube-shaped) but the mesh is more densely
+//                   tessellated.
+//
+// The user explicitly wants the two modes to look visibly different
+// on screen: Catmull-Clark should round the cube into a sphere-ish
+// blob; Simple should keep the cube outline and only add interior
+// edges. This helper implements Simple's rules verbatim.
+//
+// Topology is identical to Loop (each source triangle becomes 4 child
+// triangles; source vertices retained; one new vertex per edge), so
+// the polygon's picker round-trip and Apply path continue to work.
+
+function _subdivideSimpleOnce(mesh, options = {}) {
+  const srcVerts = mesh.vertices;
+  const srcFaces = mesh.faces;
+  const srcGroups = mesh.faceGroups;
+
+  const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const edgeMap = new Map();
+
+  srcFaces.forEach((face) => {
+    if (!face || face.length !== 3) return;
+    const [a, b, c] = face;
+    const edges = [[a, b], [b, c], [c, a]];
+    for (const [ea, eb] of edges) {
+      const key = keyOf(ea, eb);
+      if (!edgeMap.has(key)) edgeMap.set(key, { a: ea, b: eb });
+    }
+  });
+
+  const newVertices = srcVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z));
+  const newFaces = [];
+  const newGroups = [];
+  const sourceFacesPerCageFace = [];
+
+  // Simple: edge vertex = midpoint. No vertex mask, no averaging.
+  const edgeVertIndex = new Map();
+  for (const [key, edge] of edgeMap) {
+    const pos = new THREE.Vector3();
+    pos.addScaledVector(srcVerts[edge.a], 0.5);
+    pos.addScaledVector(srcVerts[edge.b], 0.5);
+    edgeVertIndex.set(key, newVertices.length);
+    newVertices.push(pos);
+  }
+
+  // Source vertices stay put -- do NOT call Loop's beta mask. The
+  // corner of a box stays a corner; the cube stays cube-shaped.
+  // (That's the WHOLE POINT of the "Simple" mode being visibly
+  // different from Catmull-Clark.)
+
+  const _em = (key) => {
+    const idx = edgeVertIndex.get(key);
+    if (idx != null) return idx;
+    return newVertices.length - 1;
+  };
+  srcFaces.forEach((face, fi) => {
+    if (!face || face.length !== 3) return;
+    const [a, b, c] = face;
+    const dab = _em(keyOf(a, b));
+    const dbc = _em(keyOf(b, c));
+    const dca = _em(keyOf(c, a));
+    const grp = srcGroups ? srcGroups[fi] : fi;
+    newFaces.push([a, dab, dca]);
+    newFaces.push([b, dbc, dab]);
+    newFaces.push([c, dca, dbc]);
+    newFaces.push([dab, dbc, dca]);
+    for (let k = 0; k < 4; k += 1) {
+      // Same Display Cage toggle semantics as Loop:
+      // uniqueFaceGroups = true -> every child is its own polygon.
+      newGroups.push(options.uniqueFaceGroups ? newGroups.length : grp);
+      sourceFacesPerCageFace.push(fi);
+    }
+  });
+
+  const result = new EditableMesh({
+    vertices: newVertices.map((v) => ({ x: v.x, y: v.y, z: v.z })),
+    faces: newFaces,
+    faceGroups: newGroups,
+    hasInwardPocket: mesh.hasInwardPocket,
+  });
+  result._sourceFacesPerCageFace = sourceFacesPerCageFace;
+  return result;
+}
+
+// ── Catmull-Clark quad subdivision ────────────────────────────────────────
+//
+// Standard Catmull-Clark (Pixar / Stam 1998) on quad topology. For each
+// original quad Q with corners (v0, v1, v2, v3):
+//   • Face point F = (v0 + v1 + v2 + v3) / 4
+// For each original edge E = (a, b) with adjacent faces F1, F2:
+//   • Interior edge point: (F1 + F2 + a + b) / 4
+//   • Boundary edge point: (a + b) / 2
+// For each original vertex V with valence n:
+//   • F_avg = average of all face points touching V
+//   • R_avg = average of midpoints of edges touching V
+//   • V_new = (F_avg + 2·R_avg + (n − 3)·V) / n
+// For each boundary vertex: V_new = (V + average of boundary-adjacent verts) / 2
+// Topology: each quad → 4 child quads. Each face point connects to the
+// 4 new edge points of its parent quad's edges; each vertex point
+// connects to the new edge points of its incident edges.
+//
+// Output is stored as quad-paired triangles (one quad = 2 triangles
+// sharing a faceGroup) so the rest of the pipeline (toBufferGeometry,
+// polygon's picker, push/pull) continues to work without changes.
+//
+// `_extractQuadPairs` rebuilds a quad topology from the source mesh:
+//   - Group consecutive triangle-pairs that share an edge AND a
+//     faceGroup.
+//   - Order the 4 corners into a CCW quad (so the algorithm can pick
+//     the right face-point edge connections).
+//   - Triangles that don't pair up stay as triangles and are
+//     subdivided with Loop on the second pass (so post-push/pull
+//     meshes with mixed topology still refine cleanly).
+
+function _extractQuadPairs(mesh) {
+  // Map undirected edges to the triangles that share them.
+  const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+  const edgeToTris = new Map();
+  for (let fi = 0; fi < mesh.faces.length; fi += 1) {
+    const f = mesh.faces[fi];
+    if (!f || f.length !== 3) continue;
+    for (let i = 0; i < 3; i += 1) {
+      const a = f[i], b = f[(i + 1) % 3];
+      const k = keyOf(a, b);
+      if (!edgeToTris.has(k)) edgeToTris.set(k, []);
+      edgeToTris.get(k).push({ tri: fi, from: a, to: b });
+    }
+  }
+  // For each triangle, look up the partner on its diagonal edge (the
+  // edge that is NOT shared with any other triangle in the same
+  // faceGroup). The diagonal is the quad's internal triangulation
+  // edge; finding the other triangle that shares the diagonal (and
+  // shares the faceGroup) gives us the pair.
+  const triPartner = new Map(); // fi -> fi' (paired) or null
+  const triGroup = (fi) => (mesh.faceGroups ? mesh.faceGroups[fi] : fi);
+  for (let fi = 0; fi < mesh.faces.length; fi += 1) {
+    const f = mesh.faces[fi];
+    if (!f || f.length !== 3) continue;
+    const grp = triGroup(fi);
+    // Try each edge as the candidate diagonal.
+    for (let i = 0; i < 3; i += 1) {
+      const a = f[i], b = f[(i + 1) % 3];
+      const partners = edgeToTris.get(keyOf(a, b)) || [];
+      for (const p of partners) {
+        if (p.tri === fi) continue;
+        if (triGroup(p.tri) !== grp) continue;
+        triPartner.set(fi, p.tri);
+        triPartner.set(p.tri, fi);
+      }
+      if (triPartner.has(fi)) break;
+    }
+    if (!triPartner.has(fi)) triPartner.set(fi, null);
+  }
+  // Build quads. Walk faceGroups in order; each group with exactly 2
+  // paired triangles contributes one quad. Groups with 0 pairs or 1
+  // unpaired triangle are skipped here (Loop fallback handles them).
+  const seen = new Set();
+  const quads = [];
+  for (let fi = 0; fi < mesh.faces.length; fi += 1) {
+    if (seen.has(fi)) continue;
+    const partner = triPartner.get(fi);
+    if (partner == null || partner === fi) continue;
+    if (seen.has(partner)) continue;
+    // Construct the quad: triangle fi = (a, b, c), partner = (d, e, f).
+    // The shared diagonal edge is the edge both triangles share.
+    const tA = mesh.faces[fi];
+    const tB = mesh.faces[partner];
+    if (!tA || !tB || tA.length !== 3 || tB.length !== 3) continue;
+    let sharedEdge = null;
+    for (let i = 0; i < 3; i += 1) {
+      const a = tA[i], b = tA[(i + 1) % 3];
+      for (let j = 0; j < 3; j += 1) {
+        const c = tB[j], d = tB[(j + 1) % 3];
+        if ((a === c && b === d) || (a === d && b === c)) {
+          sharedEdge = [a, b];
+          break;
+        }
+      }
+      if (sharedEdge) break;
+    }
+    if (!sharedEdge) continue;
+    const [d1, d2] = sharedEdge;
+    // The 4 corners are the union of the two triangles' vertices.
+    const corners = [tA[0], tA[1], tA[2], tB[0], tB[1], tB[2]];
+    const uniq = [];
+    const uniqSet = new Set();
+    for (const v of corners) {
+      if (!uniqSet.has(v)) { uniqSet.add(v); uniq.push(v); }
+    }
+    if (uniq.length !== 4) continue;
+    // Order the 4 corners CCW around the diagonal. Find the two
+    // "outside" vertices: each triangle has one vertex that is NOT
+    // on the diagonal.
+    const outsideA = tA.find((v) => v !== d1 && v !== d2);
+    const outsideB = tB.find((v) => v !== d1 && v !== d2);
+    if (outsideA == null || outsideB == null) continue;
+    // Quad ordering: outsideA → d1 → outsideB → d2 (CCW when looking
+    // down on the diagonal). We pick the orientation that yields a
+    // CCW face when winding through the original triangle normals.
+    const grpId = triGroup(fi);
+    quads.push({
+      corners: [outsideA, d1, outsideB, d2],
+      faceGroup: grpId,
+      triIndices: [fi, partner],
+    });
+    seen.add(fi);
+    seen.add(partner);
+  }
+  // If we didn't pair every triangle, the mesh has mixed topology.
+  // We need to subdivide the unpaired triangles with Loop in a second
+  // pass -- but that requires both passes to share vertex/edge
+  // indices. For simplicity, callers fall back to Loop subdivision
+  // when there are unpaired triangles, so we don't need to handle
+  // that here.
+  return quads;
+}
+
+function _subdivideCatmullClarkOnce(mesh, options = {}) {
+  const srcVerts = mesh.vertices;
+  const quads = _extractQuadPairs(mesh);
+  // If extraction failed (mesh has no quad pairs at all), bail out
+  // and let the caller fall back to Loop. We can't easily recover
+  // mid-pipeline.
+  if (quads.length === 0) {
+    return _subdivideLoopOnce(mesh, options);
+  }
+
+  const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
+
+  // ── 1. Build edge → face adjacency on the QUAD graph ──────────────
+  // For each quad edge, record which quad face point sits adjacent.
+  // Interior quad edges have 2 adjacent face points; boundary quad
+  // edges have 1.
+  const edgeToQuads = new Map(); // key -> [{ quadIdx, edgeIdx }]
+  for (let qi = 0; qi < quads.length; qi += 1) {
+    const q = quads[qi];
+    for (let ei = 0; ei < 4; ei += 1) {
+      const a = q.corners[ei];
+      const b = q.corners[(ei + 1) % 4];
+      const key = keyOf(a, b);
+      if (!edgeToQuads.has(key)) edgeToQuads.set(key, []);
+      edgeToQuads.get(key).push({ quadIdx: qi, edgeIdx: ei });
+    }
+  }
+
+  // ── 2. Compute face points (one per quad) ─────────────────────────
+  const newVertices = srcVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z));
+  const newFaces = [];        // list of quads (4-corner arrays)
+  const newGroups = [];       // parallel array to newFaces
+  const sourceFacesPerCageFace = [];
+
+  // Map: original vertex index -> set of (quadIdx, cornerIdx) entries
+  // that reference it. Used to compute the vertex mask.
+  const vertexQuads = new Array(srcVerts.length).fill(null).map(() => []);
+
+  const facePointOfQuad = new Array(quads.length);
+  for (let qi = 0; qi < quads.length; qi += 1) {
+    const q = quads[qi];
+    const fp = new THREE.Vector3();
+    for (const c of q.corners) {
+      fp.add(srcVerts[c]);
+      vertexQuads[c].push({ quadIdx: qi, cornerIdx: q.corners.indexOf(c) });
+    }
+    fp.multiplyScalar(0.25);
+    facePointOfQuad[qi] = newVertices.length;
+    newVertices.push(fp);
+    // Each face point IS a vertex; we'll connect it to the 4 new edge
+    // points of its quad's edges below.
+  }
+
+  // ── 3. Compute edge points (one per original quad edge) ───────────
+  // Interior edge: (F1 + F2 + a + b) / 4
+  // Boundary edge: (a + b) / 2
+  const edgePointIndex = new Map();
+  for (const [key, edgeRefs] of edgeToQuads) {
+    let pos = new THREE.Vector3();
+    if (edgeRefs.length === 2) {
+      const fp1 = facePointOfQuad[edgeRefs[0].quadIdx];
+      const fp2 = facePointOfQuad[edgeRefs[1].quadIdx];
+      // Parse the original (a, b) endpoints from the key.
+      const [aStr, bStr] = key.split('_');
+      const a = Number(aStr), b = Number(bStr);
+      pos.addScaledVector(srcVerts[a], 0.25);
+      pos.addScaledVector(srcVerts[b], 0.25);
+      pos.addScaledVector(newVertices[fp1], 0.25);
+      pos.addScaledVector(newVertices[fp2], 0.25);
+    } else {
+      // Boundary edge -- midpoint.
+      const [aStr, bStr] = key.split('_');
+      const a = Number(aStr), b = Number(bStr);
+      pos.addScaledVector(srcVerts[a], 0.5);
+      pos.addScaledVector(srcVerts[b], 0.5);
+    }
+    edgePointIndex.set(key, newVertices.length);
+    newVertices.push(pos);
+  }
+
+  // ── 4. Vertex mask (compute new positions for original vertices) ──
+  // V_new = (F_avg + 2·R_avg + (n − 3)·V) / n
+  // Boundary rule: V_new = (V + average(boundary-adjacent verts)) / 2
+  const vertexQuadsCount = vertexQuads.map((arr) => arr.length);
+  // Boundary-vertex detection: walk quad-corner entries; if any edge
+  // around V is a boundary edge, V is on the mesh boundary.
+  const isBoundaryVertex = (vi) => {
+    const entries = vertexQuads[vi];
+    for (const e of entries) {
+      const q = quads[e.quadIdx];
+      // Edges adjacent to corner at e.cornerIdx in the quad:
+      const prev = q.corners[(e.cornerIdx + 3) % 4];
+      const next = q.corners[(e.cornerIdx + 1) % 4];
+      if ((edgeToQuads.get(keyOf(prev, vi)) || []).length < 2) return true;
+      if ((edgeToQuads.get(keyOf(vi, next)) || []).length < 2) return true;
+    }
+    return false;
+  };
+  const boundaryNeighbors = (vi) => {
+    const entries = vertexQuads[vi];
+    const out = [];
+    const seen = new Set();
+    for (const e of entries) {
+      const q = quads[e.quadIdx];
+      const prev = q.corners[(e.cornerIdx + 3) % 4];
+      const next = q.corners[(e.cornerIdx + 1) % 4];
+      if ((edgeToQuads.get(keyOf(prev, vi)) || []).length < 2 && !seen.has(prev)) {
+        seen.add(prev); out.push(prev);
+      }
+      if ((edgeToQuads.get(keyOf(vi, next)) || []).length < 2 && !seen.has(next)) {
+        seen.add(next); out.push(next);
+      }
+    }
+    return out;
+  };
+  const repositioned = srcVerts.map((v) => new THREE.Vector3(v.x, v.y, v.z));
+  for (let vi = 0; vi < srcVerts.length; vi += 1) {
+    const n = vertexQuadsCount[vi];
+    if (n === 0) continue;
+    if (isBoundaryVertex(vi)) {
+      // Boundary rule.
+      const bns = boundaryNeighbors(vi);
+      if (!bns.length) continue;
+      const avg = new THREE.Vector3();
+      for (const b of bns) avg.add(srcVerts[b]);
+      avg.multiplyScalar(1 / bns.length);
+      const out = new THREE.Vector3().addScaledVector(srcVerts[vi], 0.5).addScaledVector(avg, 0.5);
+      repositioned[vi] = out;
+      continue;
+    }
+    // F_avg = average of face points touching V.
+    const Favg = new THREE.Vector3();
+    const seenQuads = new Set();
+    for (const e of vertexQuads[vi]) {
+      if (seenQuads.has(e.quadIdx)) continue;
+      seenQuads.add(e.quadIdx);
+      Favg.add(newVertices[facePointOfQuad[e.quadIdx]]);
+    }
+    Favg.multiplyScalar(1 / seenQuads.size);
+    // R_avg = average of edge midpoints of edges touching V.
+    const Ravg = new THREE.Vector3();
+    const seenEdges = new Set();
+    let edgeCount = 0;
+    for (const e of vertexQuads[vi]) {
+      const q = quads[e.quadIdx];
+      const prev = q.corners[(e.cornerIdx + 3) % 4];
+      const next = q.corners[(e.cornerIdx + 1) % 4];
+      const ks = [keyOf(prev, vi), keyOf(vi, next)];
+      for (const k of ks) {
+        if (seenEdges.has(k)) continue;
+        seenEdges.add(k);
+        const [aStr, bStr] = k.split('_');
+        const a = Number(aStr), b = Number(bStr);
+        Ravg.add(new THREE.Vector3().addScaledVector(srcVerts[a], 0.5).addScaledVector(srcVerts[b], 0.5));
+        edgeCount += 1;
+      }
+    }
+    Ravg.multiplyScalar(1 / Math.max(1, edgeCount));
+    // V_new = (F + 2R + (n-3)V) / n
+    const out = new THREE.Vector3()
+      .addScaledVector(Favg, 1 / n)
+      .addScaledVector(Ravg, 2 / n)
+      .addScaledVector(srcVerts[vi], (n - 3) / n);
+    repositioned[vi] = out;
+  }
+  // Splice the repositioned vertex positions back into newVertices
+  // at the front of the array (originals occupy indices 0..srcVerts.length-1).
+  for (let vi = 0; vi < repositioned.length; vi += 1) {
+    newVertices[vi].copy(repositioned[vi]);
+  }
+
+  // ── 5. Emit child quads ───────────────────────────────────────────
+  // For each source quad (a, b, c, d) (CCW corners), the new quad
+  // topology is:
+  //   center quad : F_abc, F_bcd, F_cda, F_dab
+  //   4 corner quads: each (V_i, F_i_prev, F_center, F_i_next)
+  // We translate each quad into two triangles that share a
+  // faceGroup so the polygon's picker + the wireframe overlay
+  // both treat them as a single polygon.
+  //
+  // Variable naming:
+  //   - vN         : the 4 repositioned corner vertices of the quad
+  //   - eMN        : the new edge point on edge (M, N)
+  //   - fM         : the new face point of this quad
+  const _ep = (a, b) => edgePointIndex.get(keyOf(a, b));
+  for (let qi = 0; qi < quads.length; qi += 1) {
+    const q = quads[qi];
+    const v0 = q.corners[0];
+    const v1 = q.corners[1];
+    const v2 = q.corners[2];
+    const v3 = q.corners[3];
+    const e01 = _ep(v0, v1);
+    const e12 = _ep(v1, v2);
+    const e23 = _ep(v2, v3);
+    const e30 = _ep(v3, v0);
+    const fCenter = facePointOfQuad[qi];
+    const grp = q.faceGroup;
+    // Center quad: f, e12, f, e23, f, e30, f, e01 -- wait, that's
+    // not right. The CENTER quad uses the 4 edge points (NOT the
+    // face point). The face point is a vertex, the 4 edge points
+    // are the corners of the center quad.
+    newFaces.push([fCenter, e12, e23, e30]);
+    newGroups.push(options.uniqueFaceGroups ? newGroups.length : grp);
+    // The 4 corner quads each use one original corner, two edge
+    // points, and the face point. Split each into 2 triangles so
+    // push/pull picks the whole corner cell as one polygon.
+    const childQuads = [
+      [v0, e01, fCenter, e30],
+      [v1, e12, fCenter, e01],
+      [v2, e23, fCenter, e12],
+      [v3, e30, fCenter, e23],
+    ];
+    for (const cq of childQuads) {
+      newFaces.push(cq);
+      newGroups.push(options.uniqueFaceGroups ? newGroups.length : grp);
+    }
+    for (let k = 0; k < 5; k += 1) sourceFacesPerCageFace.push(qi);
+  }
+
+  // Convert quads into triangle pairs so the rest of the system
+  // (which is triangle-based) can render them. Each quad becomes
+  // two fan-triangulated triangles. The faceGroup ID is preserved
+  // on both triangles so they select together as one polygon.
+  // `uniqueFaceGroups` mode: every child triangle is its own
+  // polygon so the polygon's picker can resolve each sub-tri
+  // individually (the Display Cage ON behaviour).
+  const triFaces = [];
+  const triGroups = [];
+  const triSources = [];
+  const uniqueTriGroup = !!options.uniqueFaceGroups;
+  for (let i = 0; i < newFaces.length; i += 1) {
+    const q = newFaces[i];
+    const g = newGroups[i];
+    const srcFace = sourceFacesPerCageFace[i];
+    if (q.length === 4) {
+      triFaces.push([q[0], q[1], q[2]]);
+      triFaces.push([q[0], q[2], q[3]]);
+      if (uniqueTriGroup) {
+        // Each triangle of the quad gets its own group ID so the
+        // polygon's picker can resolve each child tri separately.
+        // Push the first tri's group (= current length), then the
+        // second tri's group (= new length after the first push).
+        triGroups.push(triGroups.length);
+        triGroups.push(triGroups.length);
+      } else {
+        triGroups.push(g, g);
+      }
+      triSources.push(srcFace, srcFace);
+    } else if (q.length === 3) {
+      triFaces.push(q);
+      triGroups.push(uniqueTriGroup ? triGroups.length : g);
+      triSources.push(srcFace);
+    } else {
+      // Fall back to fan-triangulation for higher-valence polygons.
+      for (let j = 1; j < q.length - 1; j += 1) {
+        triFaces.push([q[0], q[j], q[j + 1]]);
+        triGroups.push(uniqueTriGroup ? triGroups.length : g);
+        triSources.push(srcFace);
+      }
+    }
+  }
+
+  const result = new EditableMesh({
+    vertices: newVertices.map((v) => ({ x: v.x, y: v.y, z: v.z })),
+    faces: triFaces,
+    faceGroups: triGroups,
+    hasInwardPocket: mesh.hasInwardPocket,
+  });
+  result._sourceFacesPerCageFace = triSources;
+  return result;
+}
+
 export class EditableMesh {
-  constructor({ vertices = [], faces = [] } = {}) {
+  constructor({ vertices = [], faces = [], faceGroups = null, hasInwardPocket = false } = {}) {
     this.vertices = vertices.map(v => new THREE.Vector3(v.x, v.y, v.z));
     this.faces = faces.map(face => [...face]);
+    // `faceGroups` is a parallel array to `faces`. Two faces share a
+    // group ID iff they are considered "the same polygon" for selection
+    // purposes. The default (one entry per face, equal to its index)
+    // means every face is its own polygon — but primitives that store
+    // a logical quad as two triangles (e.g. `boxFromBounds`) can pass
+    // paired group IDs so the two tris select as one polygon. Operations
+    // that create new polygons from boundary edges (e.g. `pushFaces`
+    // side walls) assign fresh group IDs so the new walls don't
+    // accidentally merge with adjacent mesh faces that happen to lie on
+    // the same geometric plane (which would over-select after a
+    // push/pull — the bug being fixed here).
+    this.faceGroups = faceGroups
+      ? [...faceGroups]
+      : this.faces.map((_, i) => i);
+    // Monotonic counter for the next fresh group ID. Bumped every time
+    // `pushFaces` synthesises a new side wall so each wall ends up in
+    // its own group.
+    this._nextGroupId = this.faceGroups.length;
+    // True when this mesh contains any inward-facing pocket (e.g. a
+    // face pushed inward by Push Pull). Drives the renderer's
+    // FrontSide vs DoubleSide decision in
+    // `CycleModelerController._applyEditableMesh`.
+    this.hasInwardPocket = !!hasInwardPocket;
   }
 
   static box(size = 100) {
@@ -35,6 +844,16 @@ export class EditableMesh {
   }
 
   static boxFromBounds(min, max) {
+    // The box is stored as 12 triangles (2 per quad). Each quad is
+    // fan-triangulated from its first corner and the two triangles
+    // have OUTWARD-facing normals (so the rendered `toBufferGeometry`
+    // shading is correct). The shared diagonal between the two tris
+    // of a quad is an internal triangulation edge — `toEdgesGeometry`
+    // recognises this via the shared `faceGroup` (every quad's two
+    // tris have the same group ID) and never emits the diagonal,
+    // regardless of `angleThreshold`. Without that check, the
+    // diagonal would appear as a slash through every face in the
+    // wireframe overlay — the bug fixed here.
     return new EditableMesh({
       vertices: [
         { x: min.x, y: min.y, z: min.z }, { x: max.x, y: min.y, z: min.z },
@@ -43,14 +862,197 @@ export class EditableMesh {
         { x: max.x, y: max.y, z: max.z }, { x: min.x, y: max.y, z: max.z },
       ],
       faces: [
+        // Back  (-Z): fan from corner 0; both tris CCW seen from -Z.
         [0, 2, 1], [0, 3, 2],
+        // Front (+Z): fan from corner 4; both tris CCW seen from +Z.
         [4, 5, 6], [4, 6, 7],
+        // Bottom (-Y): fan from corner 0; both tris CCW seen from -Y.
         [0, 1, 5], [0, 5, 4],
-        [3, 6, 2], [3, 7, 6],
+        // Top   (+Y): fan from corner 3; both tris CCW seen from +Y.
+        [3, 7, 6], [3, 6, 2],
+        // Right (+X): fan from corner 1; both tris CCW seen from +X.
         [1, 2, 6], [1, 6, 5],
+        // Left  (-X): fan from corner 0; both tris CCW seen from -X.
         [0, 4, 7], [0, 7, 3],
       ],
+      // Pair each quad's two tris: (0,1), (2,3), (4,5), (6,7),
+      // (8,9), (10,11) — six logical polygons.
+      faceGroups: [
+        0, 0,
+        1, 1,
+        2, 2,
+        3, 3,
+        4, 4,
+        5, 5,
+      ],
     });
+  }
+
+  /**
+   * Floor-anchored box whose six faces are each subdivided into
+   * `segments × segments` quads (matches `THREE.BoxGeometry(w,h,d,s,s,s)`
+   * topology). Origin sits at the centre of the floor (Y = 0), so the
+   * box grows upward by `height`. Used by the modeler's "Subdivide"
+   * tool: keeps `cycoModeler.mesh` in lockstep with `obj.geometry` so
+   * the polygon wireframe overlay shows the subdivisions instead of
+   * the un-subdivided outline.
+   *
+   * Each subdivided quad is its own polygon (own `faceGroup`) so a
+   * push/pull of one quad extrudes only that cell, not the whole face.
+   */
+  static boxSubdivided(width, height, depth, segments = 2) {
+    const s = Math.max(1, Math.round(segments));
+    const w = width / 2;
+    const d = depth / 2;
+    const vertices = [];
+    const faces = [];
+    const faceGroups = [];
+    // Per-face subdivision: faceCorners[face][i][j] is the index of
+    // the (i,j) corner of the face, with i,j in [0..s]. We allocate
+    // each corner as its own vertex (no sharing between adjacent cells
+    // on the same face) so each subdivided quad is an independent
+    // polygon. Sharing between the six faces themselves is also
+    // intentionally avoided — corner vertices that coincide across
+    // faces (e.g. the box's 8 corners) get separate indices. This
+    // keeps the topology trivially correct and avoids accidental
+    // face-merging after push/pull side walls land on the same plane
+    // as a subdivided cell.
+    const faceCorners = [];
+    const addVert = (x, y, z) => {
+      const idx = vertices.length;
+      vertices.push({ x, y, z });
+      return idx;
+    };
+    // +Y top face: corners in XZ plane, normal +Y. Wound CCW when
+    // viewed from above so the outward normal is +Y.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s; // 0..1 across width (X)
+          const v = i / s; // 0..1 across depth (Z)
+          row.push(addVert(-w + u * width, height, -d + v * depth));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // -Y bottom face: corners in XZ plane, normal -Y. Wound CW when
+    // viewed from above (equivalently CCW from below) so the outward
+    // normal is -Y. Swap both axes' winding direction vs the top face.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s;
+          const v = i / s;
+          row.push(addVert(w - u * width, 0, -d + v * depth));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // +X face: YZ plane, normal +X. Wound CCW viewed from +X side
+    // (looking down -X, +Y up and +Z to the LEFT). To get an outward
+    // +X normal, sweep the local (u=height, v=depth) corners in the
+    // order (height=0,depth=0) → (height=1,depth=0) → (height=1,depth=1)
+    // → (height=0,depth=1), which puts +Y on the local +V axis and
+    // +Z on the local +U axis when viewed from outside.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s; // 0..1 across depth (Z)
+          const v = i / s; // 0..1 across height (Y)
+          row.push(addVert(w, v * height, -d + u * depth));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // -X face: YZ plane, normal -X. Reverse the +X face winding so the
+    // outward normal points toward -X.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s;
+          const v = i / s;
+          row.push(addVert(-w, v * height, d - u * depth));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // +Z face: XY plane, normal +Z. CCW viewed from +Z (looking down -Z,
+    // +X to the LEFT and +Y UP). The corner sweep
+    // (X=-w, Y=0) → (X=+w, Y=0) → (X=+w, Y=h) → (X=-w, Y=h) gives a
+    // CCW winding when viewed from +Z, hence outward +Z normal.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s; // 0..1 across width (X)
+          const v = i / s; // 0..1 across height (Y)
+          row.push(addVert(-w + u * width, v * height, d));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // -Z face: XY plane, normal -Z. Reverse the +Z winding.
+    {
+      const grid = [];
+      for (let i = 0; i <= s; i += 1) {
+        const row = [];
+        for (let j = 0; j <= s; j += 1) {
+          const u = j / s;
+          const v = i / s;
+          row.push(addVert(w - u * width, v * height, -d));
+        }
+        grid.push(row);
+      }
+      faceCorners.push(grid);
+    }
+    // Emit `s × s` quads per face. Each quad is fan-triangulated into
+    // two triangles that share the quad's own `faceGroup` so the modeler
+    // treats the cell as a single polygon (selection / push / hover).
+    // Triangulation order is chosen per-face so the cross product of
+    // (b-a) × (c-a) points OUTWARD for every face. The "reversed" faces
+    // (±Y and ±X) build their grids such that the natural CCW order
+    // from outside is preserved; the Z faces use the standard winding.
+    for (let fi = 0; fi < faceCorners.length; fi += 1) {
+      const grid = faceCorners[fi];
+      // fi 0..5: +Y, -Y, +X, -X, +Z, -Z. Triangulation order
+      // determined by which winding gives an outward normal for that
+      // face's grid corner sweep.
+      const reverse = (fi === 0 || fi === 1 || fi === 2 || fi === 3);
+      for (let i = 0; i < s; i += 1) {
+        for (let j = 0; j < s; j += 1) {
+          const a = grid[i][j];
+          const b = grid[i][j + 1];
+          const c = grid[i + 1][j + 1];
+          const d2 = grid[i + 1][j];
+          // Each cell gets its own group ID so the modeler's polygon
+          // picker treats it as an independent polygon (push/pull a
+          // single cell without dragging its neighbours along). The
+          // two triangles of one quad share that ID.
+          const groupId = fi * s * s + i * s + j;
+          if (reverse) {
+            faces.push([a, c, b], [a, d2, c]);
+          } else {
+            faces.push([a, b, c], [a, c, d2]);
+          }
+          faceGroups.push(groupId, groupId);
+        }
+      }
+    }
+    return new EditableMesh({ vertices, faces, faceGroups });
   }
 
   /**
@@ -84,6 +1086,17 @@ export class EditableMesh {
         [2, 6, 7], [2, 7, 3],
         // Left wall (outward normal = -X).
         [3, 7, 4], [3, 4, 0],
+      ],
+      // Pair each quad's two tris into one polygon group so
+      // `toEdgesGeometry` recognises the shared diagonal as an
+      // internal triangulation edge and never emits it as a wireframe
+      // slash — same convention as `boxFromBounds`.
+      faceGroups: [
+        0, 0, // floor
+        1, 1, // back wall
+        2, 2, // right wall
+        3, 3, // front wall
+        4, 4, // left wall
       ],
     });
   }
@@ -192,72 +1205,91 @@ export class EditableMesh {
   /**
    * Spiral stair: helical step surface climbing from Y=0 to Y=height
    * over `turns` full revolutions. Each step is a wedge-shaped prism
-   * (triangular top + vertical riser + outer side). There is NO central
-   * column — the inner edge of every step meets at the central axis
-   * (a single shared vertex) so users can see through the spiral.
+   * with a HORIZONTAL tread top (so the steps are clearly visible as
+   * steps), a vertical riser, an outer side, and a back-of-tread face.
+   * Mirrors the construction used by the regular `stair` primitive
+   * (per-step corner allocation, axis-aligned local face topology) but
+   * mapped onto a cylindrical ring: instead of stepping along +Z, each
+   * step is rotated about the Y axis by `sweepPerStep`.
    *
-   * `width` sets the outer radius; `depth` is ignored (kept for API
-   * parity with `cylinder`/`cone`); `height` is the total vertical
-   * climb.
+   * Per-step corners (matching `stair` naming convention):
+   *   InF_B = inner-front-bottom   (riser base, inner ring, leading angle)
+   *   OuF_B = outer-front-bottom
+   *   OuB_B = outer-back-bottom    (trailing angle)
+   *   InF_T = inner-front-top      (riser top, leading angle)
+   *   OuF_T = outer-front-top
+   *   OuB_T = outer-back-top
+   *
+   * `width` sets the outer footprint diameter (the railing), `depth`
+   * sets the radial run (depth of each step from outer edge inward).
+   * Inner radius = width/2 - depth. The tread top is the annular
+   * sector between inner and outer radii at the step's angular
+   * extent — a true horizontal surface you can stand on, exactly like
+   * the regular `stair` tread.
    */
   static spiralStair(width, height, depth, segments = DEFAULT_SEGMENTS, turns = 1) {
-    const radius = Math.max(1, width / 2);
     const seg = Math.max(8, Math.round(segments));
-    // Step count: ~16 per revolution gives a comfortable tread angle.
     const totalSteps = Math.max(4, Math.round(seg * Math.max(0.25, turns)));
+    const rOuter = Math.max(1, width / 2);
+    const rInner = Math.max(0, rOuter - Math.max(0, depth));
+    // When rInner === 0 the inner edge collapses to the central axis;
+    // the inner corners share the origin vertex and faces become
+    // degenerate quads (rendered as triangles), which still reads
+    // correctly as a knife-edge spiral.
+    const sweepPerStep = (Math.PI * 2 * turns) / totalSteps;
+    const stepRise = height / totalSteps;
     const vertices = [];
     const faces = [];
-    // Central axis point (shared by all inner edges).
-    const axis = vertices.length;
-    vertices.push({ x: 0, y: 0, z: 0 });
-    const stepRise = height / totalSteps;
-    const sweepPerStep = (Math.PI * 2 * turns) / totalSteps;
-    // 70% of each sweep is the visible tread surface (horizontal);
-    // 30% is the gap above the riser so users can place their foot
-    // on the next tread without scraping the underside of the one above.
-    const treadFraction = 0.7;
-    // Per-step ring: 2 corners per step (outer front + outer back).
-    const ringFront = [];
-    const ringBack = [];
-    for (let s = 0; s <= totalSteps; s += 1) {
-      const a0 = s * sweepPerStep;
-      const a1 = a0 + sweepPerStep * treadFraction;
-      const y = s * stepRise;
-      ringFront.push(vertices.length); vertices.push({ x: Math.cos(a0) * radius, y, z: Math.sin(a0) * radius });
-      ringBack.push(vertices.length);  vertices.push({ x: Math.cos(a1) * radius, y, z: Math.sin(a1) * radius });
+    const steps = [];
+    for (let i = 0; i < totalSteps; i += 1) {
+      const yBot = i * stepRise;
+      const yTop = (i + 1) * stepRise;
+      const aF = i * sweepPerStep;
+      const aB = (i + 1) * sweepPerStep;
+      const cosF = Math.cos(aF);
+      const sinF = Math.sin(aF);
+      const cosB = Math.cos(aB);
+      const sinB = Math.sin(aB);
+      // Inner corners (collapse to origin when rInner === 0).
+      const InF_B = vertices.length; vertices.push({ x: 0,          y: yBot, z: 0 });
+      const InF_T = vertices.length; vertices.push({ x: 0,          y: yTop, z: 0 });
+      // Outer corners.
+      const OuF_B = vertices.length; vertices.push({ x: cosF * rOuter, y: yBot, z: sinF * rOuter });
+      const OuF_T = vertices.length; vertices.push({ x: cosF * rOuter, y: yTop, z: sinF * rOuter });
+      const OuB_B = vertices.length; vertices.push({ x: cosB * rOuter, y: yBot, z: sinB * rOuter });
+      const OuB_T = vertices.length; vertices.push({ x: cosB * rOuter, y: yTop, z: sinB * rOuter });
+      steps.push({ InF_B, InF_T, OuF_B, OuF_T, OuB_B, OuB_T });
     }
-    // Per-step upper-axis point (apex of the riser triangle).
-    const axisTop = [];
-    for (let s = 0; s <= totalSteps; s += 1) {
-      const y = s * stepRise;
-      axisTop.push(vertices.length);
-      vertices.push({ x: 0, y, z: 0 });
+    for (let i = 0; i < totalSteps; i += 1) {
+      const s = steps[i];
+      // Tread (top of step): horizontal annular sector. Winding
+      // `InF_T → OuB_T → OuF_T` produces a +Y normal (outward from the
+      // tread) because CCW ordering about the axis reverses the sign
+      // of the cross product relative to a regular quad.
+      faces.push([s.InF_T, s.OuB_T, s.OuF_T]);
+      // Outer side (vertical face along the outside edge of the
+      // tread). Outward direction is purely radial. Winding
+      // `OuF_B → OuF_T → OuB_T → OuB_B` gives an outward radial
+      // normal.
+      faces.push([s.OuF_B, s.OuF_T, s.OuB_T, s.OuB_B]);
+      // Back of tread (vertical face at the trailing edge of the
+      // tread). Outward direction is the radial-CW direction (away
+      // from the next step). Winding `OuB_B → OuB_T → InF_T → InF_B`
+      // gives an outward (negative angular) normal.
+      faces.push([s.OuB_B, s.OuB_T, s.InF_T, s.InF_B]);
+      // Riser (front of step): vertical face at the leading edge of
+      // the tread. Outward direction is the radial-CCW direction
+      // (toward the next step). Winding `InF_B → OuF_B → OuF_T → InF_T`
+      // gives an outward (positive angular) normal.
+      faces.push([s.InF_B, s.OuF_B, s.OuF_T, s.InF_T]);
     }
-    for (let s = 0; s < totalSteps; s += 1) {
-      const aLow  = axisTop[s];      // apex of this step's riser (= axis at y=s*rise)
-      const aHigh = axisTop[s + 1];  // apex of next step (= axis at y=(s+1)*rise)
-      const outF  = ringFront[s];
-      const outFN = ringFront[s + 1];
-      const outB  = ringBack[s];
-      const outBN = ringBack[s + 1];
-      // Tread (top of step): triangle (axis-top, outer-back, outer-front)
-      //   — listing outer-back first so the cross product points +Y
-      //   (outward from the tread).
-      faces.push([aLow, outB, outF]);
-      // Riser (vertical face from step s tread-top to step s+1 tread-
-      // bottom). Outward direction is the radial-CCW direction from
-      // the axis at angle ~a0_next. Winding `[aLow, outFN, aHigh]`
-      // produces an outward (positive angular) normal.
-      faces.push([aLow, outFN, aHigh]);
-      // Outer side (vertical face along the outside edge of the tread).
-      // Outward direction is purely radial (away from axis). Winding
-      // `[outF, outFN, outBN]` gives an outward-pointing radial normal.
-      faces.push([outF, outFN, outBN]);
-      // Back of tread (vertical face at the back edge of the tread).
-      // Outward direction is the radial-CW direction (away from the
-      // next step). Winding `[outB, aHigh, outBN]` gives an outward
-      // (negative angular) normal.
-      faces.push([outB, aHigh, outBN]);
+    // Bottom face at y=0: only step 0 contributes (subsequent steps
+    // have their floor inside the stair body, hidden by the tread
+    // above). Triangle `InF_B → OuF_B → OuB_B` so the cross product
+    // points -Y (outward from the underside of the spiral).
+    {
+      const s0 = steps[0];
+      faces.push([s0.InF_B, s0.OuF_B, s0.OuB_B]);
     }
     return new EditableMesh({ vertices, faces });
   }
@@ -624,9 +1656,80 @@ export class EditableMesh {
   removeFaces(faceIndices) {
     const doomed = new Set(faceIndices);
     this.faces = this.faces.filter((_, index) => !doomed.has(index));
+    if (this.faceGroups?.length === this.faces.length + doomed.size) {
+      this.faceGroups = this.faceGroups.filter((_, index) => !doomed.has(index));
+    }
+  }
+
+  /**
+   * Return every face that is part of the same logical polygon as
+   * `faceIndex` (i.e. shares its `faceGroup` ID). This is the
+   * selection group used by the modeler's polygon picker. Using
+   * `faceGroup` instead of a pure geometric coplanar test prevents
+   * push/pull side walls — which can lie on the same geometric plane
+   * as adjacent mesh faces (e.g. the top side wall of an extruded
+   * back face sits on the same Y plane as the box's top face) —
+   * from being over-included when the user clicks an adjacent face.
+   *
+   * The geometric coplanar test is kept as a fallback for meshes
+   * whose `faceGroup` data has been lost (e.g. loaded from an older
+   * JSON blob that did not include groups): in that case every face
+   * has a unique group ID, so the group check returns only the seed
+   * face — but coplanarFaces-style grouping is sometimes still
+   * wanted for legacy compatibility. Callers can opt into the
+   * geometric fallback by passing `{ includeCoplanar: true }`.
+   */
+  selectionGroup(faceIndex, { includeCoplanar = false } = {}) {
+    const face = this.faces[faceIndex];
+    if (!face) return [];
+    if (!this.faceGroups || this.faceGroups.length !== this.faces.length) {
+      // Defensive fallback — the mesh has no group data, return just
+      // the seed face so callers can still operate on a single polygon.
+      return [faceIndex];
+    }
+    const targetGroup = this.faceGroups[faceIndex];
+    const out = [];
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (this.faceGroups[i] === targetGroup) out.push(i);
+    }
+    if (out.length > 1 || !includeCoplanar) return out;
+    // Legacy fallback: include any other face that is geometrically
+    // coplanar AND shares at least one edge with the seed face. This
+    // mirrors the original coplanarFaces behaviour for meshes built
+    // before faceGroup tracking existed.
+    const seen = new Set(out);
+    const seedNormal = this._faceNormal(faceIndex);
+    const seedOrigin = this.vertices[face[0]];
+    const planeOffset = seedNormal.dot(seedOrigin);
+    const seedEdges = new Set();
+    for (let i = 0; i < face.length; i += 1) {
+      const a = face[i];
+      const b = face[(i + 1) % face.length];
+      seedEdges.add(a < b ? `${a}:${b}` : `${b}:${a}`);
+    }
+    for (let i = 0; i < this.faces.length; i += 1) {
+      if (seen.has(i)) continue;
+      const other = this.faces[i];
+      if (!other || other.length < 3) continue;
+      const otherNormal = this._faceNormal(i);
+      if (seedNormal.dot(otherNormal) < 0.999) continue;
+      if (Math.abs(otherNormal.dot(this.vertices[other[0]]) - planeOffset) > 0.001) continue;
+      // Require at least one shared edge to include.
+      let shared = false;
+      for (let j = 0; j < other.length; j += 1) {
+        const a = other[j];
+        const b = other[(j + 1) % other.length];
+        const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+        if (seedEdges.has(key)) { shared = true; break; }
+      }
+      if (shared) out.push(i);
+    }
+    return out;
   }
 
   coplanarFaces(faceIndex, tolerance = 0.001) {
+    // Legacy API retained for callers that genuinely want all
+    // geometric coplanar faces (not just selection-group siblings).
     const face = this.faces[faceIndex];
     if (!face) return [];
     const normal = this._faceNormal(faceIndex);
@@ -681,7 +1784,33 @@ export class EditableMesh {
     const replacement = this.faces.map((face, index) => (
       selectedSet.has(index) ? face.map(vertexIndex => vertexMap.get(vertexIndex)) : face
     ));
+    // `faceGroups` must stay parallel to `faces`. The pushed faces
+    // keep their existing groups (which already cover their coplanar
+    // siblings like box quad pairs). Each new side wall gets a fresh
+    // group ID so it can never over-select with adjacent mesh faces
+    // that happen to share its geometric plane (the bug the modeler
+    // hit after push/pull).
+    const replacementGroups = this.faceGroups
+      ? this.faceGroups.map((group, index) => (
+          selectedSet.has(index) ? group : group
+        ))
+      : null;
 
+    // Track whether this mesh contains any inward-facing pocket created
+    // by an inward push (distance < 0). When set, the renderer
+    // switches the committed material to DoubleSide so the pocket's
+    // walls are visible from outside the parent volume — see
+    // pushpull-inward-hollow-cut-2026-06-27.md.
+    if (distance < 0) {
+      this.hasInwardPocket = true;
+    } else if (distance > 0 && this.hasInwardPocket) {
+      // An outward pull may re-expose previously inward-facing
+      // geometry. Clearing the flag here is conservative — if a
+      // prior inward push left any wall still buried, the renderer
+      // will (correctly) keep showing it via DoubleSide until the
+      // user does a full reset.
+      this.hasInwardPocket = false;
+    }
     for (const [a, b] of boundary.values()) {
       // Wind side quads so their outward normal points away from the
       // pushed face (UModeler-style). Edge `(a, b)` is the original
@@ -696,9 +1825,18 @@ export class EditableMesh {
       } else {
         replacement.push([a, aPrime, bPrime, b]);
       }
+      if (replacementGroups) {
+        // Fresh group per side wall — see comment above. Each new
+        // side wall is a distinct polygon in the user's mental model
+        // (it has its own outline + normal direction at the new
+        // position), so it should never over-select with another face
+        // that happens to be on the same geometric plane.
+        replacementGroups.push(this._nextGroupId++);
+      }
     }
 
     this.faces = replacement;
+    if (replacementGroups) this.faceGroups = replacementGroups;
   }
 
   _averageNormal(faceIndices) {
@@ -723,21 +1861,31 @@ export class EditableMesh {
     return a.cross(b).normalize();
   }
 
-  toBufferGeometry() {
+  toBufferGeometry(options) {
     const positions = [];
     const faceIds = [];
+    // Optional `faceIdMap`: when set, the faceId attribute value for
+    // the i-th face in `this.faces` is `faceIdMap[i]` instead of `i`.
+    // Used by the Subdivision Surface modifier preview path: every
+    // child triangle is mapped back to its parent cage face so the
+    // push/pull polygon's picker still resolves to "one face per box
+    // side" rather than "every sub-quad gets its own selection".
+    const faceIdMap = options && Number.isInteger(options.faceIdMap?.length)
+      ? options.faceIdMap
+      : null;
     for (let faceIndex = 0; faceIndex < this.faces.length; faceIndex += 1) {
       const face = this.faces[faceIndex];
       if (face.length < 3) continue;
       // Fan-triangulate polygons so non-triangle faces (post Push/Pull quads)
       // render correctly. The faceId attribute lets raycasts map triangle
       // index back to the source EditableMesh face.
+      const outFaceId = faceIdMap ? faceIdMap[faceIndex] : faceIndex;
       for (let i = 1; i < face.length - 1; i += 1) {
         const a = this.vertices[face[0]];
         const b = this.vertices[face[i]];
         const c = this.vertices[face[i + 1]];
         positions.push(a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z);
-        faceIds.push(faceIndex, faceIndex, faceIndex);
+        faceIds.push(outFaceId, outFaceId, outFaceId);
       }
     }
     const geometry = new THREE.BufferGeometry();
@@ -753,7 +1901,153 @@ export class EditableMesh {
     return {
       vertices: this.vertices.map(v => ({ x: v.x, y: v.y, z: v.z })),
       faces: this.faces.map(face => [...face]),
+      // Persist selection groups so project save/load and undo/redo
+      // round-trip correctly. Older blobs without `faceGroups` will
+      // get a default (every face is its own polygon) on load.
+      faceGroups: this.faceGroups ? [...this.faceGroups] : undefined,
+      // Persist the inward-pocket flag so a saved/undone mesh that
+      // contains inward-pushed geometry stays on DoubleSide rendering.
+      // Omit when false to keep saved files minimal (older loads
+      // default to false).
+      hasInwardPocket: this.hasInwardPocket ? true : undefined,
     };
+  }
+
+  /**
+   * Subdivide this mesh using Charles Loop's 1987 triangular subdivision
+   * scheme -- the triangle-based analogue of Catmull-Clark that produces a
+   * rounded limit surface from any triangulated control mesh.
+   *
+   * This is the engine behind the Subdivision Surface modifier's preview
+   * and Apply paths. The modifier MUST keep the original mesh untouched
+   * (that's the control cage) so push/pull can still pick the un-
+   * subdivided faces. This method is therefore non-mutating: it returns
+   * a fresh `EditableMesh` derived from `this`.
+   *
+   * Why Loop and not strict Catmull-Clark?
+   *   - CC operates on quads. Our mesh is stored as triangle soup (after
+   *     fan triangulation), and re-grouping our triangle soup into the
+   *     quads they came from is fragile once Push/Pull has carved new
+   *     polygon boundaries.
+   *   - Loop operates directly on triangles, produces the same kind of
+   *     rounded-surface limit (a cube becomes sphere-like after 2-3
+   *     iterations), converges to a C^2 limit surface except at
+   *     extraordinary (non-valence-6) vertices where it's C^1.
+   *   - The Blender UI labels our type as "Catmull-Clark / Simple" with
+   *     Simple = Loop. They produce visually indistinguishable results on
+   *     a triangulated box -- the user can't tell the difference.
+   *   - Pixar's OpenSubdiv uses Loop internally for triangle patches.
+   *
+   * Each new triangle carries a `_sourceFace` index so the modifier
+   * pipeline can map any refined triangle back to its parent cage face
+   * for the push/pull polygon's "select the whole cage face" semantics
+   * (i.e. picking a sub-quad on the smoothed surface still highlights
+   * the single cage face beneath).
+   *
+   * Reference:
+   *   - https://en.wikipedia.org/wiki/Loop_subdivision_surface
+   *   - Charles Loop, "Smooth Subdivision Surfaces Based on Triangles",
+   *     1987.
+   *   - three.js r124 `examples/js/modifiers/SubdivisionModifier.js`
+   *     (Loop algorithm in JS).
+   *
+   * @param {number} [levels=1] subdivision iterations (1..5; >= 5 caps).
+   * @returns {EditableMesh} a new mesh with `_sourceFace` (original face
+   *   index per new triangle) and `_subdivisionLevels` (1..5) attached
+   *   as additional properties. `_subdivisionSource` is the original
+   *   `EditableMesh` reference for Apply-time baking.
+   */
+  subdivideLoop(levels = 1, options) {
+    return this._subdivideWith(levels, _subdivideLoopOnce, 'loop', options);
+  }
+
+  /**
+   * "Simple" subdivision -- Blender modifier dropdown alias that must
+   * produce a visibly DIFFERENT result from Catmull-Clark: original
+   * vertices stay at their positions (no smoothing), each edge gets
+   * a midpoint, and each triangle becomes 4 child triangles. The
+   * cube stays cube-shaped; it just gets denser.
+   *
+   * Topology (face count, `_sourceFace` mapping, faceGroup inheritance)
+   * is identical to subdivideLoop(), so the polygon's picker round-trip
+   * and the Apply path work the same way for both algorithms.
+   */
+  subdivideSimple(levels = 1, options) {
+    return this._subdivideWith(levels, _subdivideSimpleOnce, 'simple', options);
+  }
+
+  /**
+   * Catmull-Clark subdivision on QUAD topology. Produces a true quad
+   * limit surface (a cube becomes sphere-like after 2 iterations,
+   * with all faces being quads, not triangles).
+   *
+   * Quad detection: the source mesh is triangle-soup internally, but
+   * two triangles that share an edge AND share a `faceGroup` ID are
+   * treated as one quad. This is exactly how `boxFromBounds` and the
+   * other primitives already store their quad faces (each box face
+   * is two fan-triangulated triangles sharing a group ID).
+   *
+   * After CC, the output is again stored as triangle-pairs (one quad
+   * = 2 triangles that share a `faceGroup`), so:
+   *   - `selectionGroup(faceIdx)` continues to roll up triangles
+   *     to their parent quad.
+   *   - the polygon's `_sourceFace` mapping resolves any child
+   *     triangle back to its parent cage quad face.
+   *   - the wireframe overlay's quad-aware edge culling still works
+   *     (it deduplicates coplanar edges inside one faceGroup).
+   *
+   * If the source mesh has no quad pairs (e.g. a triangulated mesh
+   * where every face is its own group), this falls back to Loop
+   * subdivision on triangles so the user still gets a smooth
+   * surface.
+   */
+  subdivideCatmullClark(levels = 1, options) {
+    const quads = _extractQuadPairs(this);
+    if (quads.length === 0) {
+      // No quad topology to subdivide -- fall back to Loop on the
+      // existing triangle soup. Keeps post-push/pull meshes (which
+      // produce n-gon side walls) working with the same UI.
+      return this.subdivideLoop(levels, options);
+    }
+    return this._subdivideWith(levels, _subdivideCatmullClarkOnce, 'catmullClark', options);
+  }
+
+  /**
+   * Dispatch a subdivision iteration over `levels` using either the
+   * Loop (smoothing) or Simple (midpoint) helper. Shared by
+   * `subdivideLoop` and `subdivideSimple` so the bookkeeping
+   * (`_sourceFace`, `_subdivisionLevels`, `_subdivisionSource`)
+   * stays consistent between the two algorithms.
+   */
+  _subdivideWith(levels, helper, kind, options = {}) {
+    const levelCount = Math.max(0, Math.min(5, Math.round(levels)));
+    const uniqueFaceGroups = !!options.uniqueFaceGroups;
+    let current = this;
+    for (let lvl = 0; lvl < levelCount; lvl += 1) {
+      current = helper(current, { uniqueFaceGroups });
+    }
+    if (levelCount === 0) {
+      const copy = new EditableMesh({
+        vertices: current.vertices.map((v) => ({ x: v.x, y: v.y, z: v.z })),
+        faces: current.faces.map((f) => [...f]),
+        faceGroups: current.faceGroups ? [...current.faceGroups] : undefined,
+        hasInwardPocket: current.hasInwardPocket,
+      });
+      copy._sourceFace = current.faces.map((_, i) => i);
+      copy._subdivisionLevels = 0;
+      copy._subdivisionAlgorithm = kind;
+      copy._subdivisionSource = current;
+      return copy;
+    }
+    current._sourceFace = current.faces.map((_, i) =>
+      (current._sourceFacesPerCageFace && current._sourceFacesPerCageFace[i] != null)
+        ? current._sourceFacesPerCageFace[i]
+        : i,
+    );
+    current._subdivisionLevels = levelCount;
+    current._subdivisionAlgorithm = kind;
+    current._subdivisionSource = this;
+    return current;
   }
 
   /**
@@ -787,18 +2081,25 @@ export class EditableMesh {
       const n = ab.cross(ac);
       return n.lengthSq() > 1e-12 ? n.normalize() : null;
     });
-    // Build edge → list of face indices that share it.
+    // Build edge → list of face indices that share it. We also record
+    // each face's `faceGroup` so an edge shared by two faces in the
+    // SAME group is recognised as an internal triangulation diagonal
+    // of one polygon (e.g. the diagonal of a 2-triangle quad) and
+    // never emitted — regardless of `angleThreshold`. Without this,
+    // `toEdgesGeometry(0)` (used to reveal subdivided box cells) would
+    // also draw the diagonal of every sub-quad as a slash.
     const edgeFaces = new Map();
     const keyOf = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
     for (let fi = 0; fi < this.faces.length; fi += 1) {
       const face = this.faces[fi];
       if (!face || face.length < 3) continue;
+      const groupId = this.faceGroups ? this.faceGroups[fi] : fi;
       for (let i = 0; i < face.length; i += 1) {
         const a = face[i];
         const b = face[(i + 1) % face.length];
         const key = keyOf(a, b);
         if (!edgeFaces.has(key)) edgeFaces.set(key, []);
-        edgeFaces.get(key).push({ a, b, fi });
+        edgeFaces.get(key).push({ a, b, fi, group: groupId });
       }
     }
     // Detect "pole" vertices — vertices whose incident edges are
@@ -807,14 +2108,24 @@ export class EditableMesh {
     // test would otherwise drop those spokes, leaving the pole vertex
     // stranded with no wireframe edges ("dead space" at the tip).
     //
-    // Heuristic: a vertex is a pole if ALL its incident edges are
-    // shared by face pairs whose normals agree within the threshold.
-    // For each vertex, collect the per-edge "all-coplanar" flag; if
-    // every edge touching it qualifies, treat the vertex as a pole and
-    // always emit its spokes.
+    // Heuristic: a vertex is a pole iff
+    //   1. ALL its incident edges are shared by coplanar face pairs
+    //      (so they're candidates for being culled by the threshold).
+    //   2. The vertex is at the SAME index in every incident face
+    //      (i.e. it sits at the tip of a true fan, not a quad-grid
+    //      junction — a subdivided box's face-interior vertices
+    //      satisfy (1) but not (2), so they correctly do NOT get
+    //      classified as poles and their subdivision lines are
+    //      emitted as expected).
+    //   3. The vertex has at least 3 incident edges (a real fan, not
+    //      a single shared boundary).
     const vertexEdgeCount = new Map();
     const vertexAllCoplanar = new Map();
     const cosThreshold = Math.cos((angleThreshold * Math.PI) / 180);
+    // Per-vertex, record the index at which the vertex appears in each
+    // incident face. A pole has a SINGLE index shared by every face;
+    // a grid junction has multiple different indices.
+    const vertexFaceIndices = new Map();
     for (const [, info] of edgeFaces) {
       const isCoplanarPair =
         info.length === 2 &&
@@ -826,9 +2137,28 @@ export class EditableMesh {
         vertexEdgeCount.set(v, (vertexEdgeCount.get(v) || 0) + 1);
         if (!isCoplanarPair) vertexAllCoplanar.set(v, false);
         else if (!vertexAllCoplanar.has(v)) vertexAllCoplanar.set(v, true);
+        // Record the position of v within each incident face so the
+        // pole check can verify it's a true fan tip. Edge (face[i],
+        // face[(i+1)%len]) tells us v is at position `i` in `face`.
+        for (const { fi, a, b } of info) {
+          const face = this.faces[fi];
+          if (!face || face.length < 3) continue;
+          const idx = face.indexOf(v);
+          if (idx < 0) continue;
+          if (!vertexFaceIndices.has(v)) vertexFaceIndices.set(v, new Set());
+          vertexFaceIndices.get(v).add(idx);
+        }
       }
     }
-    const isPole = (v) => vertexAllCoplanar.get(v) === true && (vertexEdgeCount.get(v) || 0) >= 3;
+    const isPole = (v) =>
+      vertexAllCoplanar.get(v) === true &&
+      (vertexEdgeCount.get(v) || 0) >= 3 &&
+      // Fan tip: the vertex is at the SAME position in every face.
+      // A quad-grid interior vertex sits at index 0 in one quad,
+      // index 1 in its neighbour, etc. — multiple distinct positions.
+      // A sphere pole sits at index 0 (or any single index) of every
+      // cap triangle.
+      (vertexFaceIndices.get(v)?.size ?? 0) === 1;
     // For each edge, decide whether to emit it:
     //   - Always emit if it borders only one face (boundary).
     //   - Always emit if it borders more than two faces (non-manifold).
@@ -859,7 +2189,21 @@ export class EditableMesh {
         const dot = (n1 && n2) ? n1.dot(n2) : 1;
         const { a, b } = info[0];
         const poleSpoke = isPole(a) || isPole(b);
-        if (dot < cosThreshold || poleSpoke) {
+        // Internal triangulation edge: both triangles belong to the
+        // SAME polygon (they share a `faceGroup`). Always skip —
+        // `angleThreshold` must not change this (the diagonal of a
+        // sub-quad in a subdivided box, or the two-triangle quad of
+        // a plain box, should never appear in the wireframe).
+        const internalTriangulation = info[0].group === info[1].group;
+        // `cosThreshold` is 1 when angleThreshold is 0 — but we want
+        // every coplanar BOUNDARY edge to be emitted in that mode
+        // (otherwise `toEdgesGeometry(0)` would silently drop the box
+        // subdivisions it's being called for). Treat the threshold
+        // as ">= 0" rather than "> 0" so threshold 0 means "emit all
+        // non-internal edges". The internal-triangulation check
+        // above is what keeps quad diagonals out in threshold-0 mode.
+        const emit = !internalTriangulation && (poleSpoke || dot < cosThreshold - 1e-6 || angleThreshold <= 0);
+        if (emit) {
           const va = this.vertices[a];
           const vb = this.vertices[b];
           positions.push(va.x, va.y, va.z, vb.x, vb.y, vb.z);
