@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+﻿import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { LineSegments2 } from 'three/addons/lines/LineSegments2.js';
 import { LineSegmentsGeometry } from 'three/addons/lines/LineSegmentsGeometry.js';
@@ -37,7 +37,7 @@ export class CycleModelerController {
     this.frame = 'world';
     this.snapEnabled = false;
     this.wireMode = 'solid-wire';
-    // Visual style cache — mutated by ModelerSettings via setter hooks
+    // Visual style cache â€” mutated by ModelerSettings via setter hooks
     // below. Defaults mirror the factory defaults in ModelerSettings so
     // the modeler still renders correctly if settings aren't imported.
     // Hover style is per-mode (polygon/edge/vertex) so each mode can
@@ -53,7 +53,7 @@ export class CycleModelerController {
       glowColor:    0xffffff, glowWidth: 1, glowOpacity: 0.75,
       enabled: true,
     };
-    // Cached viewport size in screen pixels — pushed into every LineMaterial
+    // Cached viewport size in screen pixels â€” pushed into every LineMaterial
     // so linewidth renders correctly across resize / DPR changes.
     this._lineResolution = new THREE.Vector2(1, 1);
     this._onResize = this._onResize.bind(this);
@@ -69,7 +69,7 @@ export class CycleModelerController {
     // active and the tool is not push/pull / extrude-edge. Each
     // element (face/edge/vertex) whose screen-projected centroid
     // falls inside the marquee rect is appended to the object's
-    // `selectedFaces/Edges/Vertices` array — the multi-push-pull tool
+    // `selectedFaces/Edges/Vertices` array â€” the multi-push-pull tool
     // then extrudes all of them together as a single command.
     this._elemMarquee = null;
     // Persistent overlay for the currently-selected elements. Unlike
@@ -88,15 +88,15 @@ export class CycleModelerController {
     // / vertex). A bare click (no drag past threshold) replaces the
     // selection with the picked element; a drag sweeps the picker
     // along the cursor path and accumulates every distinct element
-    // the ray crosses — a free-form sweep-select, NOT a rectangular
+    // the ray crosses â€” a free-form sweep-select, NOT a rectangular
     // marquee. Shift / ctrl make the sweep additive (union instead
     // of replace).
     this._middlePick = null;
     // Picker policy toggles. Defaults match UModeler / Blender:
-    //   backfaceCull = true → pickers skip faces whose world normal
+    //   backfaceCull = true â†’ pickers skip faces whose world normal
     //     points away from the camera. The user can toggle this off
     //     from the toolbar "Backface Cull" button.
-    //   symmetryAxes = Set<'x'|'y'|'z'> → empty = off. Any non-empty
+    //   symmetryAxes = Set<'x'|'y'|'z'> â†’ empty = off. Any non-empty
     //     set mirrors the picked element across the listed world
     //     axes through the object's bounding-box centre. Mirrored
     //     elements are unioned into the same selection (and on a
@@ -118,6 +118,7 @@ export class CycleModelerController {
     this._onPointerMove = this._onPointerMove.bind(this);
     this._onPointerUp = this._onPointerUp.bind(this);
     this._onClick = this._onClick.bind(this);
+    this._onContextMenuCapture = this._onContextMenuCapture.bind(this);
     this._onBackfaceCullToggle = this._onBackfaceCullToggle.bind(this);
     this._onSymmetrySet = this._onSymmetrySet.bind(this);
 
@@ -136,10 +137,10 @@ export class CycleModelerController {
     setTimeout(() => this._attachCanvas(this.viewportEngine?.rendererManager?.renderer?.domElement), 0);
   }
 
-  // ── Picker-policy event handlers ──────────────────────────────────────
+  // â”€â”€ Picker-policy event handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Driven by the top-menu toolbar buttons. Both replace the
   // previous "3D Cursor" entry (a tool that set the 3D cursor's
-  // origin to the grid — superseded by snap-to-grid; the button
+  // origin to the grid â€” superseded by snap-to-grid; the button
   // was repurposed for backface-cull toggle, with symmetry as a
   // sibling dropdown). State is mirrored on `__cyco.cycleModeler`
   // so the toolbar can read it for active-class styling on next
@@ -207,7 +208,7 @@ export class CycleModelerController {
     });
   }
 
-  // ── Style setters (called by ModelerSettings.applyModelerSettingsToScene) ──
+  // â”€â”€ Style setters (called by ModelerSettings.applyModelerSettingsToScene) â”€â”€
   // Each setter mutates the cache, then walks the live scene to re-style any
   // existing overlays so changes show up immediately.
 
@@ -268,7 +269,7 @@ export class CycleModelerController {
   _setSelectionGizmoStyle({ outlineColor, outlineWidth, glowColor, glowWidth, glowOpacity, enabled }) {
     // Per user instruction, the engine's OutlinePass + primary shell +
     // glow are NEVER drawn in cycle-modeler mode (see
-    // applyModelerSettingsToScene — the engine outline is hidden
+    // applyModelerSettingsToScene â€” the engine outline is hidden
     // unconditionally whenever the modeler is active). So this setter
     // no longer drives any engine outline cache. The cached
     // `_selGizmoStyle` values are still kept around because the
@@ -309,10 +310,10 @@ export class CycleModelerController {
    * hidden in modeler mode.
    */
   _onSelectionChanged() {
-    // No-op — modeler handles selection visuals internally.
+    // No-op â€” modeler handles selection visuals internally.
   }
 
-  // ── Line2 resolution / resize ─────────────────────────────────────────
+  // â”€â”€ Line2 resolution / resize â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   _onResize(event) {
     const w = event?.detail?.width || 1;
@@ -529,6 +530,21 @@ export class CycleModelerController {
     this._attachCanvas(event.detail?.renderer?.domElement || this.viewportEngine?.rendererManager?.renderer?.domElement);
   }
 
+  /**
+   * Capture-phase listener for the canvas `contextmenu` event.
+   * When a right-click-drag just committed a multi push/pull,
+   * suppress the browser's auto context-menu so a real drag →
+   * release doesn't pop the menu. A bare right-click (no drag,
+   * no `_suppressNextContextMenu` flag) leaves the event alone so
+   * the viewport's own `contextmenu` listener can open it.
+   */
+  _onContextMenuCapture(event) {
+    if (!this._suppressNextContextMenu) return;
+    this._suppressNextContextMenu = false;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  }
+
   _attachCanvas(canvas) {
     if (this._canvas === canvas) return;
     if (this._canvas) {
@@ -536,6 +552,7 @@ export class CycleModelerController {
       this._canvas.removeEventListener('pointermove', this._onPointerMove, true);
       this._canvas.removeEventListener('pointerup', this._onPointerUp, true);
       this._canvas.removeEventListener('click', this._onClick, true);
+      this._canvas.removeEventListener('contextmenu', this._onContextMenuCapture, true);
     }
     this._canvas = canvas || null;
     if (this._canvas) {
@@ -543,6 +560,12 @@ export class CycleModelerController {
       this._canvas.addEventListener('pointermove', this._onPointerMove, true);
       this._canvas.addEventListener('pointerup', this._onPointerUp, true);
       this._canvas.addEventListener('click', this._onClick, true);
+      // Suppress the browser context-menu when the right button was
+      // used as a multi push/pull GESTURE (drag → release). A bare
+      // right-click (no drag, no prior `_faceDrag` commit) still
+      // opens the menu normally. Capture phase so we run before
+      // the viewport's own contextmenu listener at ViewportEngine.
+      this._canvas.addEventListener('contextmenu', this._onContextMenuCapture, true);
       // Seed the Line2 resolution cache from the canvas so the very
       // first LineMaterial we create (before any cyco-vp-resize fires)
       // still has correct screen-pixel width.
@@ -569,16 +592,32 @@ export class CycleModelerController {
   }
 
   _onPointerDown(event) {
-    // Middle (button 1) and right (button 2) clicks over a modeler
-    // object must NOT start an OrbitControls gesture. Middle = pan
-    // (the user wants pan disabled while the cursor starts on an
-    // object), right = orbit / context menu. Block the event in
-    // capture phase so OrbitControls (bubble-phase) never sees it.
-    // Pan/orbit that began OFF an object continues to be handled by
-    // the move-handler below — we only block the START here.
+    // Middle (button 1) clicks over a modeler object must NOT start
+    // an OrbitControls gesture (middle = pan). Right (button 2) is
+    // reserved for the viewport context menu BY DEFAULT, but when
+    // the cycle modeler has push/pull-style tool active AND a
+    // multi-selection exists, a right-click-drag becomes a
+    // multi-push/pull gesture that extrudes each selected polygon
+    // along its OWN face normal at the same world distance â€” the
+    // native context-menu still fires on a bare click (no drag).
     if (event.button === 1 || event.button === 2) {
       const hit = this._modelerHitFromEvent(event);
       if (hit?.object?.userData?.cycoModeler?.mesh && this.active) {
+        // Right-click-drag â†’ multi push/pull on the current selection.
+        // We only commit if the user actually drags past a small
+        // threshold on pointer-up; a no-drag right-click still
+        // bubbles to `contextmenu` and shows the menu.
+        if (event.button === 2
+            && (this.tool === 'push-pull' || this.tool === 'multi-push-pull')
+            && this._hasAnyElementSelection()) {
+          // Seed the right-drag with the current multi-selection
+          // (do NOT seed from the hit face's coplanar group â€” that
+          // would clobber the existing multi-pick).
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          this._beginFaceDrag(event, hit, /* forceMulti */ true);
+          return;
+        }
         event.preventDefault();
         event.stopImmediatePropagation();
       }
@@ -586,7 +625,7 @@ export class CycleModelerController {
       // edge / vertex). A bare click selects the polygon under the
       // cursor; a drag (pointermove with the button still held)
       // sweeps the picker along the cursor path and accumulates
-      // every distinct polygon the ray crosses — a free-form
+      // every distinct polygon the ray crosses â€” a free-form
       // sweep-select (NOT a rectangular marquee), matching how
       // UModeler/Blender's "lasso by cursor" feels.
       // In object mode, fall through so OrbitControls keeps the
@@ -597,11 +636,6 @@ export class CycleModelerController {
       }
       return;
     }
-    // Right-click is reserved for the viewport context menu.
-    // Ignore it for every modeler interaction (push/pull, extrude,
-    // element marquee, hover, etc.) so a right-click over a modeler
-    // object never starts a tool drag nor replaces the element
-    // selection.
     if (event.button !== 0) return;
     if (this._canDrawPrimitive(event)) {
       const point = this._gridPointFromEvent(event);
@@ -627,109 +661,15 @@ export class CycleModelerController {
 
     if (this.tool === 'push-pull' || this.tool === 'multi-push-pull' || this.tool === 'extrude-edge') {
       const hit = this._modelerHitFromEvent(event);
-      const modeler = hit?.object?.userData?.cycoModeler;
-      // For single push/pull we still need an actual hit on a face.
-      // For multi-push-pull the click can land on any modeler object —
-      // the drag extrudes every face currently in the multi-selection,
-      // which may have been built up by previous click-selections or
-      // marquee-drag selections. If the user clicks empty space in
-      // multi mode we just no-op (no face to drag).
-      if (this.tool === 'push-pull') {
-        if (!hit?.object || !modeler?.mesh) return;
-        // If a multi-selection already exists (built by middle-click
-        // sweep, marquee, or shift-click), keep it and promote this
-        // drag to multi behavior. Only seed selection from the hit
-        // face's coplanar group when nothing is selected yet, so we
-        // don't clobber a multi-pick that the user just built.
-        const preSelected = modeler.selectedFaces?.length || 0;
-        const treatAsMulti = preSelected > 1 || this._hasAnyElementSelection();
-        if (preSelected === 0) {
-          modeler.selectedFaces = this._faceIndicesFromHit(hit);
-        } else if (!modeler.selectedFaces.includes(this._faceIndicesFromHit(hit)[0])) {
-          // User clicked an unselected face while a multi-selection
-          // exists — merge its coplanar group into the selection.
-          const seedFaces = this._faceIndicesFromHit(hit);
-          const merged = new Set(modeler.selectedFaces);
-          for (const f of seedFaces) merged.add(f);
-          modeler.selectedFaces = Array.from(merged);
-        }
-        if (!modeler.selectedFaces.length) return;
-        // Stash whether this push/pull should commit as multi so the
-        // pointer-up branch routes through the multi-commit path.
-        this._faceDragMultiHint = treatAsMulti || modeler.selectedFaces.length > 1;
-      } else {
-        if (!hit?.object) {
-          // No hit in multi mode — fall through to element marquee.
-          this._startElementMarquee(event);
-          return;
-        }
-        // If we hit a modeler object but it currently has no selected
-        // faces (e.g. user clicked a face on an object that has none
-        // selected), seed the click face into the selection so the
-        // drag has something to extrude.
-        if (!modeler?.mesh) return;
-        const seedFaces = this._faceIndicesFromHit(hit);
-        if (!modeler.selectedFaces?.length && seedFaces.length) {
-          modeler.selectedFaces = seedFaces.slice();
-        }
-        if (!this._hasAnyElementSelection()) return;
-      }
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      try { this._canvas?.setPointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
-      this.viewportEngine.controls.enabled = false;
-      window.__cyco = window.__cyco || {};
-      window.__cyco._suppressSelectionManagerClick = true;
-      // For multi push/pull we snapshot EVERY selected modeler object
-      // so we can roll back the whole multi-extrusion on undo.
-      // The regular push/pull tool also takes the multi path when a
-      // multi-selection already exists (e.g. built by middle-click
-      // sweep), since dragging should extrude every selected face.
-      const multiActive = this.tool === 'multi-push-pull' || this._faceDragMultiHint;
-      const draggedObjects = multiActive
-        ? this._selectedModelerObjects().filter(o => {
-            const m = o.userData.cycoModeler;
-            return m?.mesh && (m.selectedFaces?.length || m.selectedEdges?.length || m.selectedVertices?.length);
-          })
-        : [hit.object];
-      if (!draggedObjects.length) return;
-      const before = draggedObjects.map(obj => this._snapshotObjectGeometry(obj));
-      const baseMeshes = draggedObjects.map(obj => JSON.parse(JSON.stringify(obj.userData.cycoModeler.mesh || {})));
-      // For single push/pull the face the user grabbed defines the
-      // drag direction (its outward normal). For multi-push/pull we
-      // use the FIRST selected face's normal as the drag direction —
-      // every other selected face extrudes along its OWN face normal
-      // at the same world-space distance, so opposite-facing walls
-      // move in opposite world directions (which is exactly what
-      // UModeler-style multi-push does).
-      const seedFaceIndex = draggedObjects[0].userData.cycoModeler.selectedFaces?.[0] ?? 0;
-      this._faceDrag = {
-        pointerId: event.pointerId,
-        object: hit?.object ?? draggedObjects[0],
-        startClientX: event.clientX,
-        startClientY: event.clientY,
-        lastClientX: event.clientX,
-        lastClientY: event.clientY,
-        before,
-        baseMesh: baseMeshes[0],
-        baseFaces: (draggedObjects[0].userData.cycoModeler.selectedFaces || []).slice(),
-        // Multi-push/pull state:
-        multi: multiActive,
-        draggedObjects,
-        baseMeshes,
-        seedFaceIndex,
-      };
-      this._status(multiActive
-        ? `Push/pull: drag to extrude ${this._countSelectedElements()} elements`
-        : 'Drag to extrude the selected face');
+      this._beginFaceDrag(event, hit, /* forceMulti */ false);
       return;
     }
 
     // Marquee multi-select for element modes (polygon / edge / vertex).
-    // Fires when the user click-drags on a modeler object — or in
-    // empty space near one — while in an element mode and the active
+    // Fires when the user click-drags on a modeler object â€” or in
+    // empty space near one â€” while in an element mode and the active
     // tool is not push/pull / extrude-edge / a primitive drawer.
-    // Left button only — middle button has its own pick+sweep path
+    // Left button only â€” middle button has its own pick+sweep path
     // (handled at the top of this handler).
     if (this.active && ELEMENT_MODES.has(this.elementMode) && this.elementMode !== 'object'
         && event.button === 0) {
@@ -738,12 +678,102 @@ export class CycleModelerController {
     }
   }
 
+  /**
+   * Begin a push/pull (or multi push/pull) drag. Called from both
+   * the left-click and right-click branches of `_onPointerDown`.
+   *
+   * `forceMulti` = true forces the multi-push/pull path regardless
+   * of single-vs-multi selection — used by the right-click-drag
+   * gesture, which always operates on the current multi-selection
+   * (it never seeds/replaces the selection from the hit face, since
+   * that would erase a multi-pick the user just built). When false
+   * (left-click), the regular seed-or-promote logic runs.
+   */
+  _beginFaceDrag(event, hit, forceMulti) {
+    const modeler = hit?.object?.userData?.cycoModeler;
+    if (this.tool === 'push-pull') {
+      if (!hit?.object || !modeler?.mesh) return;
+      if (forceMulti) {
+        // Right-drag: leave the existing multi-selection alone
+        // and bail if there is nothing to extrude.
+        if (!this._hasAnyElementSelection()) return;
+        this._faceDragMultiHint = true;
+      } else {
+        const preSelected = modeler.selectedFaces?.length || 0;
+        const treatAsMulti = preSelected > 1 || this._hasAnyElementSelection();
+        if (preSelected === 0) {
+          modeler.selectedFaces = this._faceIndicesFromHit(hit);
+        } else if (!modeler.selectedFaces.includes(this._faceIndicesFromHit(hit)[0])) {
+          const seedFaces = this._faceIndicesFromHit(hit);
+          const merged = new Set(modeler.selectedFaces);
+          for (const f of seedFaces) merged.add(f);
+          modeler.selectedFaces = Array.from(merged);
+        }
+        if (!modeler.selectedFaces.length) return;
+        this._faceDragMultiHint = treatAsMulti || modeler.selectedFaces.length > 1;
+      }
+    } else {
+      if (!hit?.object) {
+        this._startElementMarquee(event);
+        return;
+      }
+      if (!modeler?.mesh) return;
+      const seedFaces = this._faceIndicesFromHit(hit);
+      if (!modeler.selectedFaces?.length && seedFaces.length) {
+        modeler.selectedFaces = seedFaces.slice();
+      }
+      if (!this._hasAnyElementSelection()) return;
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try { this._canvas?.setPointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
+    this.viewportEngine.controls.enabled = false;
+    window.__cyco = window.__cyco || {};
+    window.__cyco._suppressSelectionManagerClick = true;
+    const multiActive = this.tool === 'multi-push-pull' || this._faceDragMultiHint;
+    const draggedObjects = multiActive
+      ? this._selectedModelerObjects().filter(o => {
+          const m = o.userData.cycoModeler;
+          return m?.mesh && (m.selectedFaces?.length || m.selectedEdges?.length || m.selectedVertices?.length);
+        })
+      : [hit.object];
+    if (!draggedObjects.length) return;
+    const before = draggedObjects.map(obj => this._snapshotObjectGeometry(obj));
+    const baseMeshes = draggedObjects.map(obj => JSON.parse(JSON.stringify(obj.userData.cycoModeler.mesh || {})));
+    const seedFaceIndex = draggedObjects[0].userData.cycoModeler.selectedFaces?.[0] ?? 0;
+    this._faceDrag = {
+      pointerId: event.pointerId,
+      object: hit?.object ?? draggedObjects[0],
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
+      before,
+      baseMesh: baseMeshes[0],
+      baseFaces: (draggedObjects[0].userData.cycoModeler.selectedFaces || []).slice(),
+      multi: multiActive,
+      draggedObjects,
+      baseMeshes,
+      seedFaceIndex,
+      // Right-drag commits are coarser: the user feels the drag,
+      // not a precise world-space offset. Tag it so the commit
+      // step can apply a slightly different label / no-op guard.
+      rightButton: forceMulti === true,
+    };
+    this._status(multiActive
+      ? `Push/pull: drag to extrude ${this._countSelectedElements()} elements`
+      : 'Drag to extrude the selected face');
+  }
+
   _onPointerMove(event) {
     // While the right button is held (bit 1 of `buttons`), skip
-    // every modeler-side update so a right-button drag (the viewport
-    // context menu gesture) doesn't drive hover, marquee, or push-
-    // pull previews.
-    if ((event.buttons & 2) !== 0) return;
+    // every modeler-side update that would otherwise drive hover
+    // or marquee, so a right-button drag (the viewport context-menu
+    // gesture) doesn't fight the user's intent. We still allow the
+    // push/pull right-drag (`_faceDrag`) preview to run, so right-
+    // click-drag multi-push/pull actually previews as it moves.
+    const rightHeld = (event.buttons & 2) !== 0;
+    if (rightHeld && !this._faceDrag) return;
     if (this._boxDrag && event.pointerId === this._boxDrag.pointerId) {
       const point = this._gridPointFromEvent(event);
       if (!point) return;
@@ -764,6 +794,13 @@ export class CycleModelerController {
       const delta = this._pushDistanceFromDrag(this._faceDrag);
       if (this._faceDrag.multi) {
         this._applyMultiPushPreview(this._faceDrag, delta);
+        // Rebuild the selection overlay every move so the highlight
+        // follows each pushed face along its own normal — without
+        // this, the user sees pushed geometry but the selection
+        // ribbon stays anchored to the original (pre-push) face
+        // positions, looking like nothing moved (right-click-drag
+        // multi-push/pull parity with UModeler/SketchUp).
+        this._refreshSelectionOverlay();
         this._status(`Multi push/pull: ${delta.toFixed(1)}`);
       } else {
         this._applyPushPreview(this._faceDrag.object, this._faceDrag.baseMesh, delta);
@@ -796,7 +833,7 @@ export class CycleModelerController {
     // Only swallow the move event for modeler tool logic when the user
     // is actually pressing the PRIMARY (left) button. Middle / right
     // button drags are owned by OrbitControls (pan / orbit / dolly /
-    // context menu) and must propagate — otherwise moving the cursor
+    // context menu) and must propagate â€” otherwise moving the cursor
     // over a modeler object while middle-click panning kills the pan.
     // buttons bit 0 = left, bit 1 = right, bit 2 = middle (aux).
     const leftHeld = (event.buttons & 1) !== 0;
@@ -815,7 +852,7 @@ export class CycleModelerController {
     // edge / vertex selection.
     if (event.button !== 0) return;
     if (!this.active || !ELEMENT_MODES.has(this.elementMode) || this._boxDrag) return;
-    // A drag-marquee was just released — `_elemMarquee` is already
+    // A drag-marquee was just released â€” `_elemMarquee` is already
     // cleared by `_onPointerUp`, so suppress the click that fires
     // after pointerup so we don't replace the marquee selection
     // with a single-element click selection.
@@ -830,7 +867,7 @@ export class CycleModelerController {
     const modeler = hit.object.userData.cycoModeler;
     this._lastModelerObject = hit.object;
     const selection = this._selectionFromHit(hit);
-    // Shift / ctrl held → additive selection (toggle the clicked
+    // Shift / ctrl held â†’ additive selection (toggle the clicked
     // element in/out of the existing multi-selection). Holding neither
     // modifier replaces the multi-selection with just the clicked
     // element so the user can re-anchor quickly.
@@ -881,15 +918,33 @@ export class CycleModelerController {
       this.viewportEngine.controls.enabled = true;
       try { this._canvas?.releasePointerCapture?.(event.pointerId); } catch (_) { /* synthetic events */ }
       const delta = this._pushDistanceFromDrag(drag);
+      // The browser dispatches a `contextmenu` immediately after
+      // pointerup when the right button was used. If this gesture
+      // was a real push/pull drag (not a no-op bare right-click),
+      // suppress that menu via the next-tick flag consumed by
+      // `_onContextMenuCapture`.
+      if (drag.rightButton && Math.abs(delta) > 0.001) {
+        this._suppressNextContextMenu = true;
+      }
       if (Math.abs(delta) > 0.001) {
         if (drag.multi) {
           // Commit each selected object's mesh as a single command so
           // the entire multi-push is one undo entry.
+          // CRITICAL: when the selection mixes faces of different
+          // outward normals (e.g. opposing walls on a box, or any
+          // curved-surface band), `pushFaces` with the full list
+          // averages the normals → opposing faces collapse onto a
+          // single shared direction (the "snap together" bug). The
+          // preview path already partitioned via
+          // `_groupCoplanarFaces` (per unique face-normal), so the
+          // commit must do the same. See
+          // right-click-multi-pushpull-2026-06-29.md.
           const finals = drag.draggedObjects.map((obj, i) => {
             const mesh = EditableMesh.fromJSON(drag.baseMeshes[i]);
             const m = obj.userData.cycoModeler;
             const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
-            mesh.pushFaces(faces, delta);
+            const groups = this._groupCoplanarFaces(mesh, faces);
+            for (const grp of groups) mesh.pushFaces(grp, delta);
             return mesh;
           });
           window.dispatchEvent(new CustomEvent('cyco-command-execute', {
@@ -965,7 +1020,7 @@ export class CycleModelerController {
       }
       // The selection was already written during the sweep (or by
       // the click-pick branch on a no-drag release). Just refresh
-      // the overlay + status. Shift / ctrl held → additive; the
+      // the overlay + status. Shift / ctrl held â†’ additive; the
       // sweep branch already honoured that flag.
       this._refreshSelectionOverlay();
       this._status(this._elemMarqueeSummary());
@@ -1053,7 +1108,7 @@ export class CycleModelerController {
     // geometric coplanar test. After Push/Pull, side walls can lie on
     // the same geometric plane as adjacent mesh faces (e.g. the top
     // side wall of an extruded back face sits on the same Y plane as
-    // the box's top face) — the geometric coplanar check would
+    // the box's top face) â€” the geometric coplanar check would
     // over-select those walls, so the user clicking the top face
     // would "select all the squares". `selectionGroup` returns just
     // the polygons that share an explicit selection group ID with the
@@ -1064,7 +1119,7 @@ export class CycleModelerController {
   _pushDistanceFromDrag(drag) {
     // Project the screen-space mouse motion onto the selected face's
     // outward normal. We must NOT dot the world-space displacement of
-    // two points on the face plane with the normal — those points all
+    // two points on the face plane with the normal â€” those points all
     // lie ON the plane, so the displacement is perpendicular to the
     // normal and the dot product is always zero (the previous bug).
     // The correct UModeler-style algorithm is:
@@ -1190,7 +1245,7 @@ export class CycleModelerController {
    * `linewidth` is in screen pixels. Under WebGL this is honored by the
    * LineMaterial itself. Under WebGPU the LineMaterial's ShaderMaterial
    * wrapper is rejected by Three.js's TSL NodeBuilder, so we fall back to
-   * an inflated MeshBasicMaterial ribbon — each edge segment is extruded
+   * an inflated MeshBasicMaterial ribbon â€” each edge segment is extruded
    * into a thin screen-facing quad so the slider produces a visible
    * thickness on both renderers.
    */
@@ -1256,7 +1311,7 @@ export class CycleModelerController {
     // fallback) so the wireframe is visible on the very first paint.
     // We force-update the parent's world matrix first, then build with
     // `initial=false` so the proper view-aligned perpendicular is used
-    // for every segment — including the back-side ones that the
+    // for every segment â€” including the back-side ones that the
     // previous version culled (which produced the "wireframe disappears
     // as you rotate" symptom).
     const parent = edgesGeom.userData?._wireParent;
@@ -1269,7 +1324,7 @@ export class CycleModelerController {
       ribbonGeom,
       new THREE.MeshBasicMaterial({
         color,
-        // Same logic as the WebGL path above — only enable blending
+        // Same logic as the WebGL path above â€” only enable blending
         // when opacity < 1 so a fully-opaque wireframe renders solid
         // without alpha blending against the surface beneath.
         transparent: opacity < 1,
@@ -1347,15 +1402,15 @@ export class CycleModelerController {
    *
    * Each edge segment AB becomes a quad: A-l, A-r, B-r, A-l, B-r, B-l
    * where A-l/B-l and A-r/B-r are A and B pushed in opposite directions
-   * along the segment's **view-aligned perpendicular** — the
+   * along the segment's **view-aligned perpendicular** â€” the
    * perpendicular to AB in the screen plane (perpendicular to the
    * camera view direction at the segment's midpoint).
    *
    * Why view-aligned: a world-axis perpendicular (X / Y / Z) collapses
    * to a sliver when the segment runs parallel to the camera view, and
    * produces inconsistent offsets for adjacent ring segments (a sphere
-   * cap ring has segments that change direction every step → each step
-   * would pick a different world axis → the ribbon breaks into pieces
+   * cap ring has segments that change direction every step â†’ each step
+   * would pick a different world axis â†’ the ribbon breaks into pieces
    * with gaps). A view-aligned perpendicular stays perpendicular to
    * the screen for any segment orientation, and is **stable across
    * adjacent segments in a ring** because the camera view direction
@@ -1370,7 +1425,7 @@ export class CycleModelerController {
    * @param {number} width                     ribbon half-width in world units
    * @param {THREE.Camera} camera              active camera (for view dir)
    * @param {THREE.Matrix4} parentWorld        parent's world matrix
-   * @param {boolean} _initial                 deprecated — kept for callers; no longer used
+   * @param {boolean} _initial                 deprecated â€” kept for callers; no longer used
    */
   _expandEdgesToRibbon(edgesGeom, width, camera, parentWorld, _initial) {
     const src = edgesGeom?.attributes?.position;
@@ -1402,7 +1457,7 @@ export class CycleModelerController {
     if (parentWorld) {
       invParent.copy(parentWorld).invert();
     }
-    // Stable fall-back axes for the no-camera case (rare — the editor
+    // Stable fall-back axes for the no-camera case (rare â€” the editor
     // always supplies a camera). The view-aligned path is preferred
     // because it stays continuous across adjacent ring segments.
     const AXES = [
@@ -1426,20 +1481,20 @@ export class CycleModelerController {
       // (x-ray mode). The view-aligned perpendicular naturally
       // compresses the ribbon on segments perpendicular to the camera
       // (so they read as thin lines, not flaps), but we never drop
-      // segments — that was the source of the "wireframe disappears as
+      // segments â€” that was the source of the "wireframe disappears as
       // you rotate" report.
       let useFallback = false;
       let chosen = AXES[2];
       let perpIsScreenAligned = false;
       if (!camera) {
-        // No camera bound to the scene — fall back to a world-axis
+        // No camera bound to the scene â€” fall back to a world-axis
         // perpendicular for every segment. This branch is unreachable
         // under normal editor use; the modeler always has a camera.
         useFallback = true;
       } else {
         // Transform the segment direction into world space, then
         // compute the view direction at the segment's midpoint in
-        // world space. The perpendicular = world dir × view dir, then
+        // world space. The perpendicular = world dir Ã— view dir, then
         // unproject back to local.
         dirW.copy(dir).transformDirection(parentWorld);
         const midLocal = A.clone().add(B).multiplyScalar(0.5);
@@ -1452,7 +1507,7 @@ export class CycleModelerController {
           perpW.crossVectors(dirW, viewDir);
           if (perpW.lengthSq() < 1e-6) {
             // Segment is parallel to the view direction at this
-            // midpoint — perpendicular collapses. Use axis fallback
+            // midpoint â€” perpendicular collapses. Use axis fallback
             // for this one segment; the rest of the ring uses the
             // proper view-aligned perp.
             useFallback = true;
@@ -1512,7 +1567,7 @@ export class CycleModelerController {
         }
         faceNormalWorldForBias = faceNormalWorld;
       } else if (perpIsScreenAligned && segNormalsLocal && segNormalsLocal[i] && segNormalsLocal[i].length >= 6) {
-        // Two adjacent faces — average them.
+        // Two adjacent faces â€” average them.
         const nf = segNormalsLocal[i];
         faceNormalLocal.set(
           (nf[0] + nf[3]) * 0.5,
@@ -1530,16 +1585,16 @@ export class CycleModelerController {
       // Coplanarity lift: the screen-aligned perpendicular can be
       // exactly tangent to the surface when the camera looks straight
       // down a flat face (e.g. box top face viewed from above). In
-      // that case the flip above has no effect (dot ≈ 0) and the
-      // ribbon quad lies IN the surface plane — without a guaranteed
+      // that case the flip above has no effect (dot â‰ˆ 0) and the
+      // ribbon quad lies IN the surface plane â€” without a guaranteed
       // depth bias, the ribbon would z-fight the surface (and read as
       // faint / dotted) under `depthTest: true`.
       //
       // Lift direction: the **camera view direction** (NOT the face
       // normal). Previously this lift was applied along the face
       // normal, which projected onto the screen plane as a variable
-      // offset depending on the face's angle relative to the camera —
-      // some segments ended up with 2–3× the requested screen-pixel
+      // offset depending on the face's angle relative to the camera â€”
+      // some segments ended up with 2â€“3Ã— the requested screen-pixel
       // width while others stayed at the requested width, producing
       // the visible "added geometry outline is thinner than the
       // original box outline" inconsistency reported in the editor.
@@ -1594,7 +1649,7 @@ export class CycleModelerController {
    * Build the per-vertex handle group (one small sphere per unique vertex).
    *
    * WebGPU note: THREE.Points + PointsMaterial does NOT render under
-   * Three.js's WebGPU TSL pipeline — `THREE.NodeBuilder: Material
+   * Three.js's WebGPU TSL pipeline â€” `THREE.NodeBuilder: Material
    * "ShaderMaterial" is not compatible.` is logged on every render and the
    * points are silently dropped.  Switching to InstancedMesh of small
    * spheres + MeshBasicMaterial works in BOTH WebGL and WebGPU because
@@ -1627,7 +1682,7 @@ export class CycleModelerController {
     inst.frustumCulled = false; // handles move around the parent mesh
     inst.renderOrder = 9999;
     // Translate the screen-pixel slider value into a world-unit radius.
-    // 50 px → cellSize / 2 (so a vertex handle covers ~half a grid cell
+    // 50 px â†’ cellSize / 2 (so a vertex handle covers ~half a grid cell
     // on screen).  Clamped so tiny grids still get visible dots.
     const cellSize = this._gridCellSize();
     const radius = Math.max(2, cellSize * Math.max(0.05, vertexSize / 50) * 0.5);
@@ -1645,7 +1700,7 @@ export class CycleModelerController {
   }
 
   /**
-   * (Removed) — the cycle modeler no longer attaches its own purple/white
+   * (Removed) â€” the cycle modeler no longer attaches its own purple/white
    * bounding-box ribbon to selected primitives or previews. Per user
    * instruction, the engine's OutlinePass + primary shell + glow are
    * hidden entirely in modeler mode (see `applyModelerSettingsToScene`
@@ -1669,7 +1724,7 @@ export class CycleModelerController {
     if (mode === 'edge') {
       // Use Line2 so the hover edge thickness is visible (matches the
       // wireframe + selection gizmo look). The edge overlay has its own
-      // `thickness` field in modeler settings — falling back to the
+      // `thickness` field in modeler settings â€” falling back to the
       // wireframe thickness keeps the look coherent if the field is
       // missing from older saved settings.
       const targetPos = this._getObjectWorldCenter(hit.object);
@@ -1682,11 +1737,11 @@ export class CycleModelerController {
         targetPos,
       );
     } else if (mode === 'vertex') {
-      // InstancedMesh of small spheres — Points + PointsMaterial does
+      // InstancedMesh of small spheres â€” Points + PointsMaterial does
       // not render under WebGPU/TSL (NodeBuilder rejects ShaderMaterial).
       mesh = this._buildVertexHandles(geometry, style.color, style.vertexSize, style.opacity);
     } else {
-      // polygon (face) — filled translucent overlay.
+      // polygon (face) â€” filled translucent overlay.
       mesh = new THREE.Mesh(
         geometry,
         new THREE.MeshBasicMaterial({
@@ -1980,7 +2035,7 @@ export class CycleModelerController {
       transparent: preview,
       roughness: 0.7,
       metalness: 0.1,
-      // Front-only for committed primitives — solid / solid+wire
+      // Front-only for committed primitives â€” solid / solid+wire
       // mode should show only the outer surface (back faces are
       // culled, so the inside of the box isn't visible through the
       // front face). Preview primitives keep `DoubleSide` so the
@@ -2014,7 +2069,7 @@ export class CycleModelerController {
     const isFloor = floorAnchored.has(this.primitiveTool);
     // Floor-anchored primitives (box, room, stair, side-stair,
     // spiral-stair, line/parallel/arc/disk/rounded-rectangle) all
-    // position their local origin at the click point — the clicked
+    // position their local origin at the click point â€” the clicked
     // cell becomes the bottom-back corner for box-shaped footprints,
     // or the centre for radially symmetric ones (spiral-stair).
     // Round primitives (cylinder, cone, sphere, capsule, torus,
@@ -2056,7 +2111,7 @@ export class CycleModelerController {
       case 'room':
         return EditableMesh.room(width, height, depth);
       case 'stair': {
-        // Rotate the stair 180° about Y so its FRONT (the low end,
+        // Rotate the stair 180Â° about Y so its FRONT (the low end,
         // first riser) faces +Z toward the default camera, matching
         // how every other modeler (Blender, SketchUp, UModeler)
         // orients a freshly-drawn stair.
@@ -2068,7 +2123,7 @@ export class CycleModelerController {
           v.z = -z;
         }
         // Reverse the back-face winding so its outward normal still
-        // points away from the stair body after the 180° flip (the
+        // points away from the stair body after the 180Â° flip (the
         // vertex mirror flips the normals of every face; the back
         // face needs explicit correction).
         const last = stair.faces[stair.faces.length - 1];
@@ -2076,7 +2131,7 @@ export class CycleModelerController {
         return stair;
       }
       case 'side-stair': {
-        // Same 180° Y rotation as `stair` — applied AFTER the 90°
+        // Same 180Â° Y rotation as `stair` â€” applied AFTER the 90Â°
         // rotation that `sideStair` performs internally.
         const stair = EditableMesh.sideStair(width, height, depth);
         for (const v of stair.vertices) {
@@ -2514,7 +2569,7 @@ export class CycleModelerController {
       bevel: dims.bevel ?? 0,
       segments: dims.segments ?? obj.userData.cycoModeler?.segments ?? 1,
       mesh: built.mesh ? built.mesh.toJSON() : null,
-      // A subdivision invalidates the previous polygon selection —
+      // A subdivision invalidates the previous polygon selection â€”
       // face indices no longer map 1:1 to the new mesh.
       selectedFaces: [],
       selectedEdges: [],
@@ -2561,7 +2616,7 @@ export class CycleModelerController {
     scene.traverse(obj => {
       // Any object tagged as a modeler object is pickable, even if its
       // `cycoModeler.mesh` is null (e.g. a `rounded-box` whose triangulation
-      // doesn't map cleanly to a polygon mesh — selection still works on
+      // doesn't map cleanly to a polygon mesh â€” selection still works on
       // the underlying BufferGeometry).
       if (obj.userData?.cycoModeler) targets.push(obj);
     });
@@ -2571,7 +2626,7 @@ export class CycleModelerController {
     // prefer the closest hit whose world-space face normal faces the
     // camera (UModeler-style: pick the side you're looking at). When
     // OFF we return the closest hit as-is, so the picker "sees
-    // through" to back-facing geometry — useful when the user has
+    // through" to back-facing geometry â€” useful when the user has
     // toggled cull off to grab a polygon through a transparent or
     // open face, or while editing the inside of a hollow cut.
     if (!this._backfaceCull) return hits[0];
@@ -2673,7 +2728,7 @@ export class CycleModelerController {
       mesh: editableMesh.toJSON(),
     };
     // If this mesh now contains an inward pocket (a face pushed inward
-    // by Push Pull), the side walls face inward — geometrically
+    // by Push Pull), the side walls face inward â€” geometrically
     // correct, but the committed primitive material is FrontSide, so
     // viewing from outside the parent volume back-face-culls the
     // pocket and the user sees a hollow cut. Flip the material to
@@ -2707,7 +2762,7 @@ export class CycleModelerController {
     if (!this._wireStyle.enabled) return;
     // Build the wireframe from the EditableMesh's polygon edges (not the
     // triangulated BufferGeometry). The polygon-based path keeps the
-    // wireframe outline aligned with the source faces — a sphere shows
+    // wireframe outline aligned with the source faces â€” a sphere shows
     // latitude + longitude quads, a stair shows step treads + risers
     // (no diagonal slashes), etc. Falls back to the triangulated mesh
     // for objects whose EditableMesh data is missing (legacy / imported).
@@ -2716,9 +2771,9 @@ export class CycleModelerController {
     if (meshJson && meshJson.faces && meshJson.vertices) {
       try {
         const editable = EditableMesh.fromJSON(meshJson);
-        // Threshold 0 → keep every polygon boundary edge including
+        // Threshold 0 â†’ keep every polygon boundary edge including
         // subdivision lines (e.g. the Subdivide tool splits each
-        // box face into s×s cells; threshold 1 would cull those
+        // box face into sÃ—s cells; threshold 1 would cull those
         // internal coplanar edges and the wireframe would show only
         // the box outline, hiding the subdivisions the user just
         // applied). Spheres and other primitives still draw their
@@ -2791,14 +2846,14 @@ export class CycleModelerController {
       .filter(obj => obj?.userData?.cycoModeler);
   }
 
-  // ── Multi-select helpers ──────────────────────────────────────────────────
+  // â”€â”€ Multi-select helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Helpers for the multi-push-pull tool + element-mode marquee
   // multi-select. The marquee is screen-rect based (not raycast based)
   // because we need to capture MANY elements with a single drag, not
   // just the one under the cursor.
 
   /** Add the items in `incoming` onto `existing`.
-   *  When `replace` is true (default — used by ctrl/shift click) items
+   *  When `replace` is true (default â€” used by ctrl/shift click) items
    *  already present in `existing` are removed (toggle semantics).
    *  When `replace` is false (used by the multi-select middle-click
    *  gesture) items are unioned in without removal, so each new pick
@@ -2840,7 +2895,7 @@ export class CycleModelerController {
     return n;
   }
 
-  /** Returns "N polygons + M edges + K vertices selected" — used by
+  /** Returns "N polygons + M edges + K vertices selected" â€” used by
    *  status updates after a marquee or push/pull operation. */
   _elemMarqueeSummary() {
     let f = 0, e = 0, v = 0;
@@ -2858,7 +2913,7 @@ export class CycleModelerController {
     return parts.length ? `Selected: ${parts.join(' + ')}` : 'Selection cleared';
   }
 
-  // ── Middle-click pick / sweep-select ─────────────────────────────────
+  // â”€â”€ Middle-click pick / sweep-select â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // Middle-click on a modeler object in polygon / edge / vertex mode
   // is a single-point pick. If the user holds and drags past a small
   // threshold the gesture promotes to a free-form sweep: every
@@ -2878,7 +2933,7 @@ export class CycleModelerController {
     if (this._boxDrag || this._faceDrag || this._elemMarquee) return;
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
     const hit = this._modelerHitFromEvent(event);
-    // If the click missed any modeler object, drop through — the
+    // If the click missed any modeler object, drop through â€” the
     // user is just panning empty space with the middle button.
     if (!hit?.object?.userData?.cycoModeler) return;
     event.preventDefault();
@@ -2910,14 +2965,14 @@ export class CycleModelerController {
     // Apply the bare click immediately so a no-drag middle-click
     // already shows a fresh pick. Live second-pass deselect: any
     // picked polygon that was already selected before this drag
-    // began gets dropped from the selection right away — matches
+    // began gets dropped from the selection right away â€” matches
     // "drag over already-selected polygons to deselect them".
     const modeler = hit.object.userData.cycoModeler;
     const pickedFaces = this._selectionFromHit(hit).faces || [];
     const preFaces = this._middlePick?.preFaces;
     const overlapping = pickedFaces.filter(id => preFaces?.has(id));
     if (overlapping.length > 0 && this.elementMode === 'polygon') {
-      // Live deselect on the bare click — mirror of the sweep branch.
+      // Live deselect on the bare click â€” mirror of the sweep branch.
       // Guard is intentionally loose (no `selectedFaces?.length`): an
       // empty selection means the picked pre-selected polygon was
       // already removed, so we just record the cross and skip the
@@ -2952,7 +3007,7 @@ export class CycleModelerController {
     const minY = Math.min(this._middlePick.startClient.y, this._middlePick.lastClient.y);
     const maxX = Math.max(this._middlePick.startClient.x, this._middlePick.lastClient.x);
     const maxY = Math.max(this._middlePick.startClient.y, this._middlePick.lastClient.y);
-    // Below sweep threshold — still a bare click; nothing to do.
+    // Below sweep threshold â€” still a bare click; nothing to do.
     if (Math.hypot(maxX - minX, maxY - minY) < 4) return;
     const renderer = this.viewportEngine?.rendererManager?.renderer;
     const camera = this.viewportEngine?.camera;
@@ -2965,7 +3020,7 @@ export class CycleModelerController {
     const raycaster = new THREE.Raycaster();
     let changed = false;
     // Sample 8 evenly-spaced raycasts between the drag start and the
-    // current cursor — fast drags don't lose polygons they skipped.
+    // current cursor â€” fast drags don't lose polygons they skipped.
     const STEPS = 8;
     for (let i = 1; i <= STEPS; i += 1) {
       const t = i / STEPS;
@@ -2986,13 +3041,13 @@ export class CycleModelerController {
       this._middlePick.visited.add(key);
       // Second-pass deselect (live): any picked polygon that was already
       // in the selection before this gesture began gets dropped from
-      // `selectedFaces` on this sweep sample — the highlight updates
+      // `selectedFaces` on this sweep sample â€” the highlight updates
       // as the cursor enters the polygon, not only on pointerup.
       const modeler = hit.object.userData.cycoModeler;
       const pickedFaces = this._selectionFromHit(hit).faces || [];
       const overlapping = pickedFaces.filter(id => this._middlePick.preFaces?.has(id));
       if (overlapping.length > 0 && this.elementMode === 'polygon') {
-        // Live deselect — drop every pre-selected polygon the cursor
+        // Live deselect â€” drop every pre-selected polygon the cursor
         // crosses this sample. The `selectedFaces?.length` guard is
         // intentionally NOT here: without it, an empty selection
         // would fall through to `_applyMiddlePick`'s union branch
@@ -3021,7 +3076,7 @@ export class CycleModelerController {
    * Honours the `_backfaceCull` flag: when true, drops every hit
    * whose world-space face normal faces away from the camera. When
    * false, returns the closest hit (so the picker "sees through" to
-   * back-facing geometry — useful when the user toggles cull off
+   * back-facing geometry â€” useful when the user toggles cull off
    * to grab a polygon through a transparent or open face).
    */
   _pickBestHit(hits, raycaster) {
@@ -3089,7 +3144,7 @@ export class CycleModelerController {
       modeler.selectedFaces = selection.faces;
     } else if (this.elementMode === 'polygon') {
       // Middle-click multi-select: every polygon the cursor crosses
-      // accumulates into the selection (union mode — passing
+      // accumulates into the selection (union mode â€” passing
       // `replace=false` stops the sweep from toggling the same key
       // out as the cursor lingers on it).
       modeler.selectedFaces = this._toggleArray(
@@ -3144,9 +3199,9 @@ export class CycleModelerController {
     // `selection.faces` so the apply step picks them up as a single
     // mirrored face.
     if (this.elementMode === 'polygon' && selection.faces?.length) {
-      // Map each triangle face index → the polygon group it belongs
+      // Map each triangle face index â†’ the polygon group it belongs
       // to. selectionGroup returns every tri in the same polygon.
-      const polygonTris = new Map(); // groupId → Set<triIndex>
+      const polygonTris = new Map(); // groupId â†’ Set<triIndex>
       for (const fi of selection.faces.slice()) {
         const grp = editable.selectionGroup(fi);
         if (!grp?.length) continue;
@@ -3325,7 +3380,7 @@ export class CycleModelerController {
       lastClient: { x: event.clientX, y: event.clientY },
       additive,
       // Seed the marquee with the click hit's element (so a tiny drag
-      // with no real rect still produces a selection — matches how
+      // with no real rect still produces a selection â€” matches how
       // UModeler's click-then-marquee behaves).
       seedObject,
       seedHit: hit,
@@ -3370,7 +3425,7 @@ export class CycleModelerController {
     // Collect every modeler object in the scene, plus the marquee
     // seed object (so the marquee can sweep onto a previously
     // un-selected object). For non-additive marquees we also pick
-    // up new objects as the rect drags over them — a marquee that
+    // up new objects as the rect drags over them â€” a marquee that
     // starts on object A and crosses into object B should be able to
     // select polygons on both. Newly-discovered objects are added
     // to the SelectionManager so multi-push/pull can find them.
@@ -3384,7 +3439,7 @@ export class CycleModelerController {
       seen.add(this._elemMarquee.seedObject.uuid);
     }
     // Walk the rest of the scene's modeler objects. Test the object's
-    // world-space AABB centre against the marquee rect — if the centre
+    // world-space AABB centre against the marquee rect â€” if the centre
     // is inside, the object is "in the marquee" and we test its
     // individual elements below.
     const objCenters = [];
@@ -3420,7 +3475,7 @@ export class CycleModelerController {
     const collectForObject = (obj) => {
       const m = obj?.userData?.cycoModeler;
       if (!m) return null;
-      // Make sure the world matrix is current — without this the
+      // Make sure the world matrix is current â€” without this the
       // projected screen coordinates of each face centroid can lag
       // behind by one frame (especially right after the marquee
       // was started, when the parent matrix may have just been
@@ -3466,7 +3521,7 @@ export class CycleModelerController {
             center.applyMatrix4(obj.matrixWorld);
             if (inRect(center)) {
               // Add the entire selection-group (a box's top is two
-              // triangles in one group → user wants both, not just
+              // triangles in one group â†’ user wants both, not just
               // the tri under the cursor).
               const group = editable.selectionGroup(i);
               for (const fi of group) newFaces.add(fi);
@@ -3558,7 +3613,7 @@ export class CycleModelerController {
   /**
    * Apply a multi-push/pull preview by mutating the live mesh of
    * every selected object. Each object extrudes its own selected
-   * faces along its OWN face normal — opposite-facing walls move in
+   * faces along its OWN face normal â€” opposite-facing walls move in
    * opposite world directions at the same screen-pixel drag delta.
    */
   _applyMultiPushPreview(drag, distance) {
@@ -3571,7 +3626,7 @@ export class CycleModelerController {
       const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
       if (!faces.length) continue;
       // `pushFaces` always extrudes along the AVERAGE normal of the
-      // supplied face set — perfect for groups of coplanar triangles
+      // supplied face set â€” perfect for groups of coplanar triangles
       // (e.g. a subdivided box top), but wrong for a multi-selection
       // that mixes opposing walls. For a multi-push we want each face
       // extruded along its own normal at the same world distance, so
@@ -3584,24 +3639,33 @@ export class CycleModelerController {
   }
 
   /**
-   * Partition `faceIndices` into groups of coplanar siblings (faces
-   * that share a faceGroup ID). Each group can be extruded as a unit
-   * without the "average normal collapses to zero" bug that affects
-   * mixed-orientation multi-push calls.
+   * Partition `faceIndices` into groups of same-normal faces. Faces
+   * with identical outward normals (rounded to ~1Â°) are pushed
+   * together as one slab; faces with OPPOSITE or otherwise distinct
+   * normals each get their own group so `pushFaces` extrudes them
+   * independently along their own axis at the same world distance.
+   * This is what gives right-click-drag multi-push/pull its
+   * "individually extrude each polygon on its own axis" feel
+   * (UModeler/SketchUp parity). Previous revision grouped by
+   * `faceGroup` ID, which collapsed opposing walls into a single
+   * group and made them snap together with the average-normal bug.
    */
   _groupCoplanarFaces(mesh, faceIndices) {
     const out = [];
     const seen = new Set();
     for (const fi of faceIndices) {
       if (seen.has(fi)) continue;
-      const gid = mesh.faceGroups?.[fi];
-      const grp = [];
-      if (gid == null) {
-        grp.push(fi);
-      } else {
-        for (let j = 0; j < faceIndices.length; j += 1) {
-          if (mesh.faceGroups?.[faceIndices[j]] === gid) grp.push(faceIndices[j]);
-        }
+      const n = mesh._faceNormal(fi);
+      // Round to ~1Â° so float jitter doesn't fragment a coplanar
+      // face set into many near-identical groups.
+      const key = `${n.x.toFixed(3)}|${n.y.toFixed(3)}|${n.z.toFixed(3)}`;
+      const grp = [fi];
+      for (let j = 0; j < faceIndices.length; j += 1) {
+        const fj = faceIndices[j];
+        if (fj === fi || seen.has(fj)) continue;
+        const nj = mesh._faceNormal(fj);
+        const kj = `${nj.x.toFixed(3)}|${nj.y.toFixed(3)}|${nj.z.toFixed(3)}`;
+        if (kj === key) grp.push(fj);
       }
       for (const k of grp) seen.add(k);
       out.push(grp);
@@ -3609,7 +3673,7 @@ export class CycleModelerController {
     return out;
   }
 
-  // ── Multi-selection overlay ───────────────────────────────────────────────
+  // â”€â”€ Multi-selection overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   // A persistent overlay showing all currently-selected elements
   // (faces/edges/vertices). Rendered as child meshes/line-segments on
   // the modeler objects so they inherit transforms automatically.
