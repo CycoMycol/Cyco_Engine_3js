@@ -301,9 +301,10 @@ export class CenterPanel extends BasePanel {
     // Picker-policy state. Mirrored on the controller for the actual
     // picking math; mirrored here so the toolbar can show active-
     // class styling and so the dropdown can render its current axis
-    // set when reopened. Defaults match UModeler: backface cull on,
-    // symmetry off.
-    this._backfaceCull = true;
+    // set when reopened. Backface cull defaults OFF so the picker
+    // "sees through" both sides until the user explicitly turns it
+    // on (matches the controller default). Symmetry defaults off.
+    this._backfaceCull = false;
     this._symmetryAxes = new Set();
 
     this._onHistoryChange     = this._onHistoryChange.bind(this);

@@ -102,7 +102,11 @@ export class CycleModelerController {
     //     elements are unioned into the same selection (and on a
     //     additive sweep, every new pick carries its mirrors with
     //     it). Independent of backfaceCull.
-    this._backfaceCull = true;
+    // Backface-cull defaults OFF — picks "see through" both sides so the
+    // user can grab a polygon on the far side of an object without
+    // having to remember to toggle it first. The toolbar button stays
+    // in sync with this flag.
+    this._backfaceCull = false;
     this._symmetryAxes = new Set();
 
     this._onMode = this._onMode.bind(this);
@@ -121,6 +125,7 @@ export class CycleModelerController {
     this._onContextMenuCapture = this._onContextMenuCapture.bind(this);
     this._onBackfaceCullToggle = this._onBackfaceCullToggle.bind(this);
     this._onSymmetrySet = this._onSymmetrySet.bind(this);
+    this._onHistoryChange = this._onHistoryChange.bind(this);
 
     window.addEventListener('cyco-vp-ready', this._onVpReady);
     window.addEventListener('cyco-renderer-changed', this._onRendererChanged);
@@ -134,6 +139,7 @@ export class CycleModelerController {
     window.addEventListener('cyco-modeler-set-symmetry', this._onSymmetrySet);
     window.addEventListener('cyco-select-node', this._onSelectionChanged);
     window.addEventListener('cyco-deselect-all', this._onSelectionChanged);
+    window.addEventListener('cyco-history-change', this._onHistoryChange);
     setTimeout(() => this._attachCanvas(this.viewportEngine?.rendererManager?.renderer?.domElement), 0);
   }
 
@@ -160,6 +166,20 @@ export class CycleModelerController {
     } else {
       this._status(`Symmetry: ${[...this._symmetryAxes].join(' + ').toUpperCase()}`);
     }
+  }
+
+  /**
+   * Fired by CommandManager after every undo/redo (and every
+   * command execute). The selection overlay reads each object's
+   * live `cycoModeler.mesh` to draw the ribbons, so when an undo
+   * reverts the mesh to a pre-pull state the overlay must rebuild
+   * to match — otherwise the ribbons stay stuck at the extruded
+   * positions and "ghost" the old silhouette until something else
+   * forces a refresh.
+   */
+  _onHistoryChange(/* event */) {
+    if (!this.active) return;
+    this._refreshSelectionOverlay();
   }
 
   _onMode(event) {
@@ -692,7 +712,19 @@ export class CycleModelerController {
   _beginFaceDrag(event, hit, forceMulti) {
     const modeler = hit?.object?.userData?.cycoModeler;
     if (this.tool === 'push-pull') {
-      if (!hit?.object || !modeler?.mesh) return;
+      if (!hit?.object || !modeler?.mesh) {
+        // Empty-space left-click in push/pull mode: route to the
+        // element-marquee path so the polygon deselect + suppression
+        // flag handling matches the other element modes. Without this,
+        // `_beginFaceDrag` bails silently and SelectionManager still
+        // runs its pointerup → clearSelection path, which leaves the
+        // mesh userData's `selectedFaces` out of sync with the scene
+        // selection (next push/pull re-seeds from a single hit).
+        if (!hit?.object && ELEMENT_MODES.has(this.elementMode) && this.elementMode !== 'object') {
+          this._startElementMarquee(event);
+        }
+        return;
+      }
       if (forceMulti) {
         // Right-drag: leave the existing multi-selection alone
         // and bail if there is nothing to extrude.
@@ -795,12 +827,12 @@ export class CycleModelerController {
       if (this._faceDrag.multi) {
         this._applyMultiPushPreview(this._faceDrag, delta);
         // Rebuild the selection overlay every move so the highlight
-        // follows each pushed face along its own normal — without
-        // this, the user sees pushed geometry but the selection
-        // ribbon stays anchored to the original (pre-push) face
-        // positions, looking like nothing moved (right-click-drag
-        // multi-push/pull parity with UModeler/SketchUp).
-        this._refreshSelectionOverlay();
+        // follows each pushed face along its own normal. The overlay
+        // reads `obj.userData.cycoModeler.mesh` (the live previewed
+        // mesh), so refreshing per-frame keeps the ribbons glued to
+        // the polygons as they extrude — for both right-drag AND
+        // left-drag multi-push/pull.
+        if (this._faceDrag.multi) this._refreshSelectionOverlay();
         this._status(`Multi push/pull: ${delta.toFixed(1)}`);
       } else {
         this._applyPushPreview(this._faceDrag.object, this._faceDrag.baseMesh, delta);
@@ -930,21 +962,28 @@ export class CycleModelerController {
         if (drag.multi) {
           // Commit each selected object's mesh as a single command so
           // the entire multi-push is one undo entry.
-          // CRITICAL: when the selection mixes faces of different
-          // outward normals (e.g. opposing walls on a box, or any
-          // curved-surface band), `pushFaces` with the full list
-          // averages the normals → opposing faces collapse onto a
-          // single shared direction (the "snap together" bug). The
-          // preview path already partitioned via
-          // `_groupCoplanarFaces` (per unique face-normal), so the
-          // commit must do the same. See
-          // right-click-multi-pushpull-2026-06-29.md.
+          //
+          // Grouping strategy depends on the MOUSE BUTTON:
+          //   • RIGHT-drag (drag.rightButton === true):
+          //       partition per unique face-normal so opposing walls
+          //       extrude independently along their own axes (the
+          //       per-polygon "individually extrude" feel).
+          //   • LEFT-drag (drag.rightButton === false):
+          //       single slab — `pushFaces` averages the normals,
+          //       so opposing walls collapse onto a shared direction.
+          //       This is the legacy "drag the multi-selection as one
+          //       connected mass" feel, matching UModeler/Blender's
+          //       left-click multi-push.
           const finals = drag.draggedObjects.map((obj, i) => {
             const mesh = EditableMesh.fromJSON(drag.baseMeshes[i]);
             const m = obj.userData.cycoModeler;
             const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
-            const groups = this._groupCoplanarFaces(mesh, faces);
-            for (const grp of groups) mesh.pushFaces(grp, delta);
+            if (drag.rightButton) {
+              const groups = this._groupCoplanarFaces(mesh, faces);
+              for (const grp of groups) mesh.pushFaces(grp, delta);
+            } else {
+              mesh.pushFaces(faces, delta);
+            }
             return mesh;
           });
           window.dispatchEvent(new CustomEvent('cyco-command-execute', {
@@ -972,6 +1011,22 @@ export class CycleModelerController {
       this._status(drag.multi ? `Push/pull applied (${this._countSelectedElements()} elements)` : 'Extrude applied');
       this._hoverClear();
       this._refreshSelectionOverlay();
+      // Suppress the synthetic `click` event the browser fires after
+      // this pointerup. Without this guard, `_onClick` runs against
+      // the polygon under the release cursor and REPLACES the
+      // multi-selection (or single-face selection) with just that
+      // one polygon — the user reports "the polygons become
+      // deselected when I release, depending on camera angle." The
+      // deselect is camera-angle-dependent because the click only
+      // wipes the selection when the release cursor raycasts a
+      // polygon on the modeler object; at angles where the cursor
+      // ends up off-mesh the click raycast misses and the selection
+      // accidentally survives. Defer the clear to the next frame so
+      // the browser-dispatched click consumes the flag, then it's
+      // reset for the next genuine user click. (Same pattern as the
+      // element-marquee branch below.)
+      this._suppressNextClick = true;
+      requestAnimationFrame(() => { this._suppressNextClick = false; });
       try { delete window.__cyco._suppressSelectionManagerClick; } catch (_) {}
       try { delete this._faceDragMultiHint; } catch (_) {}
       return;
@@ -3632,8 +3687,17 @@ export class CycleModelerController {
       // extruded along its own normal at the same world distance, so
       // we group by selection-group (coplanar siblings share a normal)
       // and call pushFaces once per group.
-      const groups = this._groupCoplanarFaces(mesh, faces);
-      for (const grp of groups) mesh.pushFaces(grp, distance);
+      if (drag.rightButton) {
+        // Per-face-per-normal partition so each selected polygon
+        // slides along its own outward axis.
+        const groups = this._groupCoplanarFaces(mesh, faces);
+        for (const grp of groups) mesh.pushFaces(grp, distance);
+      } else {
+        // Single slab: every selected face moves by the same
+        // offset along the AVERAGE normal of the set. Legacy
+        // "drag the multi-selection as one" feel.
+        mesh.pushFaces(faces, distance);
+      }
       this._applyEditableMesh(obj, mesh);
     }
   }
