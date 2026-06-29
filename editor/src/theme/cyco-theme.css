@@ -3194,6 +3194,36 @@ dialog.ce-new-project-dialog::backdrop { background: rgba(0,0,0,0.55); }
 .cyco-modeler-panel-header .cyco-modeler-search-wrap {
   margin-left: 0;
 }
+.cyco-modeler-title-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  background: var(--ce-bg-base);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  padding: 2px;
+}
+.cyco-modeler-title-tab {
+  background: transparent;
+  border: none;
+  color: var(--ce-text-muted);
+  font-family: inherit;
+  font-size: var(--ce-font-size-sm);
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.cyco-modeler-title-tab:hover {
+  color: var(--ce-text-primary);
+}
+.cyco-modeler-title-tab.active {
+  background: var(--ce-accent-orange);
+  color: var(--ce-accent-text, #fff);
+  box-shadow: inset 0 -1px 0 rgba(0,0,0,0.2);
+}
+.modeler-tab-pane { display: block; }
 .cyco-modeler-resize-handle {
   position: absolute;
   left: -4px;
@@ -5033,3 +5063,358 @@ input.ce-fp-search, input.ce-fp-search:-webkit-autofill {
   transition: opacity 0.18s, transform 0.18s;
 }
 .ce-msw-toast.is-visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ─── Object Properties Panel (Cycle Modeler) ────────────────────────────── */
+/* Modifier stack UI for the selected primitive. Lives in the Properties   */
+/* tab of the floating modeler inspector in the Cycle Modeler. */
+
+.cyco-opp-root {
+  --ce-accent-purple: #9a64ff;
+
+  background: var(--ce-bg-panel);
+  color: var(--ce-text-primary);
+  font-family: var(--ce-font-family);
+  font-size: var(--ce-font-size-base);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+}
+.cyco-opp-root.cyco-opp-embedded {
+  position: relative;
+}
+.cyco-opp-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--ce-bg-surface);
+  border-bottom: 1px solid var(--ce-border);
+  user-select: none;
+}
+.cyco-opp-title {
+  font-size: var(--ce-font-size-base);
+  font-weight: 600;
+  color: var(--ce-text-primary);
+}
+.cyco-opp-spacer { flex: 1; }
+.cyco-opp-close {
+  background: transparent;
+  border: none;
+  color: var(--ce-text-muted);
+  cursor: pointer;
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 16px; line-height: 1;
+}
+.cyco-opp-close:hover { background: var(--ce-hover-bg); color: var(--ce-text-primary); }
+.cyco-opp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+  background: var(--ce-bg-panel);
+}
+
+/* ── Empty state ─────────────────────────────────────────────────────── */
+.cyco-opp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 16px;
+  gap: 8px;
+  color: var(--ce-text-muted);
+}
+.cyco-opp-empty-icon { font-size: 28px; opacity: 0.5; }
+.cyco-opp-empty-msg  { font-size: var(--ce-font-size-base); text-align: center; }
+
+/* ── Object info block ────────────────────────────────────────────────── */
+.cyco-opp-info {
+  background: var(--ce-bg-surface);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cyco-opp-info-name {
+  font-size: var(--ce-font-size-lg);
+  font-weight: 600;
+  color: var(--ce-text-primary);
+  margin-bottom: 4px;
+}
+.cyco-opp-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: var(--ce-font-size-sm);
+}
+.cyco-opp-info-key { color: var(--ce-text-muted); }
+.cyco-opp-info-val { color: var(--ce-text-primary); font-variant-numeric: tabular-nums; }
+
+/* ── Modifiers section ───────────────────────────────────────────────── */
+.cyco-opp-modifiers {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cyco-opp-modifiers-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.cyco-opp-modifiers-title {
+  font-size: var(--ce-font-size-base);
+  font-weight: 600;
+  color: var(--ce-text-primary);
+}
+.cyco-opp-add-wrap {
+  position: relative;
+  margin-left: auto;
+}
+.cyco-opp-add-btn {
+  background: var(--ce-bg-raised);
+  border: 1px solid var(--ce-border);
+  color: var(--ce-text-primary);
+  font-family: inherit;
+  font-size: var(--ce-font-size-sm);
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cyco-opp-add-btn:hover { background: var(--ce-hover-bg); color: var(--ce-text-primary); }
+.cyco-opp-add-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 50;
+  min-width: 180px;
+  background: var(--ce-bg-raised);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+  flex-direction: column;
+  padding: 4px;
+}
+.cyco-opp-add-item {
+  background: transparent;
+  border: none;
+  color: var(--ce-text-primary);
+  text-align: left;
+  font-family: inherit;
+  font-size: var(--ce-font-size-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.cyco-opp-add-item:hover { background: var(--ce-hover-bg); }
+.cyco-opp-modifiers-empty {
+  font-size: var(--ce-font-size-sm);
+  color: var(--ce-text-muted);
+  padding: 12px;
+  text-align: center;
+  border: 1px dashed var(--ce-border);
+  border-radius: 4px;
+}
+
+/* ── Single modifier row ─────────────────────────────────────────────── */
+.cyco-opp-modifier {
+  background: var(--ce-bg-surface);
+  border: 1px solid var(--ce-border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.cyco-opp-modifier-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px;
+  background: var(--ce-bg-raised);
+  border-bottom: 1px solid var(--ce-border);
+}
+.cyco-opp-modifier-expand {
+  background: transparent;
+  border: none;
+  color: var(--ce-text-muted);
+  width: 18px; height: 18px;
+  cursor: pointer;
+  border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 12px; line-height: 1;
+}
+.cyco-opp-modifier-expand:hover { background: var(--ce-hover-bg); color: var(--ce-text-primary); }
+.cyco-opp-modifier-icon {
+  width: 16px; height: 16px;
+  filter: brightness(0) invert(0.85);
+}
+.cyco-opp-modifier-name {
+  font-size: var(--ce-font-size-base);
+  font-weight: 600;
+  color: var(--ce-text-primary);
+}
+.cyco-opp-modifier-eye,
+.cyco-opp-modifier-apply,
+.cyco-opp-modifier-delete {
+  background: transparent;
+  border: none;
+  color: var(--ce-text-muted);
+  cursor: pointer;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 3px;
+  padding: 0;
+}
+.cyco-opp-modifier-eye:hover,
+.cyco-opp-modifier-apply:hover,
+.cyco-opp-modifier-delete:hover {
+  background: var(--ce-hover-bg);
+  color: var(--ce-text-primary);
+}
+.cyco-opp-modifier-eye.off { opacity: 0.4; }
+.cyco-opp-modifier-apply:hover { color: var(--ce-accent-green); }
+.cyco-opp-modifier-delete:hover { color: #ff6b5a; }
+.cyco-opp-modifier-body {
+  padding: 10px 12px;
+  background: var(--ce-bg-panel);
+}
+
+/* ── Modifier body fields ────────────────────────────────────────────── */
+.cyco-opp-ss-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cyco-opp-sub-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cyco-opp-sub-section-label {
+  font-size: var(--ce-font-size-sm);
+  font-weight: 600;
+  color: var(--ce-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--ce-border);
+}
+.cyco-opp-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--ce-font-size-sm);
+}
+.cyco-opp-field-label {
+  flex: 0 0 90px;
+  color: var(--ce-text-muted);
+  font-size: var(--ce-font-size-sm);
+}
+.cyco-opp-select,
+.cyco-opp-num {
+  background: var(--ce-bg-base);
+  border: 1px solid var(--ce-border);
+  color: var(--ce-text-primary);
+  font-family: inherit;
+  font-size: var(--ce-font-size-sm);
+  border-radius: 3px;
+  padding: 4px 6px;
+  flex: 1;
+  max-width: 160px;
+  min-width: 0;
+}
+.cyco-opp-select:focus,
+.cyco-opp-num:focus    { outline: 1px solid var(--ce-focus-ring); }
+.cyco-opp-num { max-width: 80px; }
+.cyco-opp-step {
+  background: var(--ce-bg-raised);
+  border: 1px solid var(--ce-border);
+  color: var(--ce-text-primary);
+  cursor: pointer;
+  width: 22px; height: 22px;
+  font-size: 12px;
+  border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.cyco-opp-step:hover { background: var(--ce-hover-bg); }
+
+/* ── Icon toggle toolbar (Display Cage / Use Limit Surface) ───────────── */
+.cyco-opp-icon-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+  border-top: 1px solid var(--ce-border);
+  border-bottom: 1px solid var(--ce-border);
+  background: var(--ce-bg-base);
+}
+.cyco-opp-icon-toggle {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--ce-text-muted);
+  cursor: pointer;
+  width: 28px; height: 24px;
+  border-radius: 3px;
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0;
+}
+.cyco-opp-icon-toggle:hover {
+  background: var(--ce-hover-bg);
+  color: var(--ce-text-primary);
+}
+.cyco-opp-icon-toggle.active {
+  background: var(--ce-selection-bg);
+  color: var(--ce-accent-orange);
+  border-color: var(--ce-accent-orange);
+}
+
+/* ── Advanced section ────────────────────────────────────────────────── */
+.cyco-opp-advanced-wrap {
+  display: flex;
+  flex-direction: column;
+}
+.cyco-opp-advanced-head {
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--ce-border);
+  color: var(--ce-text-primary);
+  font-family: inherit;
+  font-size: var(--ce-font-size-sm);
+  font-weight: 600;
+  text-align: left;
+  padding: 6px 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cyco-opp-advanced-head:hover { color: var(--ce-accent-orange); }
+.cyco-opp-advanced-arrow {
+  width: 14px;
+  display: inline-block;
+  color: var(--ce-text-muted);
+}
+.cyco-opp-advanced-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0 0;
+}
+
+/* ── Hint text ───────────────────────────────────────────────────────── */
+.cyco-opp-hint {
+  font-size: 11px;
+  color: var(--ce-text-muted);
+  padding: 4px 4px;
+  border-left: 2px solid var(--ce-border);
+  background: var(--ce-bg-surface);
+  padding-left: 8px;
+  margin-top: 4px;
+}

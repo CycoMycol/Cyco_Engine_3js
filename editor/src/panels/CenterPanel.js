@@ -2,6 +2,7 @@
 
 import { BasePanel }    from './BasePanel.js';
 import LayoutManager    from '../layout-manager.js';
+import { ObjectPropertiesPanel } from '../CycoModeler/ObjectPropertiesPanel.js';
 
 // ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -315,6 +316,8 @@ export class CenterPanel extends BasePanel {
     this._onModelerMode       = this._onModelerMode.bind(this);
     this._onModelerStatus     = this._onModelerStatus.bind(this);
     this._onModelerElementEvt = this._onModelerElementEvt.bind(this);
+    this._onSelectModelerNode = this._onSelectModelerNode.bind(this);
+    this._onDeselectModelerNode = this._onDeselectModelerNode.bind(this);
     window.addEventListener('cyco-history-change',        this._onHistoryChange);
     window.addEventListener('cyco-runtime-state',         this._onRuntimeState);
     window.addEventListener('cyco-editor-camera-changed', this._onEditorCamChanged);
@@ -324,6 +327,8 @@ export class CenterPanel extends BasePanel {
     window.addEventListener('cyco-modeler-mode',          this._onModelerMode);
     window.addEventListener('cyco-modeler-status',        this._onModelerStatus);
     window.addEventListener('cyco-modeler-element',       this._onModelerElementEvt);
+    window.addEventListener('cyco-select-node',           this._onSelectModelerNode);
+    window.addEventListener('cyco-deselect-all',          this._onDeselectModelerNode);
   }
 
   _buildContent() {
@@ -587,8 +592,30 @@ export class CenterPanel extends BasePanel {
 
     const header = document.createElement('div');
     header.className = 'cyco-modeler-panel-header';
-    const title = _modelerPanelTitle('Cyco Modeler');
-    header.appendChild(title);
+
+    // ── Left-side tabs: Tools / Properties ────────────────────────────────
+    // Replaces the previous "Cyco Modeler" title. The two tab buttons
+    // live directly on the header (far-left), styled to match the rest
+    // of the Cyco Engine dark-theme chrome (no white square). Clicking
+    // switches the inspector's body between the existing tools list
+    // and the ObjectPropertiesPanel (the modifier stack for the
+    // selected primitive). When a modeler primitive is selected in the
+    // viewport the Properties tab is auto-activated; deselecting
+    // returns to Tools.
+    const tabsWrap = document.createElement('div');
+    tabsWrap.className = 'cyco-modeler-title-tabs';
+    const toolsTab = document.createElement('button');
+    toolsTab.type = 'button';
+    toolsTab.className = 'cyco-modeler-title-tab active';
+    toolsTab.textContent = 'Tools';
+    toolsTab.dataset.modelerTab = 'tools';
+    const propsTab = document.createElement('button');
+    propsTab.type = 'button';
+    propsTab.className = 'cyco-modeler-title-tab';
+    propsTab.textContent = 'Properties';
+    propsTab.dataset.modelerTab = 'properties';
+    tabsWrap.append(toolsTab, propsTab);
+    header.appendChild(tabsWrap);
 
     const searchWrap = document.createElement('div');
     searchWrap.className = 'cyco-modeler-search-wrap';
@@ -692,12 +719,18 @@ export class CenterPanel extends BasePanel {
       sectionContainer.appendChild(section);
     });
 
-    body.appendChild(sectionContainer);
+    // ── Tools tab pane (wraps the existing tool-list + tool-properties
+    //    sections so we can swap to the Properties pane via the header
+    //    tabs without rebuilding the panel's DOM.)
+    const toolsPane = document.createElement('div');
+    toolsPane.className = 'modeler-tab-pane';
+    toolsPane.dataset.modelerPane = 'tools';
+    toolsPane.appendChild(sectionContainer);
 
-    body.appendChild(_modelerPanelTitle('Tool Properties'));
-    body.appendChild(_modelerField('Width', '1.00'));
-    body.appendChild(_modelerField('Depth', '1.00'));
-    body.appendChild(_modelerField('Height', '1.00'));
+    toolsPane.appendChild(_modelerPanelTitle('Tool Properties'));
+    toolsPane.appendChild(_modelerField('Width', '1.00'));
+    toolsPane.appendChild(_modelerField('Depth', '1.00'));
+    toolsPane.appendChild(_modelerField('Height', '1.00'));
 
     const actions = document.createElement('div');
     actions.className = 'cyco-modeler-actions';
@@ -708,9 +741,103 @@ export class CenterPanel extends BasePanel {
       btn.addEventListener('click', () => this._selectModelerTool(label.toLowerCase().replace(/\s+/g, '-')));
       actions.appendChild(btn);
     });
-    body.appendChild(actions);
+    toolsPane.appendChild(actions);
+
+    body.appendChild(toolsPane);
+
+    // ── Properties tab pane ─────────────────────────────────────────────
+    // Hidden by default. Lazily mounts the ObjectPropertiesPanel on first
+    // use (so we don't pay the cost when the user never opens it). The
+    // pane is shown whenever the user clicks the Properties tab OR
+    // selects a modeler primitive in the viewport (auto-switch).
+    const propsPane = document.createElement('div');
+    propsPane.className = 'modeler-tab-pane';
+    propsPane.dataset.modelerPane = 'properties';
+    propsPane.style.display = 'none';
+    body.appendChild(propsPane);
+    this._modelerInspectorPropsPane = propsPane;
+
+    // Wire the tab buttons to switch panes.
+    const switchTab = (which) => this._activateModelerTab(which);
+    toolsTab.addEventListener('click', () => switchTab('tools'));
+    propsTab.addEventListener('click', () => switchTab('properties'));
+    this._modelerInspectorTabs = { toolsTab, propsTab, toolsPane, propsPane };
 
     return panel;
+  }
+
+  // Switch the inspector header tabs (Tools / Properties). Updates the
+  // active-tab styling, shows the matching sub-pane, and syncs the
+  // lazy-mounted ObjectPropertiesPanel so the modifier list rebuilds
+  // against the current selection.
+  _activateModelerTab(which) {
+    if (!this._modelerInspectorTabs) return;
+    const { toolsTab, propsTab, toolsPane, propsPane } = this._modelerInspectorTabs;
+    const showTools = which === 'tools';
+    toolsTab.classList.toggle('active', showTools);
+    propsTab.classList.toggle('active', !showTools);
+    toolsPane.style.display = showTools ? '' : 'none';
+    propsPane.style.display = showTools ? 'none' : '';
+    if (showTools) {
+      // Switching back to Tools -- hide the (still-mounted) panel DOM
+      // so it doesn't fight with the Tools pane for input focus.
+      this._modelerPropsPanel?.hide?.();
+    } else {
+      // Switching to Properties -- make the panel visible + refresh
+      // its target. If the panel hasn't been mounted yet, build it.
+      const panel = this._ensureModelerPropsPanel();
+      panel?.show?.();
+    }
+  }
+
+  // Lazy-mount the ObjectPropertiesPanel on first request. Returns the
+  // existing instance on subsequent calls.
+  _ensureModelerPropsPanel() {
+    if (this._modelerPropsPanel) return this._modelerPropsPanel;
+    if (!this._modelerInspectorPropsPane) return null;
+    const cyco = window.__cyco || {};
+    const panel = new ObjectPropertiesPanel({
+      sceneManager:     cyco.sceneManager,
+      selectionManager: cyco.selectionManager,
+      cycleModeler:     cyco.cycleModeler,
+      embedded:         true, // inline (no floating popup chrome)
+    });
+    panel.build();
+    this._modelerInspectorPropsPane.appendChild(panel.root);
+    this._modelerPropsPanel = panel;
+    return panel;
+  }
+
+  // Auto-switch to the Properties tab when a single modeler primitive
+  // is selected in the viewport. Multi-select / non-modeler selection
+  // falls back to Tools so the user isn't surprised by an empty panel.
+  _onSelectModelerNode(event) {
+    if (!this._modelerActive) return;
+    const detail = event?.detail || {};
+    const arr = Array.isArray(detail.objects) ? detail.objects
+               : (detail.object ? [detail.object] : []);
+    if (arr.length !== 1) { this._activateModelerTab('tools'); return; }
+    const obj = arr[0];
+    if (!obj || !obj.userData?.cycoModeler) {
+      this._activateModelerTab('tools');
+      return;
+    }
+    // Make sure the panel is mounted + its target refreshed BEFORE we
+    // swap tabs so the modifier list renders immediately on view.
+    const panel = this._ensureModelerPropsPanel();
+    panel?.show?.();
+    this._activateModelerTab('properties');
+  }
+
+  // Auto-switch back to Tools when the user deselects while the
+  // Properties tab is active -- keeps the inspector context in sync
+  // with the viewport.
+  _onDeselectModelerNode() {
+    if (!this._modelerActive || !this._modelerInspectorTabs) return;
+    const { propsTab } = this._modelerInspectorTabs;
+    if (propsTab.classList.contains('active')) {
+      this._activateModelerTab('tools');
+    }
   }
 
   _modelerIconButton(item, kind, onClick, iconOnly = false) {
