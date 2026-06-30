@@ -42,16 +42,15 @@ export class CycleModelerController {
     // the modeler still renders correctly if settings aren't imported.
     // Hover style is per-mode (polygon/edge/vertex) so each mode can
     // have its own colour, opacity and vertex size.
-    this._wireStyle = { color: 0x000000, opacity: 1.0, thickness: 2, enabled: true };
+    // Wireframe default color = `#ff5200` per user request (2026-06-29).
+    this._wireStyle = { color: 0xff5200, opacity: 0.75, thickness: 2, enabled: true };
     this._hoverStyle = {
-      // Polygon hover: bright cyan so it pops against the light-
-      // gray modeler material (`0xc8c8c8`). The previous dark red
-      // (`0xff3333`) blended into a muddy brown on the smoothed
-      // surface -- the highlight was almost invisible, which the
-      // user reported as "the highlight is dark red". The new
-      // colour matches Blender's Edit Mode face highlight.
-      polygon: { color: 0x42c8ff, opacity: 0.95, enabled: true },
-      edge:    { color: 0xffaa00, opacity: 0.95, thickness: 3, enabled: true },
+      // Polygon hover: bright cyan-blue (`#0096f7`) at 0.75 opacity
+      // so the highlight is clearly visible against the smoothed CC
+      // surface without obscuring the underlying geometry. Default
+      // requested by the user (2026-06-29).
+      polygon: { color: 0x0096f7, opacity: 0.75, enabled: true },
+      edge:    { color: 0xff5200, opacity: 0.95, thickness: 3, enabled: true },
       vertex:  { color: 0x33ddff, opacity: 0.95, vertexSize: 6, enabled: true },
     };
     this._selGizmoStyle = {
@@ -2262,14 +2261,16 @@ export class CycleModelerController {
       ? editableMesh.toBufferGeometry()
       : this._makePrimitiveGeometry(this.primitiveTool, width, height, depth);
     const material = new THREE.MeshStandardMaterial({
-      // Light warm gray default so the user can read the shading
-      // and edges clearly during modelling (matches Blender's
-      // primitive-shading convention). Pure white flattens into a
-      // featureless plane; pure gray hides the surface form.
-      color: 0xc8c8c8,
+      // Default UH primitive material = the "Sand" preset from the
+      // material library (see editor/src/ui/MaterialLibrary.js —
+      // { color: '#C4A46C', roughness: 0.9, metalness: 0, side: 2 }).
+      // Warm tan reads clearly against both the dark scene background
+      // and the orange `#ff5200` wireframe (set 2026-06-29) and
+      // matches the user-requested "UH MATERIAL UMM" default look.
+      color: 0xC4A46C,
       opacity: preview ? 0.45 : 1,
       transparent: preview,
-      roughness: 0.55,
+      roughness: 0.9,
       metalness: 0.0,
       // Front-only for committed primitives -- solid / solid+wire
       // mode should show only the outer surface (back faces are
@@ -2451,6 +2452,11 @@ export class CycleModelerController {
     this._lastModelerObject = object;
     const sceneManager = this.sceneManager;
     const selectionManager = this.selectionManager;
+    // Tag the selection so CenterPanel._onSelectModelerNode skips its
+    // Properties-tab auto-switch — the user explicitly asked that
+    // drawing a shape NOT swap the center-panel tab. Set BEFORE
+    // `setSelectedObjects` so the flag is visible to the listener.
+    this._suppressModelerPropsTab = true;
     window.dispatchEvent(new CustomEvent('cyco-command-execute', {
       detail: {
         name: 'Create Modeler Box',
@@ -2458,6 +2464,28 @@ export class CycleModelerController {
           sceneManager.addObject(object);
           this._syncWireOverlay(object);
           selectionManager?.setSelectedObjects?.([object]);
+          // Auto-activate the Push/Pull tool after the user finishes
+          // drawing a shape (user request, 2026-06-29). Set the local
+          // tool + element mode + dispatch the matching toolbar event.
+          // We also synthesize a click on the Push/Pull button so the
+          // CenterPanel's `_selectModelerTool` runs end-to-end — that
+          // updates `panel._modelerTool` AND calls
+          // `_refreshModelerButtons`, which is the only path that
+          // toggles the `active` class on the toolbar button. The
+          // button lookup is name-based (the icon button's data attr
+          // is `modeler-id="push-pull"`); if it's not in the DOM yet
+          // we silently skip the visual highlight — the controller's
+          // internal state is already correct, so the next genuine
+          // click on the button will sync the UI.
+          this.tool = 'push-pull';
+          this.elementMode = 'polygon';
+          window.dispatchEvent(new CustomEvent('cyco-modeler-tool', {
+            detail: { tool: 'push-pull' },
+          }));
+          const pushPullBtn = document.querySelector(
+            '[data-modeler-id="push-pull"][data-modeler-kind="tool"]');
+          if (pushPullBtn) pushPullBtn.click();
+          this._status('Push/pull: drag to extrude a face');
         },
         undo: () => {
           sceneManager.removeObjectKeepAlive(object.userData.cycoId);
@@ -2465,6 +2493,11 @@ export class CycleModelerController {
         },
       }
     }));
+    // Clear the suppression flag on the next tick so a stray pointer
+    // event (or a follow-up click) doesn't see the flag and skip its
+    // Properties-tab swap. The flag's purpose is just to suppress the
+    // ONE selection event fired by `setSelectedObjects` above.
+    setTimeout(() => { this._suppressModelerPropsTab = false; }, 0);
     this._status(`${object.name} created`);
   }
 
@@ -2975,9 +3008,21 @@ export class CycleModelerController {
         // eslint-disable-next-line no-console
         console.warn('[PUSHPULL-PREVIEW] modifier refresh failed:', err);
       }
-    } else {
-      this._applyEditableMesh(obj, mesh);
     }
+    // [PUSHPULL-PREVIEW-FIX] Always sync `obj.geometry` to the pushed
+    // cage so the rendered mesh follows the cursor during the drag —
+    // the overlay (which reads `cm.mesh`) was already updating, but
+    // `obj.geometry` was previously only refreshed when the panel
+    // had an active modifier stack (`_onEditApplied` early-returns
+    // otherwise). That left a fresh unmodified sphere with a
+    // mismatch: highlight followed the cursor, but the actual mesh
+    // stayed anchored at the original face positions. Now we ALSO
+    // call `_applyEditableMesh` so `obj.geometry` is in sync with
+    // `cm.mesh` every frame, regardless of whether a modifier is
+    // active. The modifier branch above will still run first and
+    // overwrite `obj.geometry` with the refined version, so active
+    // modifiers continue to take precedence.
+    this._applyEditableMesh(obj, mesh);
   }
 
   _deleteSelectedFaces() {

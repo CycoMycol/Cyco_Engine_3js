@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../editor/libs/three/build/three.module.min.js';
 
 // Default segment counts for parametric primitives (cylinder/cone/sphere/etc.).
 // Kept small enough that the editable mesh stays manageable but large enough
@@ -2119,36 +2119,7 @@ export class EditableMesh {
     // picks the opposite side". `_sourceFaceGroup` resolves each
     // child to the cage faceGroup directly so both algorithms pick
     // the right cage face.
-    //
-    // [FIX 2026-06-29] The previous implementation called
-    // `_resolveCageFaceGroup(this, srcIdx)` where `this` is the
-    // ORIGINAL CAGE and `srcIdx` came from
-    // `current._sourceFacesPerCageFace`. That worked at subdivision
-    // level 1 (where `srcIdx` IS a cage face index) but BROKE at
-    // level 2+: each subsequent helper iteration produces a new
-    // `result._sourceFacesPerCageFace` mapping the new face → the
-    // PREVIOUS iteration's face index, not the cage. Lookup
-    // `_resolveCageFaceGroup(cage, level1QuadIdx)` then returned
-    // `level1QuadIdx` itself (out of cage range), giving every
-    // child a unique "fake" faceGroup of 30 / 150 / 750 / 3750 /
-    // 18750 — which made the polygon's picker resolve every click
-    // to a different (non-cage) group, so picking ANY polygon on a
-    // level-2+ subdivided box selected the WRONG cage face (or
-    // nothing).
-    //
-    // Correct fix: the helper functions
-    // (`_subdivideLoopOnce` / `_subdivideSimpleOnce` /
-    // `_subdivideCatmullClarkOnce`) already set
-    // `newGroups.push(grp)` where `grp` is the PARENT face's
-    // faceGroup. That means `current.faceGroups` chains all the way
-    // back to the cage through every iteration by construction.
-    // Just use it directly. Fall back to `_resolveCageFaceGroup`
-    // only if the chained faceGroups are missing or empty (defensive
-    // path for hand-built EditableMeshes that never went through a
-    // helper).
     current._sourceFaceGroup = current.faces.map((_, i) => {
-      const chained = current.faceGroups && current.faceGroups[i];
-      if (chained != null) return chained;
       const srcIdx = (current._sourceFacesPerCageFace && current._sourceFacesPerCageFace[i] != null)
         ? current._sourceFacesPerCageFace[i]
         : i;

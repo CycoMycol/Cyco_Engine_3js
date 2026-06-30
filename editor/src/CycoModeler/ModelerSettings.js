@@ -50,34 +50,34 @@ export const MODELER_SETTINGS_DEFAULTS = Object.freeze({
   },
   wireframe: {
     // Selected object — wireframe LineSegments2 around the mesh.
-    // Color stays black so it reads cleanly against the light mesh in
-    // Solid+Wire / Solid mode and against the rendered mesh preview
-    // in Wire-Only mode (the mesh stays visible as a backdrop).
-    // Wire-Only mode flips the wire color to white automatically
-    // (see CycleModelerController._syncWireOverlay) so it remains
-    // legible against the dark scene background when the mesh is
-    // hidden.
+    // Color is the default deep orange (`#ff5200`) per user request
+    // (2026-06-29) — the new default reads against both the warm
+    // Sand primitive material in Solid+Wire / Solid mode and the
+    // smoothed CC surface in modifier preview. The previous default
+    // `#ffaa00` was visually similar but the user wanted the deeper
+    // red-orange tone. Wire-Only mode still flips the color to white
+    // automatically (see CycleModelerController._syncWireOverlay) so
+    // it remains legible when the mesh is hidden.
     enabled:   true,
-    color:     '#000000',
+    color:     '#ff5200',
     thickness: 0.5,          // screen-pixel thickness (Line2.linewidth), 1..15
-    opacity:   1.0,
+    opacity:   0.75,
   },
   polygonHighlight: {
-    // Hover/selected FACE highlight. Default bright cyan
-    // (`#42c8ff`) so it pops against the light-gray modeler
-    // material — the previous dark red (`#ff3333`) blended into
-    // a muddy brown on the smoothed surface, which the user
-    // reported as "the highlight is dark red". Matches Blender's
-    // Edit Mode face highlight colour.
+    // Hover/selected FACE highlight. Default bright cyan-blue
+    // (`#0096f7`) at 0.75 opacity so the highlighted polygon is
+    // clearly visible against the smoothed CC surface without
+    // obscuring the underlying geometry. Matches the selection
+    // tint the user requested explicitly.
     enabled: true,
-    color:   '#42c8ff',
-    opacity: 0.95,
+    color:   '#0096f7',
+    opacity: 0.75,
   },
   edgeHighlight: {
     // Hover/selected EDGE highlight — separate from face so the user
     // can colour edges differently from the filled polygon highlight.
     enabled:   true,
-    color:     '#ffaa00',
+    color:     '#ff5200',
     opacity:   0.95,
     // Screen-pixel thickness for the edge LineSegments2.  A 1-px line is
     // essentially invisible on a dark scene + WebGPU/TSL pipeline (LineMaterial

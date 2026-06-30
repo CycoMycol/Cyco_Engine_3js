@@ -816,6 +816,13 @@ export class CenterPanel extends BasePanel {
   // Auto-switch to the Properties tab when a single modeler primitive
   // is selected in the viewport. Multi-select / non-modeler selection
   // falls back to Tools so the user isn't surprised by an empty panel.
+  //
+  // The auto-switch is suppressed when `cyco.cycleModeler._suppressModelerPropsTab`
+  // is true — CycleModelerController sets that flag right before it
+  // commits a freshly drawn shape (user request, 2026-06-29) so the
+  // panel does NOT pop to Properties immediately after drawing. The
+  // flag is consumed (cleared) here so subsequent genuine selections
+  // still swap tabs as before.
   _onSelectModelerNode(event) {
     if (!this._modelerActive) return;
     const detail = event?.detail || {};
@@ -825,6 +832,11 @@ export class CenterPanel extends BasePanel {
     const obj = arr[0];
     if (!obj || !obj.userData?.cycoModeler) {
       this._activateModelerTab('tools');
+      return;
+    }
+    // User opted out of the post-draw Properties-tab auto-switch.
+    if (window.__cyco?.cycleModeler?._suppressModelerPropsTab) {
+      window.__cyco.cycleModeler._suppressModelerPropsTab = false;
       return;
     }
     // Make sure the panel is mounted + its target refreshed BEFORE we
