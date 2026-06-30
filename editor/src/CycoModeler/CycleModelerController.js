@@ -44,7 +44,13 @@ export class CycleModelerController {
     // have its own colour, opacity and vertex size.
     this._wireStyle = { color: 0x000000, opacity: 1.0, thickness: 2, enabled: true };
     this._hoverStyle = {
-      polygon: { color: 0xff3333, opacity: 0.9, enabled: true },
+      // Polygon hover: bright cyan so it pops against the light-
+      // gray modeler material (`0xc8c8c8`). The previous dark red
+      // (`0xff3333`) blended into a muddy brown on the smoothed
+      // surface -- the highlight was almost invisible, which the
+      // user reported as "the highlight is dark red". The new
+      // colour matches Blender's Edit Mode face highlight.
+      polygon: { color: 0x42c8ff, opacity: 0.95, enabled: true },
       edge:    { color: 0xffaa00, opacity: 0.95, thickness: 3, enabled: true },
       vertex:  { color: 0x33ddff, opacity: 0.95, vertexSize: 6, enabled: true },
     };
@@ -1201,7 +1207,47 @@ export class CycleModelerController {
       const vertexIndex = triIndex * 3;
       if (vertexIndex < faceIdAttr.count) index = Math.max(0, faceIdAttr.getX(vertexIndex) | 0);
     }
-    return mesh.selectionGroup(index);
+    // `selectionGroup` takes a face INDEX, not a faceGroup ID. The
+    // `faceId` attribute carries the CAGE FACE GROUP (per
+    // `_sourceFaceGroup`), so we have to translate it back to a
+    // face index that `selectionGroup` can look up. Find the first
+    // face in the cage that has the same faceGroup; that's the
+    // canonical representative for the polygon. For Loop, the
+    // `faceId` already IS a triangle index whose faceGroup matches
+    // itself, so the lookup is a no-op. For Catmull-Clark, the
+    // `faceId` is the cage faceGroup (0..5) and we need this
+    // translation -- which is the fix for the "selecting front
+    // picks the opposite side" bug on CC-subdivided meshes.
+    const resolvedIndex = this._resolveFaceIndexFromId(mesh, index);
+    return mesh.selectionGroup(resolvedIndex);
+  }
+
+  /**
+   * Translate a `faceId` attribute value back to a face INDEX the
+   * polygon's `selectionGroup` can use. The faceId carries the cage
+   * faceGroup (0..N-1), so we walk the mesh's `faceGroups` array to
+   * find the first face whose group matches. Loop's faceId happens
+   * to also be a triangle index whose faceGroup matches itself, so
+   * this is a fast O(faceGroups.length) scan that's usually correct
+   * on the first iteration.
+   */
+  _resolveFaceIndexFromId(mesh, faceId) {
+    if (!mesh?.faceGroups || faceId < 0 || faceId >= mesh.faceGroups.length) {
+      // Either no group data, or faceId is out of range for this
+      // mesh's faces. Pass through unchanged -- the caller will see
+      // an empty selectionGroup() result, which is the same fallback
+      // behaviour as before this fix.
+      return faceId;
+    }
+    // Fast path: if `faceId` already points at a face whose group
+    // matches itself (Loop case), return it as-is.
+    if (mesh.faceGroups[faceId] === faceId) return faceId;
+    // Otherwise (CC case): faceId is a faceGroup, find any face in
+    // this mesh that belongs to it.
+    for (let i = 0; i < mesh.faceGroups.length; i += 1) {
+      if (mesh.faceGroups[i] === faceId) return i;
+    }
+    return faceId;
   }
 
   /**
@@ -1847,13 +1893,20 @@ export class CycleModelerController {
       // not render under WebGPU/TSL (NodeBuilder rejects ShaderMaterial).
       mesh = this._buildVertexHandles(geometry, style.color, style.vertexSize, style.opacity);
     } else {
-      // polygon (face) â€” filled translucent overlay.
+      // polygon (face) — filled translucent overlay. The hover
+      // style's opacity is used directly (no `* 0.5` halving) so
+      // the highlight is clearly visible against the light-gray
+      // modeler material. The previous halved opacity (0.45 with a
+      // 0.9 base) read as a muddy dark red on screen, which the
+      // user reported as "the highlight is dark red". Pairing the
+      // higher opacity with the bright cyan colour keeps the
+      // overlay clearly distinguishable from the surface itself.
       mesh = new THREE.Mesh(
         geometry,
         new THREE.MeshBasicMaterial({
           color: style.color,
           transparent: true,
-          opacity: style.opacity * 0.5,
+          opacity: style.opacity,
           depthTest: false,
           depthWrite: false,
           side: THREE.DoubleSide,
@@ -1947,13 +2000,36 @@ export class CycleModelerController {
   }
 
   _faceGeometryFromHit(hit) {
-    // Pick the mesh the polygon's selection is operating on: the cage
-    // by default, the refined mesh when the Subdivision Surface
-    // modifier's Display Cage is ON. Picking the right one matters
-    // because the highlight is rendered against `mesh.vertices[]` --
-    // an un-refined highlight on a smoothed mesh would visually
-    // mismatch the smoothing the user just applied.
+    // When the Subdivision Surface modifier is active, the visual
+    // mesh on screen is the REFINED mesh (cage + modifier preview).
+    // Building the hover highlight from cage vertices would draw it
+    // on the original cube outline -- it would visibly sit BEHIND
+    // the smoothed surface instead of on it, and would only cover
+    // one quad of the 4 sub-quads the user actually sees. The fix:
+    // when subdivision is active, build the highlight from the
+    // REFINED mesh's sub-quads whose `_sourceFaceGroup` matches the
+    // picked cage face group. That covers all 4 sub-quads of the
+    // smoothed surface in one overlay.
     const cm = hit?.object?.userData?.cycoModeler;
+    const refinedJson = cm?._subdivisionRefinedMesh;
+    if (refinedJson) {
+      const refined = EditableMesh.fromJSON(refinedJson);
+      if (refined._sourceFaceGroup) {
+        // Find the cage faceGroup the user picked by reading the
+        // faceId attribute directly.
+        const geom = hit?.object?.geometry;
+        const fidAttr = geom?.attributes?.faceId;
+        const triIndex = Math.max(0, hit?.faceIndex ?? 0);
+        const vertexIndex = triIndex * 3;
+        const faceId = fidAttr && vertexIndex < fidAttr.count
+          ? Math.max(0, fidAttr.getX(vertexIndex) | 0)
+          : null;
+        if (faceId != null) {
+          return this._buildRefinedFaceOverlayGeometry(refined, faceId);
+        }
+      }
+    }
+    // Fallback (no subdivision active): build from the cage mesh.
     const mesh = EditableMesh.fromJSON(this._faceGeometryFromMesh(hit?.object) || cm?.mesh || {});
     const faces = this._faceIndicesFromHit(hit);
     const positions = [];
@@ -1968,6 +2044,49 @@ export class CycleModelerController {
         positions.push(verts[0].x, verts[0].y, verts[0].z);
         positions.push(verts[i].x, verts[i].y, verts[i].z);
         positions.push(verts[i + 1].x, verts[i + 1].y, verts[i + 1].z);
+      }
+    }
+    if (!positions.length) return null;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.computeVertexNormals();
+    return g;
+  }
+
+  /**
+   * Build a filled BufferGeometry covering every refined sub-quad /
+   * sub-triangle of the cage face whose group ID matches `faceGroup`.
+   * Used by `_faceGeometryFromHit` (hover) and
+   * `_selectedFacesOverlayGeometry` (persistent selection) so the
+   * highlight visually covers the smoothed surface, not the un-
+   * subdivided cage outline.
+   *
+   * @param {EditableMesh} refined  the subdivided EditableMesh (the
+   *   one whose `toBufferGeometry` produced the rendered mesh)
+   * @param {number} faceGroup  the cage face group ID (0..N-1)
+   */
+  _buildRefinedFaceOverlayGeometry(refined, faceGroup) {
+    if (!refined?.faces?.length) return null;
+    const groups = refined.faceGroups;
+    if (!groups || groups.length !== refined.faces.length) {
+      // Defensive: refined mesh without parallel faceGroups data.
+      // Fall back to the pre-fix behaviour (build from cage mesh)
+      // by returning null -- the caller treats null as "no overlay".
+      return null;
+    }
+    const positions = [];
+    for (let i = 0; i < refined.faces.length; i += 1) {
+      if (groups[i] !== faceGroup) continue;
+      const face = refined.faces[i];
+      if (!face || face.length < 3) continue;
+      const verts = face.map((vi) => refined.vertices[vi]).filter(Boolean);
+      if (verts.length < 3) continue;
+      // Fan-triangulate so the overlay covers the whole sub-quad
+      // (a 4-vertex child quad -> 2 triangles).
+      for (let j = 1; j < verts.length - 1; j += 1) {
+        positions.push(verts[0].x, verts[0].y, verts[0].z);
+        positions.push(verts[j].x, verts[j].y, verts[j].z);
+        positions.push(verts[j + 1].x, verts[j + 1].y, verts[j + 1].z);
       }
     }
     if (!positions.length) return null;
@@ -2919,8 +3038,18 @@ export class CycleModelerController {
     if (selectionMode === 'refined') {
       faceIdMap = editableMesh.faces.map((_, i) => i);
     } else {
-      // Default: back to the cage face every refined child belongs to.
-      faceIdMap = editableMesh._sourceFace || null;
+      // Default: back to the CAGE FACE GROUP every refined child
+      // belongs to. Prefer `_sourceFaceGroup` (set by `_subdivideWith`
+      // for both Loop and Catmull-Clark) so the value the polygon's
+      // picker reads off the `faceId` attribute can be passed
+      // straight into `cage.selectionGroup()` without ambiguity.
+      // Falling back to `_sourceFace` preserves the old behaviour
+      // for older project files / subdivision snapshots that don't
+      // yet carry the new array (Loop happens to work either way;
+      // CC requires `_sourceFaceGroup`).
+      faceIdMap = Array.isArray(editableMesh._sourceFaceGroup)
+        ? editableMesh._sourceFaceGroup
+        : (editableMesh._sourceFace || null);
     }
     // [DEBUG] trace the modifier preview rebuild
     if (this._previewEditableMeshCount == null) this._previewEditableMeshCount = 0;
@@ -3997,7 +4126,12 @@ export class CycleModelerController {
           const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({
             color: style.color,
             transparent: true,
-            opacity: 0.45,
+            // Use the hover style's opacity directly (was 0.45 hard-
+            // coded). With the new bright cyan polygon colour, a
+            // hard-coded 0.45 was reading as a muddy dark blob; the
+            // full 0.95 keeps the highlight clearly distinguishable
+            // against the smoothed gray surface.
+            opacity: style.opacity ?? 0.95,
             depthTest: false,
             depthWrite: false,
             side: THREE.DoubleSide,
@@ -4044,10 +4178,52 @@ export class CycleModelerController {
 
   /** Build a filled BufferGeometry of all `faceIndices` for the given
    *  object, fan-triangulated. Coordinates are local so the parent
-   *  transform carries them automatically. */
+   *  transform carries them automatically.
+   *
+   *  When the Subdivision Surface modifier is active, the rendered
+   *  mesh is the REFINED one. Building the selection overlay from
+   *  cage vertices would draw it on the un-subdivided cube outline,
+   *  missing the 4 sub-quads the user actually sees on screen. The
+   *  fix: translate each selected cage face into its parent cage
+   *  faceGroup, then build the overlay from every refined sub-quad /
+   *  sub-triangle whose `_sourceFaceGroup` matches -- one call per
+   *  cage faceGroup so multi-selection across multiple sides of the
+   *  box still highlights the correct sub-quads. */
   _selectedFacesOverlayGeometry(object, faceIndices) {
-    const mesh = object.userData?.cycoModeler?.mesh;
+    const cm = object.userData?.cycoModeler;
+    const mesh = cm?.mesh;
     if (!mesh) return null;
+    const refinedJson = cm?._subdivisionRefinedMesh;
+    if (refinedJson) {
+      const refined = EditableMesh.fromJSON(refinedJson);
+      if (refined._sourceFaceGroup && refined.faceGroups) {
+        // Translate cage face INDICES (the values stored in
+        // `selectedFaces`) into their cage faceGroups so we can
+        // pick out the right refined sub-quads.
+        const cage = EditableMesh.fromJSON(mesh);
+        const groupSet = new Set();
+        for (const fi of faceIndices) {
+          const grp = cage.faceGroups?.[fi];
+          if (grp != null) groupSet.add(grp);
+        }
+        const positions = [];
+        for (const grp of groupSet) {
+          const sub = this._buildRefinedFaceOverlayGeometry(refined, grp);
+          if (!sub) continue;
+          // Concatenate the sub-geometry's positions into ours.
+          const subPos = sub.getAttribute('position');
+          for (let i = 0; i < subPos.count; i += 1) {
+            positions.push(subPos.getX(i), subPos.getY(i), subPos.getZ(i));
+          }
+          sub.dispose?.();
+        }
+        if (!positions.length) return null;
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        g.computeVertexNormals();
+        return g;
+      }
+    }
     const editable = EditableMesh.fromJSON(mesh);
     const set = new Set(faceIndices);
     const positions = [];

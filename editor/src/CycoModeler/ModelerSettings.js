@@ -63,10 +63,15 @@ export const MODELER_SETTINGS_DEFAULTS = Object.freeze({
     opacity:   1.0,
   },
   polygonHighlight: {
-    // Hover/selected FACE highlight (red by default).
+    // Hover/selected FACE highlight. Default bright cyan
+    // (`#42c8ff`) so it pops against the light-gray modeler
+    // material — the previous dark red (`#ff3333`) blended into
+    // a muddy brown on the smoothed surface, which the user
+    // reported as "the highlight is dark red". Matches Blender's
+    // Edit Mode face highlight colour.
     enabled: true,
-    color:   '#ff3333',
-    opacity: 0.9,
+    color:   '#42c8ff',
+    opacity: 0.95,
   },
   edgeHighlight: {
     // Hover/selected EDGE highlight — separate from face so the user

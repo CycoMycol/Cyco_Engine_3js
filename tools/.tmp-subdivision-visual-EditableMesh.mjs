@@ -427,7 +427,7 @@ function _extractQuadPairs(mesh) {
   const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
   const triGroup = (fi) => (mesh.faceGroups ? mesh.faceGroups[fi] : fi);
   const quads = [];
-  const usedAsQuad = new Set();
+  const seen = new Set();
 
   // Mode 1: walk every face. If it's already a 4-vertex face, take
   // it directly. Push/pull side walls, prior CC passes, and any
@@ -440,9 +440,8 @@ function _extractQuadPairs(mesh) {
       faceGroup: triGroup(fi),
       triIndices: [fi],
     });
-    usedAsQuad.add(fi);
+    seen.add(fi);
   }
-  if (quads.length) return quads;
 
   // Mode 2: triangle-pair extraction (the original CC input shape:
   // a `boxFromBounds` mesh whose 6 logical quads are each stored as
@@ -489,7 +488,6 @@ function _extractQuadPairs(mesh) {
   // unpaired triangle are skipped here (Loop fallback handles them).
   // (`quads` and `seen` are declared at the top of this function in
   // mode 1 and reused here for mode 2.)
-  const seen = usedAsQuad; // alias: pairs-by-diagonal tracking
   for (let fi = 0; fi < mesh.faces.length; fi += 1) {
     if (seen.has(fi)) continue;
     const partner = triPartner.get(fi);

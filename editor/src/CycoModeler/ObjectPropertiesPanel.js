@@ -332,29 +332,32 @@ const _helpers = {
     // quad still resolves to "the parent cage face", which is the
     // exact Blender behaviour the user described.
     //
-    // `uniqueFaceGroups` is the toggle for "Display Cage on": with
-    // it true, every child triangle is its OWN polygon so the user
-    // can pick individual sub-quads on the smoothed mesh. With it
-    // false (the default), child triangles inherit the parent
-    // faceGroup so picking any sub-quad rolls up to the whole cage
-    // face (push/pull-pickable).
+    // Both Display Cage ON and OFF now use the SAME selection roll-up
+    // behaviour: every child triangle / quad inherits the parent
+    // cage faceGroup, so picking any sub-quad resolves to the whole
+    // cage face. The earlier round-2 design used
+    // `uniqueFaceGroups: modifier.showCage` so the user could pick
+    // individual sub-quads on the smoothed mesh when Display Cage
+    // was ON, but the user reported that this reversed their
+    // expectation -- they always want push/pull to move the WHOLE
+    // cage face (both cage triangles AND all 4 sub-quads), not just
+    // a single sub-quad. The Display Cage toggle is now purely a
+    // visual overlay (it adds the wireframe outline of the cage
+    // over the smoothed surface); it no longer changes the picker
+    // behaviour. The selectionMode flag stays `'cage'` so the
+    // polygon's `faceIdMap` resolves every child to its cage
+    // faceGroup via `_sourceFaceGroup`.
     //
     // Catmull-Clark: real quad subdivision on detected quad
     // topology (falls back to Loop if no quad pairs). Simple:
     // midpoint subdivision on triangles (no smoothing).
     let refinedMesh;
     if (useSimple) {
-      refinedMesh = cageMesh.subdivideSimple(viewLevel, { uniqueFaceGroups: modifier.showCage });
+      refinedMesh = cageMesh.subdivideSimple(viewLevel, { uniqueFaceGroups: false });
     } else {
-      refinedMesh = cageMesh.subdivideCatmullClark(viewLevel, { uniqueFaceGroups: modifier.showCage });
+      refinedMesh = cageMesh.subdivideCatmullClark(viewLevel, { uniqueFaceGroups: false });
     }
-    // `selectionMode` controls whether polygon's picks roll up to
-    // the cage face (default, "Display Cage off") or pick the
-    // exact sub-quad the user clicked ("Display Cage on"). The
-    // latter is the Blender behaviour the user explicitly asked
-    // for in their bug report.
-    const selectionMode = modifier.showCage ? 'refined' : 'cage';
-    ctrl._previewEditableMesh?.(obj, refinedMesh, selectionMode);
+    ctrl._previewEditableMesh?.(obj, refinedMesh, 'cage');
     _applyCageFlag(obj, modifier);
   },
 

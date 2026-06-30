@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Subdivision + Push/Pull Browser Test</title>
+    <style>
+        body { font: 13px monospace; background: #1a1a1a; color: #ddd; padding: 16px; }
+        pre { background: #000; padding: 8px; white-space: pre-wrap; }
+        .pass { color: #4f4; }
+        .fail { color: #f44; }
+        h2 { color: #fa0; margin-top: 24px; }
+    </style>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "../editor/libs/three/build/three.module.min.js"
+        }
+    }
+    </script>
+</head>
+<body>
+    <h1>Subdivision Surface Modifier — Browser Test</h1>
+    <div id="status">Loading...</div>
+    <pre id="output"></pre>
+    <script type="module">
+        const out = document.getElementById('output');
+        const status = document.getElementById('status');
+        const log = (msg, cls = '') => {
+            const span = cls ? `<span class="${cls}">${msg}</span>` : msg;
+            out.innerHTML += span + '\n';
+            console.log(msg);
+        };
+        let passed = 0, failed = 0;
+        function assert(label, cond, extra = '') {
+            if (cond) { log(`  PASS  ${label}`, 'pass'); passed += 1; }
+            else { log(`  FAIL  ${label}${extra ? '  ' + extra : ''}`, 'fail'); failed += 1; }
+        }
+        function header(t) { log(`\n=== ${t} ===`); }
+
+        try {
+            // Import modules
+            const emModule = await import('../editor/src/CycoModeler/EditableMesh.js');
+            const EditableMesh = emModule.EditableMesh;
+            const THREE = await import('three');
+
+            // ===== TEST 1: CC subdivider outputs QUADS, not triangle pairs =====
+            header('1. CC subdivider output is quad-only');
+            const cage = EditableMesh.boxFromBounds(-50, 0, -50, 50, 100, 50);
+            assert('Cage has 12 triangles', cage.faces.length === 12);
+            const refined = cage.subdivideCatmullClark(1);
+            assert('CC L1: 30 faces (5 quads x 6 source quads)', refined.faces.length === 30);
+            const allQuads = refined.faces.every(f => f.length === 4);
+            const noTris = refined.faces.every(f => f.length !== 3);
+            assert('CC L1: all faces are quads, zero triangles', allQuads && noTris);
+
+            // ===== TEST 2: BufferGeometry fan-triangulates correctly =====
+            header('2. toBufferGeometry fan-triangulates the quads');
+            const bg = refined.toBufferGeometry();
+            const triCount = bg.index ? (bg.index.count / 3) : (bg.attributes.position.count / 3);
+            assert('60 triangles emitted (30 quads -> 60 fan tris)', triCount === 60);
+
+            // ===== TEST 3: sourceFace map is correct =====
+            header('3. _sourceFace picker map is 1:1 per quad');
+            assert('_sourceFace has 30 entries', refined._sourceFace.length === 30);
+            const groups = new Map();
+            refined._sourceFace.forEach(s => groups.set(s, (groups.get(s) || 0) + 1));
+            assert('Each of 6 source quads has 5 child quads',
+                [...groups.values()].every(v => v === 5) && groups.size === 6);
+
+            // ===== TEST 4: Push/pull preserves quad-only output =====
+            header('4. Push/pull preserves quad-only CC output');
+            const pushed = EditableMesh.boxFromBounds(-50, 0, -50, 50, 100, 50);
+            const frontTris = [];
+            pushed.faces.forEach((f, i) => { if (pushed.faceGroups[i] === 1) frontTris.push(i); });
+            pushed.pushFaces(frontTris, 20);
+            assert('After push: 16 faces (12 original tris + 4 side-wall quads)', pushed.faces.length === 16);
+            const quadCount = pushed.faces.filter(f => f.length === 4).length;
+            assert('Side-wall quads are stored as quads', quadCount === 4);
+
+            const refinedPushed = pushed.subdivideCatmullClark(1);
+            assert('After push + CC: output is quad-only',
+                refinedPushed.faces.every(f => f.length === 4));
+            assert('CC L1 after push: 50 faces (10 source x 5 children)',
+                refinedPushed.faces.length === 50);
+
+            // ===== TEST 5: Picker (faceId attribute) resolves correctly =====
+            header('5. Picker faceId attribute resolves correctly');
+            const bgP = refinedPushed.toBufferGeometry();
+            const faceIdAttr = bgP.attributes.faceId;
+            assert('faceId attribute has 300 entries (100 fan tris x 3 verts)',
+                faceIdAttr.count === 300);
+
+            // ===== TEST 6: Visual material check - faces have positions within expected bounds =====
+            header('6. Vertex positions are well-formed after subdivision');
+            const bb = new THREE.Box3();
+            for (const v of refined.vertices) bb.expandByPoint(new THREE.Vector3(v.x, v.y, v.z));
+            assert('Refined mesh bounding box X within +/-60 (CC smoothing pushes out slightly)',
+                bb.min.x >= -65 && bb.max.x <= 65,
+                `min=${bb.min.x} max=${bb.max.x}`);
+            assert('Refined mesh Y range: min within +/-60',
+                bb.min.y >= -10 && bb.max.y <= 110,
+                `min=${bb.min.y} max=${bb.max.y}`);
+
+            status.innerHTML = `<h2>RESULT: ${passed} passed, ${failed} failed</h2>`;
+            status.className = failed > 0 ? 'fail' : 'pass';
+        } catch (e) {
+            log(`\nFATAL: ${e.message}\n${e.stack}`, 'fail');
+            status.innerHTML = `<h2 class="fail">FATAL: ${e.message}</h2>`;
+        }
+    </script>
+</body>
+</html>

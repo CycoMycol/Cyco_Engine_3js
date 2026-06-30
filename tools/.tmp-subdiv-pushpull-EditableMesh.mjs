@@ -427,7 +427,7 @@ function _extractQuadPairs(mesh) {
   const keyOf = (a, b) => (a < b ? `${a}_${b}` : `${b}_${a}`);
   const triGroup = (fi) => (mesh.faceGroups ? mesh.faceGroups[fi] : fi);
   const quads = [];
-  const usedAsQuad = new Set();
+  const seen = new Set();
 
   // Mode 1: walk every face. If it's already a 4-vertex face, take
   // it directly. Push/pull side walls, prior CC passes, and any
@@ -440,9 +440,8 @@ function _extractQuadPairs(mesh) {
       faceGroup: triGroup(fi),
       triIndices: [fi],
     });
-    usedAsQuad.add(fi);
+    seen.add(fi);
   }
-  if (quads.length) return quads;
 
   // Mode 2: triangle-pair extraction (the original CC input shape:
   // a `boxFromBounds` mesh whose 6 logical quads are each stored as
@@ -489,7 +488,6 @@ function _extractQuadPairs(mesh) {
   // unpaired triangle are skipped here (Loop fallback handles them).
   // (`quads` and `seen` are declared at the top of this function in
   // mode 1 and reused here for mode 2.)
-  const seen = usedAsQuad; // alias: pairs-by-diagonal tracking
   for (let fi = 0; fi < mesh.faces.length; fi += 1) {
     if (seen.has(fi)) continue;
     const partner = triPartner.get(fi);
@@ -794,6 +792,57 @@ function _subdivideCatmullClarkOnce(mesh, options = {}) {
   // in `_previewEditableMesh`) has been updated to count quads
   // directly and let `toBufferGeometry` fan-triangulate at render time.
   return result;
+}
+
+/**
+ * Resolve a source face/quad/triangle index in `sourceMesh` back to
+ * the CAGE FACE GROUP ID. Used by `_subdivideWith` to populate
+ * `_sourceFaceGroup` on the subdivided result. Different subdivision
+ * algorithms index into the source in different ways:
+ *
+ *   - Loop / Simple: `srcIdx` is the parent TRIANGLE index (0..N-1)
+ *     where N is the number of triangles in the source. The cage
+ *     faceGroup is `sourceMesh.faceGroups[srcIdx]`.
+ *   - Catmull-Clark: `srcIdx` is the quad array index from
+ *     `_extractQuadPairs`, where each quad stores its own
+ *     `faceGroup` already. We re-derive it from the source by
+ *     re-running the extraction.
+ *
+ * Without this helper, the polygon's `faceIdMap` (passed straight
+ * into `cage.selectionGroup()`) reads an ambiguous value: for Loop
+ * the parent index happens to match the cage faceGroup at the
+ * same slot, but for CC the quad-array index does NOT (the cage
+ * stores faceGroups per triangle, so `faceGroups[1] === 0` for a
+ * box where the second triangle is the back face). The fix stores
+ * the cage faceGroup directly on each child so both algorithms
+ * pick the same cage face.
+ */
+function _resolveCageFaceGroup(sourceMesh, srcIdx) {
+  if (!sourceMesh?.faceGroups) return srcIdx;
+  // CC produces quads from `_extractQuadPairs`, and `_sourceFacesPerCageFace`
+  // stores QUAD ARRAY INDICES (not triangle indices). The quad array
+  // is not kept around after the helper runs, so re-extract it here.
+  // If the quad at `srcIdx` exists, the source face is a quad and
+  // `quads[srcIdx].faceGroup` IS the cage faceGroup we want. (For
+  // our supported primitives — box / room / stair — the quad array
+  // is in the same order as the cage `faceGroups` walk, so the quad
+  // index equals the cage faceGroup at that slot. We still look it
+  // up explicitly because the contract is "use whatever
+  // `_extractQuadPairs` returned".)
+  const quads = _extractQuadPairs(sourceMesh);
+  if (srcIdx < quads.length) {
+    return quads[srcIdx].faceGroup ?? srcIdx;
+  }
+  // Loop / Simple: srcIdx is a triangle index. Use the source's
+  // own faceGroup array directly. The cage stores faceGroups as a
+  // parallel array to `faces`, so `faceGroups[triIdx]` is the cage
+  // faceGroup of that triangle (matches what `_sourceFacesPerCageFace`
+  // would have stored).
+  if (srcIdx < sourceMesh.faces.length) {
+    const grp = sourceMesh.faceGroups[srcIdx];
+    if (grp != null) return grp;
+  }
+  return srcIdx;
 }
 
 export class EditableMesh {
@@ -1640,7 +1689,20 @@ export class EditableMesh {
   }
 
   static fromJSON(data) {
-    return new EditableMesh(data || {});
+    const mesh = new EditableMesh(data || {});
+    // Restore non-default subdivision bookkeeping that lives outside
+    // the constructor's normal arg list. `_sourceFaceGroup` is set
+    // by `_subdivideWith` so the polygon's picker can resolve a
+    // refined triangle / child quad straight to its CAGE FACE GROUP
+    // ID. Without restoring it on `fromJSON`, the Subdivision
+    // Surface modifier preview path (`_previewEditableMesh` writes
+    // `toJSON()` to `_subdivisionRefinedMesh`) loses the map and
+    // Catmull-Clark child quads pick the wrong cage face -- the
+    // "selecting front picks the opposite side" bug.
+    if (data && Array.isArray(data._sourceFaceGroup)) {
+      mesh._sourceFaceGroup = [...data._sourceFaceGroup];
+    }
+    return mesh;
   }
 
   removeFaces(faceIndices) {
@@ -1900,6 +1962,14 @@ export class EditableMesh {
       // Omit when false to keep saved files minimal (older loads
       // default to false).
       hasInwardPocket: this.hasInwardPocket ? true : undefined,
+      // `_sourceFaceGroup` is set by `_subdivideWith` so the polygon
+      // picker can resolve any refined face / quad / triangle straight
+      // to its CAGE FACE GROUP ID (Catmull-Clark parity with Loop).
+      // Persist alongside the rest of the subdivision bookkeeping so
+      // project save/load keeps the pick-correctness fix intact.
+      _sourceFaceGroup: Array.isArray(this._sourceFaceGroup)
+        ? [...this._sourceFaceGroup]
+        : undefined,
     };
   }
 
@@ -2034,6 +2104,27 @@ export class EditableMesh {
         ? current._sourceFacesPerCageFace[i]
         : i,
     );
+    // `_sourceFaceGroup` is the CAGE FACE GROUP (not the parent face
+    // array index) for each child face/quad/triangle. The polygon's
+    // picker passes `faceIdMap[i]` straight into `cage.selectionGroup(
+    // faceId )`, which interprets the value as a faceGroup ID and
+    // returns every cage triangle in that group. For Loop, the
+    // parent face array index happens to match the faceGroup ID (12
+    // cage tris paired 0/0, 1/1, ..., 5/5), so `_sourceFace` worked
+    // by coincidence. For Catmull-Clark, the parent face array
+    // index is the QUAD INDEX in `_extractQuadPairs` output, which
+    // does NOT match the cage faceGroup at the same numeric slot --
+    // `selectionGroup(1)` then returns cage triangles whose group is
+    // 0 (the back), not 1 (the front), causing "selecting front
+    // picks the opposite side". `_sourceFaceGroup` resolves each
+    // child to the cage faceGroup directly so both algorithms pick
+    // the right cage face.
+    current._sourceFaceGroup = current.faces.map((_, i) => {
+      const srcIdx = (current._sourceFacesPerCageFace && current._sourceFacesPerCageFace[i] != null)
+        ? current._sourceFacesPerCageFace[i]
+        : i;
+      return _resolveCageFaceGroup(this, srcIdx);
+    });
     current._subdivisionLevels = levelCount;
     current._subdivisionAlgorithm = kind;
     current._subdivisionSource = this;
