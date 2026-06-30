@@ -2818,45 +2818,45 @@ export class CycleModelerController {
         `selMode=${selMode}`,
       );
     }
-    // [PUSHPULL-FIX: preserve active modifier preview during drag]
-    // `_applyEditableMesh` is destructive — it overwrites both
-    // `obj.geometry` AND `cycoModeler.mesh`, then dispatches
-    // `cyco-edit-applied` so the Object Properties panel re-runs
-    // the modifier preview. That chain is correct on commit
-    // (`_onPointerUp`), but during a per-frame drag preview it
-    // fights the modifier:
-    //   1. We write the pushed CAGE geometry to the renderer.
-    //   2. The panel immediately rebuilds the REFINED geometry.
-    // The user briefly sees the cage flash before the refined mesh
-    // re-appears, which looks like "the cube collapses back to a
-    // box during push/pull" — the exact bug the user reported.
-    // The fix: directly call the modifier's preview path with the
-    // pushed cage so the refined mesh is the only thing the user
-    // sees, and write `cycoModeler.mesh` to the pushed cage so the
-    // selection overlay + future commits see the up-to-date
-    // geometry. This is the same destination the panel's listener
-    // would have reached, just done in one synchronous step with
-    // no cage-then-refined flicker.
-    const cm = obj.userData.cycoModeler;
+    this._writePushedPreview(obj, mesh);
+  }
+
+  /**
+   * Write a pushed `mesh` to `obj` while preserving any active
+   * Subdivision Surface modifier preview. Used by both single-face
+   * (`_applyPushPreview`) and multi (`_applyMultiPushPreview`)
+   * drag previews. Single source of truth for "I'm a per-frame
+   * preview, the cage changed, please keep the modifier display
+   * in sync."
+   *
+   * Steps:
+   *   1. Write `cycoModeler.mesh` to the pushed cage so subsequent
+   *      selection-overlay / wireframe-overlay / commit paths see
+   *      the up-to-date geometry.
+   *   2. Synchronously invoke the Object Properties panel's
+   *      `_onEditApplied` listener with a tagged source. The
+   *      listener walks the active modifier stack and re-runs
+   *      each non-destructive preview, which writes the refined
+   *      `obj.geometry` without flashing the raw cage.
+   *   3. If the panel is not mounted (object never opened in the
+   *      inspector), fall back to the destructive `_applyEditableMesh`
+   *      so the preview still shows the pushed geometry.
+   */
+  _writePushedPreview(obj, mesh) {
+    const cm = obj.userData?.cycoModeler;
+    if (!cm) return;
     cm.mesh = mesh.toJSON();
-    cm._suppressNextEditApplied = true;
-    if (window.__cyco?.objectPropertiesPanel?._onEditApplied) {
-      // Run the modifier preview path directly. This re-reads
-      // `cm.mesh` (now the pushed cage) and writes a refined
-      // geometry to `obj.geometry`. The re-entry guard in
-      // `_onEditApplied` (`source === '_previewEditableMesh'`)
-      // would otherwise re-fire from the preview path; we suppress
-      // the auto-dispatch by setting `_suppressNextEditApplied`
-      // and clearing it here.
+    const panel = window.__cyco?.objectPropertiesPanel;
+    if (panel?._onEditApplied) {
       try {
-        window.__cyco.objectPropertiesPanel._onEditApplied({
+        panel._onEditApplied({
           detail: { object: obj, source: '_applyPushPreview' },
         });
-      } finally {
-        cm._suppressNextEditApplied = false;
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn('[PUSHPULL-PREVIEW] modifier refresh failed:', err);
       }
     } else {
-      // Fallback: panel not mounted, just apply the cage geometry.
       this._applyEditableMesh(obj, mesh);
     }
   }
@@ -3896,7 +3896,7 @@ export class CycleModelerController {
       const faces = m.selectedFaces?.length ? m.selectedFaces : this._faceIndicesForSelection(m);
       if (!faces.length) continue;
       // `pushFaces` always extrudes along the AVERAGE normal of the
-      // supplied face set â€” perfect for groups of coplanar triangles
+      // supplied face set — perfect for groups of coplanar triangles
       // (e.g. a subdivided box top), but wrong for a multi-selection
       // that mixes opposing walls. For a multi-push we want each face
       // extruded along its own normal at the same world distance, so
@@ -3913,7 +3913,12 @@ export class CycleModelerController {
         // "drag the multi-selection as one" feel.
         mesh.pushFaces(faces, distance);
       }
-      this._applyEditableMesh(obj, mesh);
+      // [PUSHPULL-FIX: preserve active modifier preview during drag]
+      // Single source of truth for "pushed cage, modifier still
+      // active": `_writePushedPreview`. Writes the cage + invokes
+      // the modifier's preview path so the refined display stays
+      // in sync without flashing the raw pushed cage.
+      this._writePushedPreview(obj, mesh);
     }
   }
 

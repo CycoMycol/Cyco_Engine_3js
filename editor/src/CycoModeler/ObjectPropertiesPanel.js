@@ -647,8 +647,23 @@ export class ObjectPropertiesPanel {
   _onEditApplied(event) {
     const obj = event?.detail?.object;
     const source = event?.detail?.source || '';
-    if (!obj || obj !== this._target) return;
+    if (!obj) return;
+    // `_applyPushPreview` / `_writePushedPreview` (in
+    // CycleModelerController) call this listener synchronously
+    // to re-evaluate the modifier display from a pushed cage
+    // during a per-frame drag preview. We accept the call even
+    // when `obj !== this._target` (the panel may not have
+    // captured this object yet, e.g. right after the modifier
+    // was added). The re-entry guard below
+    // (`source === '_previewEditableMesh'`) keeps the modifier
+    // preview path from infinitely looping when it itself
+    // dispatches `cyco-edit-applied` at the end.
     if (source === '_previewEditableMesh') return;
+    // For other sources (real commits, manual push/pull preview),
+    // still require a captured target so we don't refresh for
+    // unrelated objects in the scene.
+    if (source !== '_applyPushPreview' && source !== '_applyEditableMesh'
+        && obj !== this._target) return;
     const stack = _getModifierStack(obj);
     if (!stack.length) return;
     let touched = false;

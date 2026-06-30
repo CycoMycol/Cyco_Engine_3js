@@ -805,6 +805,11 @@ export class CenterPanel extends BasePanel {
     panel.build();
     this._modelerInspectorPropsPane.appendChild(panel.root);
     this._modelerPropsPanel = panel;
+    // Expose on window.__cyco so the cycle modeler can invoke
+    // `_onEditApplied` synchronously during a push/pull preview
+    // (the per-frame modifier refresh path — see
+    // CycleModelerController._applyPushPreview).
+    if (cyco) cyco.objectPropertiesPanel = panel;
     return panel;
   }
 
